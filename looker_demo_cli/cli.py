@@ -86,11 +86,13 @@ def pre_check(
             "skills": [s.model_dump() for s in skill_statuses],
             "looker_auth": looker_status.model_dump(),
             "agent_instructions": {
-                "account_selection": "If multiple GCP accounts are present or the active account lacks permissions, prompt the user to confirm/select which account to use.",
-                "project_confirmation": "Prompt the user to select or confirm their target GCP project from available_gcp_projects before proceeding.",
+                "mandatory_stop_gate": "CRITICAL: STOP all further tool executions immediately after pre-check. Do NOT probe database connections, inspect models, or test Looker SDKs. You MUST prompt the user (via ask_question) to confirm the 4 environment targets below before taking any further action.",
+                "gcp_account": "Prompt user to select/confirm the active GCP account from gcp_accounts.",
+                "gcp_project": "Prompt user to select/confirm the target Google Cloud project from available_gcp_projects.",
+                "looker_instance": "Prompt user to select/confirm the target Looker OAuth instance from available_oauth_instances (e.g. dev-looker.lukapuka.co vs dev-googledemo2).",
+                "database_connection": "Prompt user to confirm the Looker database connection name (suggest defaults like looker_demo_bigquery / default_bigquery_connection, or allow write-in).",
                 "reauth_action": "If reauth_required is true, prompt the user to run 'gcloud auth login' and 'gcloud auth application-default login'.",
                 "setup_commands": "If no accounts or projects are configured on gcloud, prompt the user to run: 'gcloud auth login', 'gcloud auth application-default login', and 'gcloud config set project <PROJECT_ID>'.",
-                "looker_auth_selection": "Prompt user to select Looker auth method (OAuth vs API Key). Use direct Code Mode CLI `uvx --from 'lkr-dev-cli[codemode]' lkr-dev-cli code-mode sandbox --code='...'` instead of MCP servers.",
             },
         }
         typer.echo(json.dumps(report, indent=2))

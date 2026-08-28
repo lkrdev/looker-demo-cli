@@ -22,13 +22,21 @@ demo-create pre-check --json
 uvx --from lkr-dev-cli lkr auth list
 ```
 
+> [!CAUTION]
+> ### 🛑 Mandatory Pre-Flight Hard Stop Protocol
+> Immediately after running `demo-create pre-check`:
+> 1. **DO NOT execute any further tool calls** (e.g. do not probe database connections, inspect models, or test SDK commands).
+> 2. **IMMEDIATELY invoke `ask_question`** in the very next step to prompt the user to confirm all 4 targets below.
+> 3. If `available_connections` is empty in `pre-check`, provide standard recommendations (e.g. `looker_demo_bigquery`, `default_bigquery_connection`) along with a write-in option rather than trying to query Looker first.
+> 4. Only proceed to Phase 1 (Schema Proposal) after the user has explicitly submitted their answers.
+
 ### Mandatory Interactive Confirmation Checklist:
 Before designing schemas, creating BigQuery datasets, or touching Looker, the agent **MUST explicitly prompt the user** (via `ask_question` or interactive prompt) to confirm all four environment targets:
 
 1. **GCP User Account**: (e.g. `admin@maluka.altostrat.com` vs `user@google.com`)
 2. **Target Google Cloud Project ID**: (e.g. `looker-demo-392616`, `data-cloud-interactive-demo`)
-3. **Target Looker Instance / OAuth Account**: (e.g. `dev-looker.lukapuka.co` vs `dev-googledemo2` from `lkr auth list`)
-4. **Target Looker Database Connection**: (e.g. `default_bigquery_connection`)
+3. **Target Looker Instance / OAuth Account**: (e.g. `dev-looker.lukapuka.co` vs `dev-googledemo2` from `lkr auth list` or `available_oauth_instances`)
+4. **Target Looker Database Connection**: (e.g. `looker_demo_bigquery` or `default_bigquery_connection`)
 
 > [!IMPORTANT]
 > **NEVER assume or default the Looker instance or GCP project** without explicit user confirmation, even if an active session exists in `pre-check`.
