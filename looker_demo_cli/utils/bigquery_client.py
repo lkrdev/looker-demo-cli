@@ -1,6 +1,3 @@
-# SPDX-FileCopyrightText: Copyright (c) 2026 lkr.dev. All rights reserved.
-# SPDX-License-Identifier: Apache-2.0
-
 from __future__ import annotations
 
 import os
@@ -10,6 +7,7 @@ import google.auth
 from google.cloud import bigquery
 from google.cloud.exceptions import NotFound
 
+from looker_demo_cli.config import DEFAULT_GCP_PROJECT
 from looker_demo_cli.utils.console import print_error, print_info, print_success, print_warning
 
 os.environ["CLOUDSDK_CONTEXT_AWARE_USE_CLIENT_CERTIFICATE"] = "false"
@@ -17,7 +15,7 @@ os.environ["GOOGLE_API_USE_CLIENT_CERTIFICATE"] = "false"
 
 
 class BigQueryHelper:
-    def __init__(self, project_id: str = "looker-demo-392616", credentials: Any = None, location: str = "US"):
+    def __init__(self, project_id: str = DEFAULT_GCP_PROJECT, credentials: Any = None, location: str = "US"):
         self.project_id = project_id
         self.location = location
         self.credentials = credentials

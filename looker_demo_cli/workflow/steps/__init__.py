@@ -1,6 +1,3 @@
-# SPDX-FileCopyrightText: Copyright (c) 2026 lkr.dev. All rights reserved.
-# SPDX-License-Identifier: Apache-2.0
-
 from looker_demo_cli.workflow.steps.step_bigquery_upload import run_bigquery_upload_step
 from looker_demo_cli.workflow.steps.step_dataset_decision import run_dataset_decision_step
 from looker_demo_cli.workflow.steps.step_embed_scaffold import run_embed_scaffold_step

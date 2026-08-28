@@ -1,6 +1,3 @@
-# SPDX-FileCopyrightText: Copyright (c) 2026 lkr.dev. All rights reserved.
-# SPDX-License-Identifier: Apache-2.0
-
 from __future__ import annotations
 
 from pathlib import Path
@@ -8,14 +5,17 @@ from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, Field
 
 
+from looker_demo_cli.config import DEFAULT_GCP_PROJECT, DEFAULT_LOOKER_INSTANCE_URL
+
+
 class FlowState(BaseModel):
     """Execution state for the demo-create workflow."""
 
     # Project & Environment
-    gcp_project_id: str = "looker-demo-392616"
+    gcp_project_id: str = DEFAULT_GCP_PROJECT
     gcp_account: Optional[str] = None
     gcp_location: str = "US"
-    looker_instance_url: str = "https://looker.lukapuka.co"
+    looker_instance_url: str = DEFAULT_LOOKER_INSTANCE_URL
     looker_connection_name: str = "default_bigquery_connection"
 
     # Dataset & Intent

@@ -1,6 +1,3 @@
-# SPDX-FileCopyrightText: Copyright (c) 2026 lkr.dev. All rights reserved.
-# SPDX-License-Identifier: Apache-2.0
-
 from __future__ import annotations
 
 import os
@@ -9,7 +6,8 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 from pydantic import BaseModel
 
-from looker_demo_cli.config import LOOKER_EMBED_DEMO_REPO
+import subprocess
+from looker_demo_cli.config import LOOKER_EMBED_DEMO_REPO, SKILLS_CACHE_DIR
 from looker_demo_cli.utils.console import print_error, print_info, print_success, print_warning
 
 
@@ -30,10 +28,35 @@ class EmbedScaffolder:
     """Clones and customizes a fresh standalone workspace for external embedded demos."""
 
     @staticmethod
-    def scaffold_demo_workspace(opts: EmbedConfigOptions) -> Path:
+    def _resolve_template_repo() -> Path:
+        """Resolve template repo path from local checkout, cache, or clone."""
+        if LOOKER_EMBED_DEMO_REPO.exists():
+            return LOOKER_EMBED_DEMO_REPO
+        cache_path = SKILLS_CACHE_DIR / "looker-embed-demo"
+        if cache_path.exists():
+            return cache_path
+
+        # Clone on demand if needed
+        SKILLS_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        env = os.environ.copy()
+        env["GIT_TERMINAL_PROMPT"] = "0"
+        urls = [
+            "https://github.com/lkrdev/looker-embed-demo.git",
+            "https://github.com/LukaFontanilla/looker-embed-demo.git",
+        ]
+        for url in urls:
+            try:
+                res = subprocess.run(["git", "clone", "--depth", "1", url, str(cache_path)], capture_output=True, text=True, env=env)
+                if res.returncode == 0:
+                    return cache_path
+            except Exception:
+                continue
+        raise FileNotFoundError("Could not find or clone looker-embed-demo template repository.")
+
+    @classmethod
+    def scaffold_demo_workspace(cls, opts: EmbedConfigOptions) -> Path:
         """Scaffold a new standalone workspace from looker-embed-demo template."""
-        if not LOOKER_EMBED_DEMO_REPO.exists():
-            raise FileNotFoundError(f"Source template `{LOOKER_EMBED_DEMO_REPO}` not found.")
+        source_repo = cls._resolve_template_repo()
 
         target_dir = opts.target_dir
         if target_dir.exists():
@@ -42,7 +65,7 @@ class EmbedScaffolder:
             print_info(f"Scaffolding fresh embed portal into `{target_dir}`...")
             # Copy template directory excluding build artifacts and git
             shutil.copytree(
-                LOOKER_EMBED_DEMO_REPO,
+                source_repo,
                 target_dir,
                 ignore=shutil.ignore_patterns(".git", "node_modules", ".venv", "dist", "build", ".pytest_cache", ".ruff_cache", "scratch"),
             )

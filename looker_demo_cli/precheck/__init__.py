@@ -1,6 +1,3 @@
-# SPDX-FileCopyrightText: Copyright (c) 2026 lkr.dev. All rights reserved.
-# SPDX-License-Identifier: Apache-2.0
-
 from looker_demo_cli.precheck.gcp_auth import inspect_gcp_accounts, select_gcp_credentials
 from looker_demo_cli.precheck.looker_auth import check_looker_auth
 from looker_demo_cli.precheck.mcp_checker import check_mcp_servers, patch_mcp_config

@@ -1,6 +1,3 @@
-# SPDX-FileCopyrightText: Copyright (c) 2026 lkr.dev. All rights reserved.
-# SPDX-License-Identifier: Apache-2.0
-
 from __future__ import annotations
 
 import json
@@ -30,7 +27,7 @@ REQUIRED_MCP_SERVERS = {
         "command": "uvx",
         "args": [
             "--from",
-            "git+https://github.com/LukaFontanilla/synthetic-data-generator.git@main",
+            "git+https://github.com/lkrdev/synthetic-data-generator.git@main",
             "data-designer-mcp",
         ],
     },
@@ -39,9 +36,8 @@ REQUIRED_MCP_SERVERS = {
         "authProviderType": "google_credentials",
     },
     "lkr_codemode": {
-        "command": "gpkg",
+        "command": "uvx",
         "args": [
-            "uvx",
             "--quiet",
             "--from",
             "lkr-dev-cli[codemode]",

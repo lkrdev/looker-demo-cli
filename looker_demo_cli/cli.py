@@ -1,6 +1,3 @@
-# SPDX-FileCopyrightText: Copyright (c) 2026 lkr.dev. All rights reserved.
-# SPDX-License-Identifier: Apache-2.0
-
 from __future__ import annotations
 
 import json
@@ -15,7 +12,7 @@ from looker_demo_cli.config import (
     GEMINI_MCP_CONFIG,
     GEMINI_SKILLS_DIR,
 )
-from looker_demo_cli.precheck.gcp_auth import inspect_gcp_accounts
+from looker_demo_cli.precheck.gcp_auth import inspect_gcp_accounts, list_available_gcp_projects
 from looker_demo_cli.precheck.looker_auth import check_looker_auth
 from looker_demo_cli.precheck.mcp_checker import check_mcp_servers, patch_mcp_config
 from looker_demo_cli.precheck.skills_organizer import audit_and_organize_skills
@@ -51,24 +48,39 @@ def pre_check(
     # 1. Inspect GCP & ADC
     gcp_accounts = inspect_gcp_accounts(target_project=gcp_project)
     
-    # 2. Check MCP Servers
+    # 2. Query available GCP projects
+    available_projects = list_available_gcp_projects()
+
+    # 3. Check MCP Servers
     mcp_statuses = check_mcp_servers()
     if fix:
         patch_mcp_config()
         mcp_statuses = check_mcp_servers()
 
-    # 3. Organize Skills
+    # 4. Organize Skills
     skill_statuses = audit_and_organize_skills(fix=fix)
 
-    # 4. Check Looker Auth
+    # 5. Check Looker Auth
     looker_status = check_looker_auth()
+
+    # Determine if re-auth is needed
+    reauth_required = any(
+        (a.is_active and not a.has_bigquery_access) or ("reauth" in (a.error_message or "").lower())
+        for a in gcp_accounts
+    )
 
     if output_json:
         report = {
             "gcp_accounts": [a.model_dump() for a in gcp_accounts],
+            "available_gcp_projects": available_projects,
+            "reauth_required": reauth_required,
             "mcp_servers": [m.model_dump() for m in mcp_statuses],
             "skills": [s.model_dump() for s in skill_statuses],
             "looker_auth": looker_status.model_dump(),
+            "agent_instructions": {
+                "reauth_action": "If reauth_required is true, prompt the user to run 'gcloud auth login' and 'gcloud auth application-default login'.",
+                "project_confirmation": "Prompt the user to select or confirm their target GCP project from available_gcp_projects before proceeding.",
+            },
         }
         typer.echo(json.dumps(report, indent=2))
         return
@@ -87,7 +99,27 @@ def pre_check(
         t_gcp.add_row(acc.account_id, active_label, bq_label, acc.error_message or "Valid")
     console.print(t_gcp)
 
-    console.print("\n[bold cyan]2. Global MCP Tool Configurations[/bold cyan]")
+    if reauth_required:
+        console.print("\n[bold red]⚠️  GCP Reauthentication Required[/bold red]")
+        console.print("[yellow]Agent & User Instruction:[/yellow] One or more active GCP accounts require reauthentication.")
+        console.print("Please prompt the user to run the following in their terminal:")
+        console.print("  [bold white]$ gcloud auth login[/bold white]")
+        console.print("  [bold white]$ gcloud auth application-default login[/bold white]")
+
+    console.print("\n[bold cyan]2. Available Google Cloud Projects[/bold cyan]")
+    if available_projects:
+        t_proj = Table(show_header=True, header_style="bold blue")
+        t_proj.add_column("Project ID", style="bold")
+        t_proj.add_column("Name")
+        t_proj.add_column("Project Number", style="dim")
+        for p in available_projects:
+            t_proj.add_row(p["project_id"], p["name"], p["project_number"])
+        console.print(t_proj)
+        print_info("Agent Instruction: Confirm with the user which of the available GCP projects above to use for demo synthesis and BigQuery datasets.")
+    else:
+        print_warning("No Google Cloud projects found or `gcloud projects list` returned empty.")
+
+    console.print("\n[bold cyan]3. Global MCP Tool Configurations[/bold cyan]")
     t_mcp = Table(show_header=True, header_style="bold blue")
     t_mcp.add_column("MCP Server")
     t_mcp.add_column("Status")
@@ -99,7 +131,7 @@ def pre_check(
         t_mcp.add_row(m.server_name, status_label, details)
     console.print(t_mcp)
 
-    console.print("\n[bold cyan]3. Intent-Organized Agent Skills (~/.gemini/config/skills/)[/bold cyan]")
+    console.print("\n[bold cyan]4. Intent-Organized Agent Skills (~/.gemini/config/skills/)[/bold cyan]")
     t_skills = Table(show_header=True, header_style="bold blue")
     t_skills.add_column("Intent Category")
     t_skills.add_column("Skill Name")
@@ -112,7 +144,7 @@ def pre_check(
         t_skills.add_row(s.category, s.skill_name, inst_label, src_label)
     console.print(t_skills)
 
-    console.print("\n[bold cyan]4. Looker Instance Authentication[/bold cyan]")
+    console.print("\n[bold cyan]5. Looker Instance Authentication[/bold cyan]")
     if looker_status.is_authenticated:
         print_success(f"Connected to {looker_status.instance_url} as {looker_status.user_name} ({looker_status.user_email})")
         if looker_status.has_default_bigquery_conn:

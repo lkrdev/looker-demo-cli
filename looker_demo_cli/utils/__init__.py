@@ -1,6 +1,3 @@
-# SPDX-FileCopyrightText: Copyright (c) 2026 lkr.dev. All rights reserved.
-# SPDX-License-Identifier: Apache-2.0
-
 from looker_demo_cli.utils.bigquery_client import BigQueryHelper
 from looker_demo_cli.utils.console import (
     console,

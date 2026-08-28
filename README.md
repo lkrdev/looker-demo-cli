@@ -15,10 +15,73 @@
 
 ---
 
-## Installation
+## Quickstart & Execution
+
+### 1. Run Instantly with `uvx` (No Installation Required)
+
+Once published to PyPI or your package index, you can execute the CLI on-demand in an ephemeral, isolated environment without creating a virtual environment or pre-installing dependencies:
 
 ```bash
-cd /usr/local/google/home/maluka/looker-demo-cli
+# Run directly from the package name
+uvx looker-demo-cli pre-check --fix
+
+# Or invoke the `demo-create` binary explicitly
+uvx --from looker-demo-cli demo-create pre-check --fix
+```
+
+#### Run with Options & Flags:
+```bash
+# Run pre-flight audit and auto-fix MCP / skills
+uvx looker-demo-cli pre-check --fix
+
+# Run end-to-end interactive demo creator
+uvx looker-demo-cli run --project=retail_analytics --scope=internal
+```
+
+---
+
+### 2. Install as a Persistent CLI Tool (`uv tool`)
+
+To make `demo-create` / `looker-demo-cli` globally available on your shell's `PATH`:
+
+```bash
+# Install the published package globally in an isolated environment
+uv tool install looker-demo-cli
+
+# Now you can run it directly anywhere:
+demo-create pre-check --fix
+# or
+looker-demo-cli pre-check --fix
+```
+
+To update to the latest version at any time:
+```bash
+uv tool upgrade looker-demo-cli
+```
+
+---
+
+### 3. Running from Local Source or Git (Development)
+
+If you are developing locally or testing before publishing:
+
+#### Run directly from local source directory:
+```bash
+# Run from repository root
+uvx --from . demo-create pre-check --fix
+
+# Or run from anywhere by pointing to the repository path
+uvx --from /path/to/looker-demo-cli demo-create pre-check --fix
+```
+
+#### Run directly from a Git repository:
+```bash
+uvx --from git+https://github.com/lkrdev/looker-demo-cli.git demo-create pre-check --fix
+```
+
+#### Local Editable Installation:
+```bash
+cd ~/looker-demo-cli
 uv venv
 uv pip install -e .
 ```
@@ -48,8 +111,8 @@ demo-create run --project=retail_insights --scope=internal
 demo-create run \
   --project=logistics_analytics \
   --scope=external \
-  --gcp-project=looker-demo-392616 \
-  --gcp-account=admin@maluka.altostrat.com \
+  --gcp-project=my-analytics-project \
+  --gcp-account=user@example.com \
   --agent-mode
 ```
 

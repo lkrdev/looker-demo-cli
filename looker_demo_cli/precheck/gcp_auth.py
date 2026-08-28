@@ -1,6 +1,3 @@
-# SPDX-FileCopyrightText: Copyright (c) 2026 lkr.dev. All rights reserved.
-# SPDX-License-Identifier: Apache-2.0
-
 from __future__ import annotations
 
 import configparser
@@ -11,6 +8,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import google.auth
+import google.auth.credentials
 import google.oauth2.credentials
 from google.cloud import bigquery
 from pydantic import BaseModel
@@ -98,7 +96,10 @@ def get_oauth_credentials_for_account(account_id: str) -> Optional[google.oauth2
         return None
 
 
-def inspect_gcp_accounts(target_project: str = "looker-demo-392616") -> List[GCPAccountInfo]:
+from looker_demo_cli.config import DEFAULT_GCP_PROJECT, GCLOUD_CONFIGS_DIR, GCLOUD_CONFIG_DIR, GCLOUD_CREDS_DB
+
+
+def inspect_gcp_accounts(target_project: str = DEFAULT_GCP_PROJECT) -> List[GCPAccountInfo]:
     """Inspect all authenticated GCP accounts and test BigQuery dataset access."""
     # Ensure client certificates don't cause failures on linux/cloudtop
     os.environ["CLOUDSDK_CONTEXT_AWARE_USE_CLIENT_CERTIFICATE"] = "false"
@@ -117,17 +118,18 @@ def inspect_gcp_accounts(target_project: str = "looker-demo-392616") -> List[GCP
             cfg_acc = configs[active_cfg].get("core.account")
             if cfg_acc == acc:
                 info.is_active = True
-                info.project_id = configs[active_cfg].get("core.project", target_project)
+                info.project_id = configs[active_cfg].get("core.project", target_project or "")
 
         if not info.project_id:
-            info.project_id = target_project
+            info.project_id = target_project or ""
 
         creds = get_oauth_credentials_for_account(acc)
         if creds:
             try:
-                client = bigquery.Client(project=info.project_id, credentials=creds)
-                # Test listing datasets
-                _ = list(client.list_datasets(max_results=2))
+                # If project_id is set, verify BigQuery dataset access
+                if info.project_id:
+                    client = bigquery.Client(project=info.project_id, credentials=creds)
+                    _ = list(client.list_datasets(max_results=2))
                 info.has_bigquery_access = True
             except Exception as e:
                 info.has_bigquery_access = False
@@ -149,7 +151,7 @@ def select_gcp_credentials(
     os.environ["CLOUDSDK_CONTEXT_AWARE_USE_CLIENT_CERTIFICATE"] = "false"
     os.environ["GOOGLE_API_USE_CLIENT_CERTIFICATE"] = "false"
 
-    accounts = inspect_gcp_accounts(target_project=preferred_project or "looker-demo-392616")
+    accounts = inspect_gcp_accounts(target_project=preferred_project or DEFAULT_GCP_PROJECT)
     valid_accounts = [a for a in accounts if a.has_bigquery_access]
 
     # If preferred_account matches
@@ -158,15 +160,42 @@ def select_gcp_credentials(
             if acc.account_id == preferred_account and acc.has_bigquery_access:
                 creds = get_oauth_credentials_for_account(acc.account_id)
                 if creds:
-                    return creds, preferred_project or acc.project_id or "looker-demo-392616"
+                    return creds, preferred_project or acc.project_id or DEFAULT_GCP_PROJECT
 
     # Default to first valid account
     if valid_accounts:
         chosen = valid_accounts[0]
         creds = get_oauth_credentials_for_account(chosen.account_id)
         if creds:
-            return creds, preferred_project or chosen.project_id or "looker-demo-392616"
+            return creds, preferred_project or chosen.project_id or DEFAULT_GCP_PROJECT
 
     # Fallback to default ADC
     adc_creds, project = google.auth.default()
-    return adc_creds, preferred_project or project or "looker-demo-392616"
+    return adc_creds, preferred_project or project or DEFAULT_GCP_PROJECT
+
+
+def list_available_gcp_projects() -> List[Dict[str, str]]:
+    """List accessible Google Cloud projects via gcloud."""
+    import subprocess
+    try:
+        res = subprocess.run(
+            ["gcloud", "projects", "list", "--format=json"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if res.returncode == 0 and res.stdout.strip():
+            data = json.loads(res.stdout)
+            return [
+                {
+                    "project_id": p.get("projectId", ""),
+                    "name": p.get("name", ""),
+                    "project_number": str(p.get("projectNumber", "")),
+                }
+                for p in data
+                if p.get("projectId")
+            ]
+    except Exception as e:
+        print_warning(f"Could not query GCP projects via gcloud: {e}")
+    return []
+
