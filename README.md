@@ -7,10 +7,10 @@
 ## Overview
 
 `demo-create` is a developer and AI agent tool that unifies the end-to-end Looker demo creation lifecycle into a single workflow:
-1. **Pre-flight & Environment Audit (`pre-check`)**: Verifies active GCP/ADC accounts, installs/patches global MCP tools (`data-designer`, `bigquery`, `lkr_codemode`), and organizes agent skills into intent-based subfolders.
+1. **Pre-flight & Environment Audit (`pre-check`)**: Verifies active GCP/ADC accounts, installs/patches global MCP tools (`data-designer`, `bigquery`, `knowledge-catalog`), checks Looker authentication (OAuth / API keys), and organizes agent skills (including `lkr-code-mode`) into intent-based subfolders.
 2. **Dataset Decision & Synthesis**: Automatically checks for existing BigQuery datasets, enables data augmentation or green-field relational schema generation, and validates referential integrity.
 3. **BigQuery Loading**: Creates datasets and partitioned/clustered tables in BigQuery.
-4. **LookML Generation & Deployment**: Autogenerates production-ready views, explores, and executive dashboards, provisioning and deploying them directly to the Looker instance using `lkr-dev-cli`.
+4. **LookML Generation & Direct Code-Mode Deployment**: Autogenerates production-ready views, explores, and executive dashboards, provisioning and deploying them directly to the Looker instance using `lkr-dev-cli code-mode` without requiring an MCP server.
 5. **Embedded Portal Scaffolding**: Clones and configures a clean, dedicated `looker-embed-demo` workspace for external client demos.
 
 ---
@@ -120,7 +120,7 @@ demo-create run \
 
 ## Intent-Based Skill Organization
 
-When you run `demo-create pre-check --fix`, skills are organized into `~/.gemini/config/skills/`:
+When you run `demo-create pre-check --fix`, skills are automatically pulled from remote repositories and organized into `~/.gemini/config/skills/`:
 
 ```
 ~/.gemini/config/skills/
@@ -128,15 +128,19 @@ When you run `demo-create pre-check --fix`, skills are organized into `~/.gemini
 │   ├── data-designer/
 │   ├── data-designer-architect/
 │   ├── data-designer-engineer/
-│   └── data-designer-evaluator/
+│   ├── data-designer-evaluator/
+│   └── vertex-ai/
 ├── lookml/
+│   ├── lkr-code-mode/
 │   ├── repo-lookml/
 │   ├── lookml-model/
 │   ├── lookml-explore/
 │   ├── lookml-view/
 │   ├── lookml-dashboard/
+│   ├── lookml-dashboard-to-query/
 │   └── embed-themes/
 └── embed-portal/
+    ├── looker-demo-orchestrator/
     ├── setup-embed-demo/
     ├── customize-frontend/
     ├── customize-frontend-branding/

@@ -13,7 +13,12 @@ import google.oauth2.credentials
 from google.cloud import bigquery
 from pydantic import BaseModel
 
-from looker_demo_cli.config import GCLOUD_CONFIGS_DIR, GCLOUD_CONFIG_DIR, GCLOUD_CREDS_DB
+from looker_demo_cli.config import (
+    DEFAULT_GCP_PROJECT,
+    GCLOUD_CONFIGS_DIR,
+    GCLOUD_CONFIG_DIR,
+    GCLOUD_CREDS_DB,
+)
 from looker_demo_cli.utils.console import console, print_error, print_info, print_success, print_warning
 
 
@@ -23,6 +28,60 @@ class GCPAccountInfo(BaseModel):
     project_id: Optional[str] = None
     has_bigquery_access: bool = False
     error_message: Optional[str] = None
+
+
+class GCPActiveContext(BaseModel):
+    active_account: Optional[str] = None
+    active_project: Optional[str] = None
+    active_config_name: Optional[str] = None
+    adc_project_id: Optional[str] = None
+    adc_quota_project_id: Optional[str] = None
+    adc_file_path: Optional[str] = None
+    adc_file_exists: bool = False
+
+
+def get_gcp_active_context() -> GCPActiveContext:
+    """Retrieve active gcloud account, gcloud project, and ADC project settings."""
+    active_cfg = get_active_gcloud_config_name()
+    configs = get_available_gcloud_configs()
+    
+    active_acc = None
+    active_proj = None
+    if active_cfg and active_cfg in configs:
+        active_acc = configs[active_cfg].get("core.account")
+        active_proj = configs[active_cfg].get("core.project")
+    
+    adc_path_str = os.getenv("GOOGLE_APPLICATION_CREDENTIALS") or str(
+        GCLOUD_CONFIG_DIR / "application_default_credentials.json"
+    )
+    adc_file = Path(adc_path_str)
+    adc_exists = adc_file.exists()
+    adc_quota_proj = None
+    
+    if adc_exists:
+        try:
+            with open(adc_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                adc_quota_proj = data.get("quota_project_id")
+        except Exception:
+            pass
+
+    adc_proj_id = None
+    try:
+        _, detected_proj = google.auth.default()
+        adc_proj_id = detected_proj
+    except Exception:
+        pass
+
+    return GCPActiveContext(
+        active_account=active_acc,
+        active_project=active_proj,
+        active_config_name=active_cfg,
+        adc_project_id=adc_proj_id,
+        adc_quota_project_id=adc_quota_proj,
+        adc_file_path=str(adc_file),
+        adc_file_exists=adc_exists,
+    )
 
 
 def get_available_gcloud_configs() -> Dict[str, Dict[str, str]]:
@@ -94,9 +153,6 @@ def get_oauth_credentials_for_account(account_id: str) -> Optional[google.oauth2
     except Exception as e:
         print_warning(f"Failed to load OAuth credentials for {account_id}: {e}")
         return None
-
-
-from looker_demo_cli.config import DEFAULT_GCP_PROJECT, GCLOUD_CONFIGS_DIR, GCLOUD_CONFIG_DIR, GCLOUD_CREDS_DB
 
 
 def inspect_gcp_accounts(target_project: str = DEFAULT_GCP_PROJECT) -> List[GCPAccountInfo]:
@@ -175,8 +231,14 @@ def select_gcp_credentials(
 
 
 def list_available_gcp_projects() -> List[Dict[str, str]]:
-    """List accessible Google Cloud projects via gcloud."""
+    """List accessible Google Cloud projects via gcloud or Cloud Resource Manager API."""
     import subprocess
+    import requests
+    import google.auth.transport.requests
+
+    projects_map: Dict[str, Dict[str, str]] = {}
+
+    # 1. Try gcloud CLI
     try:
         res = subprocess.run(
             ["gcloud", "projects", "list", "--format=json"],
@@ -186,16 +248,65 @@ def list_available_gcp_projects() -> List[Dict[str, str]]:
         )
         if res.returncode == 0 and res.stdout.strip():
             data = json.loads(res.stdout)
-            return [
-                {
-                    "project_id": p.get("projectId", ""),
-                    "name": p.get("name", ""),
-                    "project_number": str(p.get("projectNumber", "")),
-                }
-                for p in data
-                if p.get("projectId")
-            ]
-    except Exception as e:
-        print_warning(f"Could not query GCP projects via gcloud: {e}")
-    return []
+            for p in data:
+                pid = p.get("projectId")
+                if pid:
+                    projects_map[pid] = {
+                        "project_id": pid,
+                        "name": p.get("name", pid),
+                        "project_number": str(p.get("projectNumber", "")),
+                    }
+            if projects_map:
+                return list(projects_map.values())
+    except Exception:
+        pass
+
+    # 2. Fallback: Query Cloud Resource Manager API with authenticated credentials
+    accounts = get_authenticated_accounts()
+    active_cfg = get_active_gcloud_config_name()
+    configs = get_available_gcloud_configs()
+    active_acc = None
+    if active_cfg and active_cfg in configs:
+        active_acc = configs[active_cfg].get("core.account")
+
+    # Sort to try active account first
+    sorted_accounts = sorted(accounts, key=lambda a: 0 if a == active_acc else 1)
+
+    for acc in sorted_accounts:
+        creds = get_oauth_credentials_for_account(acc)
+        if not creds:
+            continue
+        try:
+            req = google.auth.transport.requests.Request()
+            creds.refresh(req)
+            headers = {"Authorization": f"Bearer {creds.token}"}
+            resp = requests.get(
+                "https://cloudresourcemanager.googleapis.com/v1/projects",
+                headers=headers,
+                timeout=10,
+            )
+            if resp.status_code == 200:
+                data = resp.json().get("projects", [])
+                for p in data:
+                    pid = p.get("projectId")
+                    if pid and p.get("lifecycleState") in (None, "ACTIVE"):
+                        projects_map[pid] = {
+                            "project_id": pid,
+                            "name": p.get("name", pid),
+                            "project_number": str(p.get("projectNumber", "")),
+                        }
+        except Exception:
+            continue
+
+    # 3. If any project is defined in active gcloud config, include it
+    if active_cfg and active_cfg in configs:
+        cfg_proj = configs[active_cfg].get("core.project")
+        if cfg_proj and cfg_proj not in projects_map:
+            projects_map[cfg_proj] = {
+                "project_id": cfg_proj,
+                "name": cfg_proj,
+                "project_number": "",
+            }
+
+    return list(projects_map.values())
 

@@ -6,12 +6,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Tuple
 from pydantic import BaseModel
 
-from looker_demo_cli.config import (
-    DEFAULT_LOOKER_CLIENT_ID,
-    DEFAULT_LOOKER_CLIENT_SECRET,
-    DEFAULT_LOOKER_INSTANCE_URL,
-    GEMINI_MCP_CONFIG,
-)
+from looker_demo_cli.config import GEMINI_MCP_CONFIG
 from looker_demo_cli.utils.console import print_error, print_info, print_success, print_warning
 
 
@@ -35,22 +30,9 @@ REQUIRED_MCP_SERVERS = {
         "serverUrl": "https://bigquery.googleapis.com/mcp",
         "authProviderType": "google_credentials",
     },
-    "lkr_codemode": {
-        "command": "uvx",
-        "args": [
-            "--quiet",
-            "--from",
-            "lkr-dev-cli[codemode]",
-            "lkr",
-            "code-mode",
-            "run",
-        ],
-        "env": {
-            "PYTHONUNBUFFERED": "1",
-            "LOOKERSDK_BASE_URL": DEFAULT_LOOKER_INSTANCE_URL,
-            "LOOKERSDK_CLIENT_ID": DEFAULT_LOOKER_CLIENT_ID,
-            "LOOKERSDK_CLIENT_SECRET": DEFAULT_LOOKER_CLIENT_SECRET,
-        },
+    "knowledge-catalog": {
+        "serverUrl": "https://dataplex.googleapis.com/mcp",
+        "authProviderType": "google_credentials",
     },
 }
 
@@ -102,24 +84,15 @@ def check_mcp_servers() -> List[MCPStatus]:
     return results
 
 
-def patch_mcp_config(
-    looker_url: str = DEFAULT_LOOKER_INSTANCE_URL,
-    client_id: str = DEFAULT_LOOKER_CLIENT_ID,
-    client_secret: str = DEFAULT_LOOKER_CLIENT_SECRET,
-) -> bool:
-    """Inject or repair required MCP servers in ~/.gemini/config/mcp_config.json."""
+def patch_mcp_config() -> bool:
+    """Inject or repair required MCP servers (data-designer, bigquery) in ~/.gemini/config/mcp_config.json."""
     config = read_mcp_config()
     if "mcpServers" not in config:
         config["mcpServers"] = {}
 
-    # Copy defaults and update Looker credentials
-    servers_to_patch = json.loads(json.dumps(REQUIRED_MCP_SERVERS))
-    servers_to_patch["lkr_codemode"]["env"]["LOOKERSDK_BASE_URL"] = looker_url
-    servers_to_patch["lkr_codemode"]["env"]["LOOKERSDK_CLIENT_ID"] = client_id
-    servers_to_patch["lkr_codemode"]["env"]["LOOKERSDK_CLIENT_SECRET"] = client_secret
-
-    for s_name, s_def in servers_to_patch.items():
-        config["mcpServers"][s_name] = s_def
+    for s_name, s_def in REQUIRED_MCP_SERVERS.items():
+        if s_name not in config["mcpServers"] or not config["mcpServers"][s_name]:
+            config["mcpServers"][s_name] = s_def
 
     GEMINI_MCP_CONFIG.parent.mkdir(parents=True, exist_ok=True)
     try:

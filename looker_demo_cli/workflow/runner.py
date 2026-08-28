@@ -5,7 +5,7 @@ from typing import Optional
 from looker_demo_cli.generators.lookml_generator import LookMLTableSpec
 from looker_demo_cli.precheck.gcp_auth import select_gcp_credentials
 from looker_demo_cli.utils.bigquery_client import BigQueryHelper
-from looker_demo_cli.utils.console import console, print_banner, print_error, print_info, print_success
+from looker_demo_cli.utils.console import print_banner, print_success
 from looker_demo_cli.workflow.state import FlowState
 from looker_demo_cli.workflow.steps import (
     run_bigquery_upload_step,
@@ -15,6 +15,71 @@ from looker_demo_cli.workflow.steps import (
     run_lookml_generation_step,
     run_schema_synthesis_step,
 )
+
+
+def extract_table_specs_from_parquet_dir(parquet_dir: Path) -> list[LookMLTableSpec]:
+    import pyarrow.parquet as pq
+    specs = []
+    parquet_files = sorted(list(parquet_dir.glob("*.parquet")))
+    all_table_names = [f.stem for f in parquet_files]
+
+    for p_file in parquet_files:
+        t_name = p_file.stem
+        table = pq.read_table(p_file)
+        schema_fields = {}
+        for col_name, col_type in zip(table.schema.names, table.schema.types):
+            type_str = str(col_type).lower()
+            if "int" in type_str:
+                schema_fields[col_name] = "INT64"
+            elif "float" in type_str or "double" in type_str:
+                schema_fields[col_name] = "FLOAT64"
+            elif "bool" in type_str:
+                schema_fields[col_name] = "BOOL"
+            elif "timestamp" in type_str or "time" in type_str or "date" in type_str:
+                schema_fields[col_name] = "TIMESTAMP"
+            else:
+                schema_fields[col_name] = "STRING"
+
+        is_fact = t_name.startswith("fct_") or "transaction" in t_name or "alert" in t_name or "order" in t_name
+        pk = None
+        for col in schema_fields:
+            if col == f"{t_name.replace('dim_', '').replace('fct_', '')[:-1]}_id" or col == f"{t_name.replace('dim_', '').replace('fct_', '')}_id" or col == "id":
+                pk = col
+                break
+        if not pk:
+            for col in schema_fields:
+                if col.endswith("_id") and (col.startswith(t_name.split("_")[-1][:-1]) or col.startswith(t_name.split("_")[-1])):
+                    pk = col
+                    break
+        if not pk and any(col.endswith("_id") for col in schema_fields):
+            pk = [col for col in schema_fields if col.endswith("_id")][0]
+
+        # Foreign keys
+        fks = {}
+        for col in schema_fields:
+            if col.endswith("_id") and col != pk:
+                ref = col[:-3]
+                parent_table = None
+                for cand in all_table_names:
+                    if cand == t_name:
+                        continue
+                    cand_norm = cand.replace("dim_", "").replace("fct_", "")
+                    if cand_norm == ref or cand_norm == f"{ref}s" or cand_norm == f"{ref}es" or (ref.endswith("y") and cand_norm == f"{ref[:-1]}ies"):
+                        parent_table = cand
+                        break
+                if parent_table:
+                    fks[col] = f"{parent_table}.{col}"
+
+        specs.append(
+            LookMLTableSpec(
+                table_name=t_name,
+                table_type="fact" if is_fact else "dimension",
+                schema_fields=schema_fields,
+                primary_key=pk,
+                foreign_keys=fks,
+            )
+        )
+    return specs
 
 
 class FlowRunner:
@@ -53,10 +118,13 @@ class FlowRunner:
         self.state = run_bigquery_upload_step(self.state, bq_helper)
 
         # 4. LookML Generation
-        table_specs = []
-        tables_to_model = self.state.generated_tables or self.state.existing_tables
-        for t in tables_to_model:
-            table_specs.append(LookMLTableSpec(table_name=t, table_type="fact" if "fct" in t or "order" in t or "event" in t else "dimension"))
+        if self.state.generated_parquet_dir and any(self.state.generated_parquet_dir.glob("*.parquet")):
+            table_specs = extract_table_specs_from_parquet_dir(self.state.generated_parquet_dir)
+        else:
+            table_specs = []
+            tables_to_model = self.state.generated_tables or self.state.existing_tables
+            for t in tables_to_model:
+                table_specs.append(LookMLTableSpec(table_name=t, table_type="fact" if "fct" in t or "order" in t or "event" in t else "dimension"))
 
         self.state = run_lookml_generation_step(self.state, self.scratch_dir, table_specs)
 

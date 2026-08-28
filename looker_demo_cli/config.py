@@ -38,6 +38,14 @@ SKILL_GIT_REPOSITORIES: Dict[str, Dict[str, Any]] = {
         "env_var": "LOOKER_EMBED_DEMO_PATH",
         "local_default": HOME_DIR / "looker-embed-demo",
     },
+    "lkr-cli": {
+        "urls": [
+            "https://github.com/lkrdev/cli.git",
+        ],
+        "skills_subpath": "skills",
+        "env_var": "LOOKER_CLI_PATH",
+        "local_default": HOME_DIR / "lkr-cli",
+    },
 }
 
 # Intent-Based Skill Mappings (category -> skill_name -> (repo_key, relative_skill_subfolder))
@@ -50,6 +58,7 @@ INTENT_SKILL_DEFINITIONS: Dict[str, Dict[str, Tuple[str, str]]] = {
         "vertex-ai": ("synthetic-data-generator", "vertex-ai"),
     },
     "lookml": {
+        "lkr-code-mode": ("lkr-cli", "lkr-code-mode"),
         "repo-lookml": ("looker-embed-demo", "repo-lookml"),
         "lookml-model": ("looker-embed-demo", "lookml-model"),
         "lookml-explore": ("looker-embed-demo", "lookml-explore"),
@@ -81,20 +90,40 @@ INTENT_SKILL_DEFINITIONS: Dict[str, Dict[str, Tuple[str, str]]] = {
     },
 }
 
-# Default Environment Variables (loaded from env or set to generic placeholders)
-DEFAULT_LOOKER_INSTANCE_URL = os.getenv("LOOKERSDK_BASE_URL", "")
-DEFAULT_LOOKER_CLIENT_ID = os.getenv("LOOKERSDK_CLIENT_ID", "")
-DEFAULT_LOOKER_CLIENT_SECRET = os.getenv("LOOKERSDK_CLIENT_SECRET", "")
+def get_looker_credentials_from_mcp() -> Dict[str, str]:
+    """Extract Looker credentials from ~/.gemini/config/mcp_config.json if present."""
+    import json
+    if not GEMINI_MCP_CONFIG.exists():
+        return {}
+    try:
+        with open(GEMINI_MCP_CONFIG, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            lkr_env = data.get("mcpServers", {}).get("lkr_codemode", {}).get("env", {})
+            return {
+                "base_url": lkr_env.get("LOOKERSDK_BASE_URL", ""),
+                "client_id": lkr_env.get("LOOKERSDK_CLIENT_ID", ""),
+                "client_secret": lkr_env.get("LOOKERSDK_CLIENT_SECRET", ""),
+            }
+    except Exception:
+        return {}
+
+
+_mcp_looker = get_looker_credentials_from_mcp()
+
+# Default Environment Variables (loaded from env, MCP config, or set to generic placeholders)
+DEFAULT_LOOKER_INSTANCE_URL = os.getenv("LOOKERSDK_BASE_URL") or _mcp_looker.get("base_url", "")
+DEFAULT_LOOKER_CLIENT_ID = os.getenv("LOOKERSDK_CLIENT_ID") or _mcp_looker.get("client_id", "")
+DEFAULT_LOOKER_CLIENT_SECRET = os.getenv("LOOKERSDK_CLIENT_SECRET") or _mcp_looker.get("client_secret", "")
 DEFAULT_GCP_PROJECT = os.getenv("GOOGLE_CLOUD_PROJECT", "")
 DEFAULT_GCP_LOCATION = os.getenv("BIGQUERY_LOCATION", "US")
 
 
 class AppConfig(BaseModel):
     """Global configuration settings for demo-create."""
-    looker_base_url: str = DEFAULT_LOOKER_INSTANCE_URL
-    looker_client_id: str = DEFAULT_LOOKER_CLIENT_ID
-    looker_client_secret: str = DEFAULT_LOOKER_CLIENT_SECRET
-    gcp_project_id: str = DEFAULT_GCP_PROJECT
+    looker_base_url: str = Field(default_factory=lambda: DEFAULT_LOOKER_INSTANCE_URL)
+    looker_client_id: str = Field(default_factory=lambda: DEFAULT_LOOKER_CLIENT_ID)
+    looker_client_secret: str = Field(default_factory=lambda: DEFAULT_LOOKER_CLIENT_SECRET)
+    gcp_project_id: str = Field(default_factory=lambda: DEFAULT_GCP_PROJECT)
     gcp_location: str = DEFAULT_GCP_LOCATION
     gcp_account: str | None = None
     default_connection_name: str = "default_bigquery_connection"

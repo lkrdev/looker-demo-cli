@@ -16,6 +16,7 @@ class FlowState(BaseModel):
     gcp_account: Optional[str] = None
     gcp_location: str = "US"
     looker_instance_url: str = DEFAULT_LOOKER_INSTANCE_URL
+    looker_account: Optional[str] = None
     looker_connection_name: str = "default_bigquery_connection"
 
     # Dataset & Intent
