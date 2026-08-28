@@ -1,6 +1,6 @@
 [project]
 name = "looker-demo-cli"
-version = "0.1.0"
+version = "0.1.1"
 description = "Deterministic Looker Demo Orchestrator CLI for synthetic data generation, BigQuery upload, LookML modeling, and Embedded Portal scaffolding."
 readme = "README.md"
 requires-python = ">=3.12"
