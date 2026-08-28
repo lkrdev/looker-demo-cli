@@ -9,7 +9,6 @@ from looker_demo_cli.generators.lookml_generator import LookMLTableSpec
 from looker_demo_cli.precheck.gcp_auth import select_gcp_credentials
 from looker_demo_cli.utils.bigquery_client import BigQueryHelper
 from looker_demo_cli.utils.console import console, print_banner, print_error, print_info, print_success
-from looker_demo_cli.utils.looker_client import LookerDeployHelper
 from looker_demo_cli.workflow.state import FlowState
 from looker_demo_cli.workflow.steps import (
     run_bigquery_upload_step,
@@ -46,7 +45,6 @@ class FlowRunner:
             credentials=creds,
             location=self.state.gcp_location,
         )
-        looker_helper = LookerDeployHelper(base_url=self.state.looker_instance_url)
 
         # 1. Dataset Decision
         self.state = run_dataset_decision_step(self.state, bq_helper)
@@ -58,7 +56,6 @@ class FlowRunner:
         self.state = run_bigquery_upload_step(self.state, bq_helper)
 
         # 4. LookML Generation
-        # Construct table specs
         table_specs = []
         tables_to_model = self.state.generated_tables or self.state.existing_tables
         for t in tables_to_model:
@@ -66,8 +63,8 @@ class FlowRunner:
 
         self.state = run_lookml_generation_step(self.state, self.scratch_dir, table_specs)
 
-        # 5. Looker Deploy
-        self.state = run_looker_deploy_step(self.state, looker_helper)
+        # 5. Looker Deploy (delegates directly to lkr tools lookml push ... --deploy)
+        self.state = run_looker_deploy_step(self.state)
 
         # 6. Embed Scaffold
         self.state = run_embed_scaffold_step(self.state, self.target_base_dir)

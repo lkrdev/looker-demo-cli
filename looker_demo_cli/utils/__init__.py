@@ -11,7 +11,6 @@ from looker_demo_cli.utils.console import (
     print_success,
     print_warning,
 )
-from looker_demo_cli.utils.looker_client import LookerDeployHelper
 
 __all__ = [
     "console",
@@ -22,5 +21,4 @@ __all__ = [
     "print_success",
     "print_warning",
     "BigQueryHelper",
-    "LookerDeployHelper",
 ]

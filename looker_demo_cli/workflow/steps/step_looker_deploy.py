@@ -3,44 +3,52 @@
 
 from __future__ import annotations
 
+import shutil
+import subprocess
+import sys
 from pathlib import Path
 from looker_demo_cli.utils.console import print_error, print_info, print_step_header, print_success
-from looker_demo_cli.utils.looker_client import LookerDeployHelper
 from looker_demo_cli.workflow.state import FlowState
 
 
-def run_looker_deploy_step(state: FlowState, looker_helper: LookerDeployHelper) -> FlowState:
-    """Step 5: Provision project, upload files, validate, and deploy to Looker production."""
-    print_step_header(5, state.total_steps, "Looker Project Provisioning & Production Deployment")
+def run_looker_deploy_step(state: FlowState) -> FlowState:
+    """Step 5: Upload LookML files, validate, commit, and deploy to Looker production using lkr-dev-cli."""
+    print_step_header(5, state.total_steps, "Looker Production Deployment via lkr-dev-cli")
 
     if not state.lookml_output_dir or not state.lookml_output_dir.exists():
         print_error("No LookML output directory found. Cannot deploy.")
         state.status = "failed"
         return state
 
-    print_info(f"Provisioning project `{state.looker_project_name}` on Looker...")
-    looker_helper.ensure_project(state.looker_project_name)
-    looker_helper.ensure_model_configuration(
-        model_name=state.lookml_model_name,
-        project_id=state.looker_project_name,
-        connection_name=state.looker_connection_name,
-    )
+    lkr_bin = shutil.which("lkr") or str(Path(sys.executable).parent / "lkr")
+    print_info(f"Using `lkr-dev-cli` binary: `{lkr_bin}`")
 
-    print_info(f"Uploading LookML files to `{state.looker_project_name}`...")
-    uploaded = looker_helper.upload_lookml_directory(state.looker_project_name, state.lookml_output_dir)
-    print_success(f"Uploaded {len(uploaded)} LookML files to dev workspace.")
+    cmd = [
+        lkr_bin,
+        "tools",
+        "lookml",
+        "push",
+        str(state.lookml_output_dir),
+        f"--project={state.looker_project_name}",
+        "--deploy",
+    ]
 
-    print_info("Validating LookML and deploying to production...")
-    res = looker_helper.validate_and_deploy(
-        project_id=state.looker_project_name,
-        commit_message=f"Deploy {state.looker_project_name} from demo-create CLI",
-    )
-
-    val_errors = res.get("validation_errors", [])
-    if val_errors:
-        print_error(f"Validation warnings/errors: {val_errors}")
-    else:
-        print_success("LookML validation clean (0 errors).")
+    print_info(f"Executing: {' '.join(cmd)}")
+    try:
+        res = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        print_success("LookML files successfully pushed, validated, and deployed to production!")
+        if res.stdout:
+            print_info(res.stdout.strip())
+    except subprocess.CalledProcessError as e:
+        print_error(f"lkr push error (exit code {e.returncode}): {e.stderr or e.stdout}")
+        state.status = "failed"
+        state.error_message = e.stderr or e.stdout
+        return state
+    except Exception as e:
+        print_error(f"Unexpected error running lkr CLI: {e}")
+        state.status = "failed"
+        state.error_message = str(e)
+        return state
 
     dash_url = f"{state.looker_instance_url}/dashboards/{state.looker_project_name}::{state.lookml_model_name}_overview"
     state.deployed_dashboard_url = dash_url

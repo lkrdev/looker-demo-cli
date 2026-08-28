@@ -46,6 +46,7 @@ INTENT_SKILL_MAPPINGS: Dict[str, Dict[str, Path]] = {
         "embed-themes": LOOKER_EMBED_DEMO_REPO / ".agents" / "skills" / "embed-themes",
     },
     "embed-portal": {
+        "looker-demo-orchestrator": HOME_DIR / "looker-demo-cli" / "skills" / "looker-demo-orchestrator",
         "setup-embed-demo": LOOKER_EMBED_DEMO_REPO / ".agents" / "skills" / "setup-embed-demo",
         "customize-frontend": LOOKER_EMBED_DEMO_REPO / ".agents" / "skills" / "customize-frontend",
         "customize-frontend-branding": LOOKER_EMBED_DEMO_REPO / ".agents" / "skills" / "customize-frontend-branding",
