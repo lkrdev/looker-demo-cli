@@ -5,81 +5,85 @@ description: Master orchestration skill for designing, generating, modeling, and
 
 # Looker Demo Orchestrator (`demo-create`)
 
-This skill defines the complete operational procedure for an AI agent or engineer creating full-stack data demos on Google Cloud BigQuery and Looker.
+This skill defines the mandatory operational procedure for an AI agent or engineer creating full-stack data demos on Google Cloud BigQuery and Looker.
+
+> [!CAUTION]
+> **CRITICAL RULE: DO NOT USE `demo-create run` MONOLITHICALLY TO BYPASS CO-DESIGN.**
+> Running `demo-create run` autonomously without human interaction bypasses iterative schema co-design and volume validation. The agent **MUST** orchestrate the workflow interactively stage-by-stage as detailed below.
 
 ---
 
-## 1. Pre-Flight Environment Inspection, Account & Project Selection
+## 1. Pre-Flight Environment Inspection & Interactive Confirmation Gate
 
-Always execute the pre-check command first to verify GCP/ADC credentials, active configuration, available projects, MCP servers, and organized skills:
+Always execute the pre-check inspection first to inspect GCP credentials, available projects, Looker OAuth sessions, and MCP tools:
 
-```bash
-demo-create pre-check --fix
-```
-
-To get structured machine-readable JSON status:
 ```bash
 demo-create pre-check --json
+uvx --from lkr-dev-cli lkr auth list
 ```
 
-### Authentication, Account & Project Selection Rules:
-1. **GCP Account & Project Confirmation**:
-   - In environments with multiple Google accounts (e.g. corporate account alongside demo/personal accounts), the agent **MUST prompt the user to confirm/select both the GCP account and target Google Cloud Project** before creating datasets or running data synthesis.
-   - The pre-check output displays the active `gcloud` account, active `gcloud` project, and Application Default Credentials (ADC) quota project, along with all authenticated accounts and accessible projects.
-   - Example prompt: *"I detected the following GCP accounts: `admin@maluka.altostrat.com` (Active) and `maluka@google.com`. Please confirm which GCP account and which Google Cloud project (e.g., 1) luka-networking, 2) data-cloud-interactive-demo, 3) looker-demo-392616) you would like to use."*
+### Mandatory Interactive Confirmation Checklist:
+Before designing schemas, creating BigQuery datasets, or touching Looker, the agent **MUST explicitly prompt the user** (via `ask_question` or interactive prompt) to confirm all four environment targets:
 
-2. **First-Time Setup or Missing Accounts/Projects**:
-   - If no accounts or projects are configured in `gcloud`, instruct the user to run:
-     ```bash
-     gcloud auth login
-     gcloud auth application-default login
-     gcloud config set project <PROJECT_ID>
-     ```
+1. **GCP User Account**: (e.g. `admin@maluka.altostrat.com` vs `user@google.com`)
+2. **Target Google Cloud Project ID**: (e.g. `looker-demo-392616`, `data-cloud-interactive-demo`)
+3. **Target Looker Instance / OAuth Account**: (e.g. `dev-looker.lukapuka.co` vs `dev-googledemo2` from `lkr auth list`)
+4. **Target Looker Database Connection**: (e.g. `default_bigquery_connection`)
 
-3. **GCP Re-authentication Required**:
-   - If the pre-check output indicates that re-authentication is needed (e.g. `reauth_required: true`, token refresh error, or account restricted):
-     - **Immediately prompt the user** to authenticate by running:
-       ```bash
-       gcloud auth login
-       gcloud auth application-default login
-       ```
-     - Do NOT try to run BigQuery commands or create datasets until the user has re-authenticated.
+> [!IMPORTANT]
+> **NEVER assume or default the Looker instance or GCP project** without explicit user confirmation, even if an active session exists in `pre-check`.
 
 ---
 
-## 2. Looker Authentication & Project Provisioning via Code Mode (`lkr-dev-cli code-mode`)
+## 2. Iterative Schema Co-Design & Micro-Sample Validation Gate
 
-### A. Authentication Options & Validation
-Looker authentication is managed directly via `lkr-dev-cli` without requiring an MCP server:
+When creating demo datasets, the agent **MUST co-iterate with the user** across four deterministic phases. Do not write full tables or load BigQuery until all phases are complete:
 
-1. **OAuth Authentication (Interactive / Browser Flow)**:
-   - Check current session:
-     ```bash
-     uvx lkr-dev-cli auth whoami
-     uvx lkr-dev-cli auth list
-     ```
-   - If not authenticated, prompt for the Looker instance URL and perform pre-flight validation against `https://<instance_url>/auth?client_id=lkr-cli&...`.
-   - Complete login:
-     ```bash
-     uvx --from "lkr-dev-cli[codemode]" lkr-dev-cli auth login
-     ```
+```mermaid
+graph TD
+    A[Phase 1: Schema & ERD Proposal] -->|User Approval| B[Phase 2: Micro-Sample Preview]
+    B -->|User Validation| C[Phase 3: Scale & Volume Confirmation]
+    C -->|User Scale Selection| D[Phase 4: Full Synthesis & BigQuery Load]
+```
 
-2. **API Key Authentication (`.env` or Environment Variables)**:
-   - Provide credentials via `.env` file:
-     ```bash
-     uvx --env-file=.env --from "lkr-dev-cli[codemode]" lkr-dev-cli code-mode sandbox --code="..."
-     ```
+### Phase 1 — Schema Proposal & Review (Human-in-the-Loop)
+- Present the relational model (ERD diagram, dimension vs. fact tables, field names, data types, primary keys, and foreign key relationships).
+- Highlight key business metrics (e.g., MRR/ARR, churn rates, NPS, telemetry).
+- **PAUSE and prompt the user** for feedback on fields, custom dimensions, or adjustments before generating any data rows.
 
-### B. Project Provisioning via Direct Code Mode CLI
-Execute Python SDK commands directly in the Monty sandbox:
+### Phase 2 — Micro-Sample Synthesis & Preview (Human-in-the-Loop)
+- Synthesize a micro-sample dataset (5–10 realistic sample rows per table).
+- Display Markdown preview tables in chat demonstrating:
+  - Referential integrity across parent/child IDs.
+  - Realistic domain-specific values and categorical distributions.
+- **PAUSE and prompt the user** to inspect and validate the sample records.
+
+### Phase 3 — Volume & Scale Confirmation (Human-in-the-Loop)
+- Prompt the user to select the target scale:
+  - **Small** (~1,000–5,000 rows across tables) — Quick testing
+  - **Medium** (~10,000–50,000 rows) — Standard demo
+  - **Large** (~100,000–500,000+ rows) — High-volume enterprise demo
+  - **Custom** table-specific sizing
+
+### Phase 4 — Batch Synthesis & BigQuery Load
+- Only after Phases 1–3 are explicitly acknowledged, generate the full dataset (Parquet) and upload tables into the confirmed BigQuery project and dataset.
+
+---
+
+## 3. Looker Project & Model Provisioning (`lkr-dev-cli`)
+
+Looker authentication is managed directly via `lkr-dev-cli` using the confirmed OAuth account:
+
+### A. Project & Bare Git Initialization
+Ensure the project exists on the target Looker instance with a bare Git repository:
 
 ```bash
-uvx --from "lkr-dev-cli[codemode]" lkr-dev-cli code-mode sandbox --code="
+uvx --with "mcp<2" --from "lkr-dev-cli[all]" lkr --oauth-account=<oauth_account> code-mode sandbox --code="
 if session().get('workspace_id') != 'dev':
     update_session(body={'workspace_id': 'dev'})
 
-project_name = 'logistics_analytics'
-connection_name = 'default_bigquery_connection'
+project_name = '<project_name>'
+connection_name = '<connection_name>'
 
 create_project(body={'name': project_name})
 update_project(project_id=project_name, body={'git_remote_url': None, 'git_service_name': 'bare'})
@@ -94,75 +98,57 @@ create_lookml_model(body={
 
 ---
 
-## 3. Iterative Schema Co-Design & Micro-Sample Validation Gate
+## 4. LookML Quality Standards & Mandatory Pre-Deployment Validation Gate
 
-When generating greenfield datasets, the agent **MUST co-iterate with the user** across four deterministic phases:
-
-1. **Phase 1 — Schema Proposal & Review**:
-   - Propose the entity schema model (entities, fact vs dimension tables, field names, data types, primary keys, and foreign key relationships).
-   - Solicit user confirmation and feedback before generating any data rows.
-
-2. **Phase 2 — Micro-Sample Synthesis & Preview**:
-   - Synthesize a micro-sample dataset (5–10 sample rows per table).
-   - Present markdown tables showing the sample records, realistic data distributions, and referential integrity for user inspection.
-
-3. **Phase 3 — Volume & Scale Confirmation**:
-   - Prompt the user to confirm the target scale (e.g., Small ~1,000 rows, Medium ~10,000 rows, Large ~100,000 rows, or custom table sizes).
-
-4. **Phase 4 — Execution & BigQuery Load**:
-   - Only synthesize the full-volume dataset and create/load BigQuery tables **after explicit user acknowledgment**.
-
----
-
-## 4. LookML Quality Standards, Validation & Production Deployment (`lkr-dev-cli`)
-
-### A. Field Documentation & Flexible Dashboard Design Standards
+### A. Field Documentation & Formatting Standards
 Every view file (`views/*.view.lkml`) must follow LookML best practices:
 - **Explicit `label:` and `description:`** parameters on every dimension, dimension group, and measure.
-- Human-friendly Title Case labels (e.g. `label: "Patient Satisfaction Score"`).
+- Human-friendly Title Case labels (e.g. `label: "Monthly Recurring Revenue"`).
 - Explicit `type:`, `sql:`, and `value_format_name:` (e.g. `usd_0`, `percent_2`, `decimal_1`).
+- Primary keys (`primary_key: yes`) on all dimension tables.
 - Drill fields (`drill_fields: [...]`) on key primary measures.
+- Proper join relationships (`many_to_one`, `one_to_many`, `many_to_many`) in models.
 
-**Flexible Dashboard Co-Design**:
-- LookML dashboards are not confined to fixed 3-tab layouts.
-- Incorporate user guidance, wireframes, image mockups, requested KPIs, tab structures (e.g., Executive Pulse, Operations, Drilldowns, Geography, Risk), and customized visual elements.
+### B. Mandatory Pre-Deployment Validation Gate
 
-### B. LookML Synchronization & Comprehensive Validation Gate (`lkr-dev-cli`)
-Always use `lkr-dev-cli` to push files to the Looker developer workspace, validate syntax, verify dashboard queries, and deploy to production:
+The agent **MUST follow this 4-step sequence** without skipping:
 
-```bash
-# 1. Push local LookML files to the Looker dev branch
-lkr --dev tools lookml push <lookml_folder_path> --project=<project_name>
-
-# 2. Run LookML Validator (via Looker API or Code Mode) to catch syntax/join errors
-# In Python / Code Mode:
-# validation = sdk.validate_project("<project_name>")
-# assert len(validation.errors) == 0, f"LookML errors found: {validation.errors}"
-
-# 3. Exhaustive Dashboard Query Verification Gate:
-# Execute every query element across all *.dashboard.lookml files via /api/4.0/queries/run/json or run_inline_query
-# Confirm 100% of dashboard queries execute with HTTP 200 OK before deploying.
-
-# 4. Commit and deploy to production once validation and query tests pass
-lkr --dev tools lookml deploy --project=<project_name>
-
-# Or execute one-step push, validation, commit, and deploy:
-lkr --dev tools lookml push <lookml_folder_path> --project=<project_name> --deploy
+```mermaid
+graph LR
+    Step1[1. Push to Dev Branch] --> Step2[2. Run LookML Validator]
+    Step2 --> Step3[3. Run Dashboard Query Tests]
+    Step3 -->|100% Pass| Step4[4. Deploy to Production]
 ```
 
-- Local structure:
-  - `views/*.view.lkml` (with labels and descriptions)
-  - `models/*.model.lkml` (with explores and joins)
-  - `dashboards/*.dashboard.lookml` (executive visualization layouts)
+```bash
+# Step 1: Push local LookML files to the Looker dev branch (using single-file push -f for reliability)
+for file in views/*.view.lkml models/*.model.lkml dashboards/*.dashboard.lookml; do
+  uvx --with "mcp<2" --from "lkr-dev-cli[all]" lkr --oauth-account=<oauth_account> tools lookml push <lookml_dir> --project=<project_name> -f "$file"
+done
+
+# Step 2: Run LookML Validator (via Looker API or Code Mode)
+# Assert that len(validation.errors) == 0 before proceeding.
+# If errors exist, fix them locally, re-push, and re-validate.
+
+# Step 3: Exhaustive Dashboard Query Verification Gate
+# Execute every query tile in *.dashboard.lookml files via /api/4.0/queries/run/json or run_inline_query.
+# Confirm 100% of dashboard queries execute with HTTP 200 OK.
+
+# Step 4: Deploy to Production (ONLY AFTER Step 2 and Step 3 pass completely)
+uvx --with "mcp<2" --from "lkr-dev-cli[all]" lkr --oauth-account=<oauth_account> tools lookml deploy --project=<project_name>
+```
+
+> [!CAUTION]
+> **NEVER call `deploy` or pass `--deploy` before verifying Step 2 (LookML Validator) and Step 3 (Query Verification).**
 
 ---
 
-## 5. External Embedded Portal Scaffolding
+## 5. External Embedded Portal Scaffolding (Optional)
 
-When an external demo is required, scaffold a new dedicated workspace:
+When an external embedded analytics portal is requested:
 
 ```bash
 demo-create run --project=<project_name> --scope=external
 ```
 
-This clones `looker-embed-demo`, updates `.env`, `src/constants.ts`, and applies custom brand themes.
+This clones `looker-embed-demo`, configures `.env`, `src/constants.ts`, and applies custom brand styling.
