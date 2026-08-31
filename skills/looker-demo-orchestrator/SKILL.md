@@ -115,7 +115,8 @@ Every view file (`views/*.view.lkml`) must follow LookML best practices:
 - Explicit `type:`, `sql:`, and `value_format_name:` (e.g. `usd_0`, `percent_2`, `decimal_1`).
 - Primary keys (`primary_key: yes`) on all dimension tables.
 - Drill fields (`drill_fields: [...]`) on key primary measures.
-- Proper join relationships (`many_to_one`, `one_to_many`, `many_to_many`) in models.
+- Proper join relationships (`many_to_one`, `one_to_one`) in models.
+- **Complex Snowflake / 3NF Schemas**: Use `skills/lookml-snowflake-modeler/` (`schema_graph_analyzer.py`) to systematically determine Explore base views, eliminate fan/chasm traps via NDT rollups, and resolve diamond joins with role-playing aliases.
 
 ### B. Mandatory Pre-Deployment Validation Gate
 
