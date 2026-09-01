@@ -60,9 +60,21 @@ The agent **MUST follow this 4-step sequence** without skipping:
 4. **Deploy to Production**: Only proceed to production deployment (`lkr tools lookml deploy`) **after both LookML Validator and Query Tests return 0 errors**.
 
 > [!CAUTION]
-> **NEVER call `deploy` or pass `--deploy` before verifying Step 2 (LookML Validator) and Step 3 (Query Verification).**
+### 5. Conversational Analytics (CA) Agent & Gemini Enterprise (GE) Publishing Gate
+After deploying the LookML model and dashboards in Step 4, the agent **MUST orchestrate Conversational Analytics agent creation** (for both internal Looker and external embed scopes):
+1. **Interactive CA Agent Gate (`ask_question`)**: Prompt the user to confirm CA Agent creation for the deployed LookML model. Allow custom system instructions or apply the domain default template (focusing on persona, deterministic query patterns, business rules, and output formatting).
+2. **Dashboard Query Grounding (Golden Queries - 3-Step Flow)**:
+   - Step A: Create Looker base query (`POST /api/4.0/queries`) from dashboard tile specifications to obtain `expanded_share_url`.
+   - Step B: Create Golden Query resource (`POST /api/4.0/golden_queries`) with `{"questions": [prompt], "answer": expanded_share_url, "is_active": True}`. *(Note: Looker strictly requires exactly 1 question per Golden Query object).*
+   - Step C: Link Golden Queries to the Agent via `PATCH /api/4.0/agents/{agent_id}` with `{"golden_query_ids": [str(gq_id), ...]}`.
+3. **Provision via Code Mode / SDK**: Execute Looker native API methods (`create_agent`, `create_query`, `create_golden_query`, and `update_agent`).
+4. **Interactive Gemini Enterprise (GE) Publishing Gate (`ask_question`)**:
+   - Prompt the user to confirm publishing to Gemini Enterprise (GE).
+   - Remind the user to ensure Gemini Enterprise publishing is enabled on the instance (`Admin > Gemini Settings`) and a GE App is connected.
+   - If confirmed, execute a `POST` (with empty body `{}`) against `POST /api/4.0/internal/agents/{agent_id}/publish` (via OAuth token or `lkr-dev-cli` Code Mode).
 
-### 5. Use Intent Skills
+### 6. Use Intent Skills
 - For schema design & synthetic data generation, reference skills in `skills/data-design/` (`data-designer`, `data-designer-architect`).
 - For LookML views, explores, dashboards, and code-mode scripting, reference skills in `skills/lookml/` (`lkr-code-mode`, `repo-lookml`, `lookml-model`, `lookml-dashboard`).
 - For frontend embed configuration, reference skills in `skills/embed-portal/` (`setup-embed-demo`, `customize-frontend`).
+

@@ -43,8 +43,14 @@ class FlowState(BaseModel):
     embed_workspace_dir: Optional[Path] = None
     embed_portal_url: Optional[str] = None
 
+    # Conversational Analytics Agent & Gemini Enterprise
+    ca_agent_id: Optional[str] = None
+    ca_agent_name: Optional[str] = None
+    published_to_ge: bool = False
+    golden_queries_count: int = 0
+
     # Step lifecycle
     current_step: int = 1
-    total_steps: int = 6
+    total_steps: int = 7
     status: Literal["pending", "in_progress", "completed", "failed"] = "pending"
     error_message: Optional[str] = None

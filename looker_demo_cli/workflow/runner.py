@@ -9,6 +9,7 @@ from looker_demo_cli.utils.console import print_banner, print_success
 from looker_demo_cli.workflow.state import FlowState
 from looker_demo_cli.workflow.steps import (
     run_bigquery_upload_step,
+    run_ca_agent_step,
     run_dataset_decision_step,
     run_embed_scaffold_step,
     run_looker_deploy_step,
@@ -131,7 +132,10 @@ class FlowRunner:
         # 5. Looker Deploy (delegates directly to lkr tools lookml push ... --deploy)
         self.state = run_looker_deploy_step(self.state)
 
-        # 6. Embed Scaffold
+        # 6. Conversational Analytics Agent & Gemini Enterprise
+        self.state = run_ca_agent_step(self.state)
+
+        # 7. Embed Scaffold
         self.state = run_embed_scaffold_step(self.state, self.target_base_dir)
 
         self.state.status = "completed"
