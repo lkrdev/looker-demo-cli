@@ -76,6 +76,18 @@ graph TD
 ### Phase 4 — Batch Synthesis & BigQuery Load
 - Only after Phases 1–3 are explicitly acknowledged, generate the full dataset (Parquet) and upload tables into the confirmed BigQuery project and dataset.
 
+> [!CAUTION]
+> ### 🛑 Strict Target Project Integrity & ADC Refresh Gate
+> 1. **NEVER silently fall back or divert to an alternate Google Cloud Project or dataset** if permissions errors (e.g. `403 Access Denied`, `bigquery.datasets.create`, or expired ADC tokens) occur during dataset creation or table loading.
+> 2. **IMMEDIATELY BLOCK AND PROMPT THE USER**: If credentials lack permissions or fail on the confirmed project, **the pipeline MUST BLOCK IMMEDIATELY** and explicitly prompt the user to refresh their ADC credentials (e.g. `gcloud auth application-default login`) or grant the necessary BigQuery IAM roles on the confirmed project.
+> 3. Under no circumstances should the agent create or load tables into a different project than the one explicitly confirmed by the user in Step 1.
+
+> [!CAUTION]
+> ### 🛑 Strict Target Project Integrity & ADC Refresh Gate
+> 1. **NEVER silently fall back or divert to an alternate Google Cloud Project or dataset** if permissions errors (e.g. `403 Access Denied`, `bigquery.datasets.create`, or expired ADC tokens) occur during dataset creation or table loading.
+> 2. **IMMEDIATELY BLOCK AND PROMPT THE USER**: If credentials lack permissions or fail on the confirmed project, **the pipeline MUST BLOCK IMMEDIATELY** and explicitly prompt the user to refresh their ADC credentials (e.g. `gcloud auth application-default login`) or grant the necessary BigQuery IAM roles on the confirmed project.
+> 3. Under no circumstances should the agent create or load tables into a different project than the one explicitly confirmed by the user in Step 1.
+
 ---
 
 ## 3. Looker Project & Model Provisioning (`lkr-dev-cli`)
@@ -108,15 +120,20 @@ create_lookml_model(body={
 
 ## 4. LookML Quality Standards & Mandatory Pre-Deployment Validation Gate
 
-### A. Field Documentation & Formatting Standards
-Every view file (`views/*.view.lkml`) must follow LookML best practices:
+### A. Field Documentation & Mandatory Snowflake 3NF Architecture
+- **Mandatory Snowflake & 3NF Modeling Gate (`skills/lookml-snowflake-modeler`)**:
+  Whenever the schema contains normalized 3NF structures, multiple 1:N child collections (e.g. comments, attachments, history logs), bridge tables, or diamond joins (e.g. users referenced as assignee/creator/lead):
+  - The agent **MUST explicitly apply the `lookml-snowflake-modeler` skill** (`schema_graph_analyzer.py`).
+  - **Never join multiple 1:N child tables directly to a parent Explore** (eliminates Chasm Traps).
+  - Pre-aggregate child metrics into **Native Derived Tables (NDTs) / rollup views** and join them **`one_to_one`** onto the parent Explore.
+  - Create dedicated **Event Stream Explores** for atomic activity/audit leaves where the event table is the **Base View** and parent dimensions are joined `many_to_one`.
+  - Resolve diamond joins with role-playing aliases (`from: users`) and explicit `view_label:` headers.
 - **Explicit `label:` and `description:`** parameters on every dimension, dimension group, and measure.
 - Human-friendly Title Case labels (e.g. `label: "Monthly Recurring Revenue"`).
 - Explicit `type:`, `sql:`, and `value_format_name:` (e.g. `usd_0`, `percent_2`, `decimal_1`).
 - Primary keys (`primary_key: yes`) on all dimension tables.
 - Drill fields (`drill_fields: [...]`) on key primary measures.
-- Proper join relationships (`many_to_one`, `one_to_one`) in models.
-- **Complex Snowflake / 3NF Schemas**: Use `skills/lookml-snowflake-modeler/` (`schema_graph_analyzer.py`) to systematically determine Explore base views, eliminate fan/chasm traps via NDT rollups, and resolve diamond joins with role-playing aliases.
+- **Executive Polish & Tabbed Dashboard Architecture (`skills/lookml-dashboard`)**: Dashboards must follow modern, executive-grade design patterns (tabbed report consolidation, single-value KPI banners, dual Y-axis charts, `advanced_vis_config` rounded geometry, cross-filtering, and popover filters) tailored to domain specs (e.g. Linear Insights, Stripe Financials, Salesforce CRM).
 
 ### B. Mandatory Pre-Deployment Validation Gate
 

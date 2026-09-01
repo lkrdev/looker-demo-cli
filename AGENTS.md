@@ -34,11 +34,23 @@ When creating demo datasets, the agent **MUST co-iterate with the user** across 
   Prompt the user to confirm desired row volume / table sizes (e.g., Small ~1,000–5,000, Medium ~10,000–50,000, Large ~100,000–500,000+, or custom table sizing).
 - **Phase 4 — Execution & BigQuery Load**:
   Only synthesize full volume and create/load BigQuery tables **after explicit user acknowledgment of Phases 1–3**.
+  
+  > [!CAUTION]
+  > **STRICT PROJECT INTEGRITY & ADC AUTHENTICATION GATE:**
+  > - **NEVER silently fall back or divert to a different GCP Project or dataset** if permissions errors (such as `403 Access Denied`, `bigquery.datasets.create`, or expired token) occur.
+  > - If credentials lack permissions or fail on the confirmed project, **the pipeline MUST BLOCK IMMEDIATELY and prompt the user** to refresh their ADC credentials (`gcloud auth application-default login`) or grant required BigQuery roles (`roles/bigquery.dataEditor`, `roles/bigquery.admin`) on the confirmed project. Never proceed with a fallback project.
 
-### 3. LookML Quality, Flexible Dashboard Co-Design & Field Standards
+### 3. LookML Quality, Snowflake 3NF Architecture & Field Standards
+- **Mandatory Snowflake & 3NF Modeling Gate (`skills/lookml-snowflake-modeler`)**:
+  Whenever the schema contains normalized 3NF structures, multiple 1:N child collections (e.g. comments, attachments, history logs), bridge tables, or diamond joins (e.g. users referenced as assignee/creator/lead):
+  - The agent **MUST explicitly apply the `lookml-snowflake-modeler` skill** (`schema_graph_analyzer.py`).
+  - **Never join multiple 1:N child tables directly to a parent Explore** (eliminates Chasm Traps).
+  - Pre-aggregate child metrics into **Native Derived Tables (NDTs) / rollup views** and join them **`one_to_one`** onto the parent Explore.
+  - Create dedicated **Event Stream Explores** for atomic activity/audit leaves where the event table is the **Base View** and parent dimensions are joined `many_to_one`.
+  - Resolve diamond joins with role-playing aliases (`from: users`) and explicit `view_label:` headers.
 - **Mandatory Labels & Descriptions**: All LookML view files (`.view.lkml`) **MUST include explicit `label:` and `description:` parameters** on every dimension, dimension group, and measure to ensure self-documenting Explores for business users.
 - **Measures & Drill Fields**: Include formatted primary metrics (sum, average, count distinct) with `value_format_name` (e.g. `usd_0`, `percent_2`, `decimal_1`) and drill-down fields.
-- **Flexible Dashboard Co-Design**: LookML dashboards (`*.dashboard.lookml`) are not locked to rigid 3-tab layouts. Agents **MUST incorporate user guidance, custom KPI priorities, requested tab architectures, wireframes, or image mockups** to design tailored visualizations and layout grids matching the user's executive presentation goals.
+- **Executive Polish & Tabbed Dashboard Architecture (`skills/lookml-dashboard`)**: LookML dashboards (`*.dashboard.lookml`) must follow modern, executive-grade design patterns (tabbed report consolidation, single-value KPI banners, dual Y-axis charts, `advanced_vis_config` rounded geometry, cross-filtering, and popover filters) tailored to domain specs (e.g. Linear Insights, Stripe Financials, Salesforce CRM).
 
 ### 4. Mandatory Pre-Deployment Validation Gate (`lkr-dev-cli`)
 The agent **MUST follow this 4-step sequence** without skipping:
