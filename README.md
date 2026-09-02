@@ -26,6 +26,7 @@ Instead of spending days or weeks stitching together synthetic data scripts, deb
 | **BigQuery Data Warehouse** | 3NF relational schema synthesis, realistic engineering distributions, PK/FK referential integrity, and batch Parquet upload | Clean BigQuery dataset with partitioned/clustered tables |
 | **LookML 3NF Semantic Model** | Explore Base View selection, Chasm Trap elimination with Native Derived Table (NDT) rollups joined `one_to_one`, role-playing diamond joins, and field metadata (`label:`, `description:`, `value_format_name:`, `drill_fields:`) | Complete `views/*.view.lkml`, `explores/*.explore.lkml`, and `models/*.model.lkml` |
 | **Executive Tabbed Dashboard** | Executive tabbed report architecture, single-value KPI banners, dual-axis timelines, `advanced_vis_config` rounded geometry, cross-filtering, and popovers | Production `dashboards/*.dashboard.lookml` deployed via API |
+| **LookML Performance Optimization** | Static `suggestions: [...]` on low-cardinality dims, `suggestable: no` on unique IDs/text, model datagroup caching, BigQuery partition pruning filters, and raw foreign key hiding | Production-hardened LookML avoiding database query spikes |
 | **Pre-Deployment QA Audit** | Dev branch push, LookML project validator, 100% test execution of all dashboard queries via Looker API, and bounded self-healing (max 3 iterations) | 100% HTTP 200 OK query pass certificate before production release |
 | **Conversational Analytics (CA) Agent** | Auto-generated domain persona and query rules, extraction of dashboard tiles into 1:1 Looker 4.0 Golden Queries with `expanded_share_url` grounding | Live AI Agent in Looker with natural language chat UI |
 | **Gemini Enterprise (GE) Integration** | Automated registration and one-click publishing to connected Gemini Enterprise apps via Looker internal API | Natural language querying across enterprise Gemini apps in minutes |
@@ -76,7 +77,10 @@ Run with your AI coding assistant (Jetski, Claude Code, or AgentAPI) using the *
 - **Interactive Schema Co-Design**: Collaborate with the agent on ERD diagrams, dimension fields, and micro-samples before generating full volume.
 - **Subagent Delegation**: The parent orchestrator maintains human gates while delegating heavy execution to specialized subagents:
   - [`data-engineer`](skills/looker-demo-orchestrator/subagents/data-engineer.md) (Batch synthesis & BQ load)
-  - [`lookml-snowflake-modeler`](skills/looker-demo-orchestrator/subagents/lookml-snowflake-modeler.md) (3NF modeling, NDT rollups & dashboards)
+  - [`lookml-modeler`](skills/looker-demo-orchestrator/subagents/lookml-modeler.md) (Front-door semantic modeling & 3NF triage)
+  - [`lookml-snowflake-modeler`](skills/looker-demo-orchestrator/subagents/lookml-snowflake-modeler.md) (3NF modeling, NDT rollups & diamond joins)
+  - [`lookml-dashboard-designer`](skills/looker-demo-orchestrator/subagents/lookml-dashboard-designer.md) (Pixel-perfect executive tabbed dashboards)
+  - [`lookml-performance-optimizer`](skills/looker-demo-orchestrator/subagents/lookml-performance-optimizer.md) (Google Cloud Looker performance best practices)
   - [`lookml-qa-validator`](skills/looker-demo-orchestrator/subagents/lookml-qa-validator.md) (Dev push, validation & max 3 query self-healing)
   - [`ca-agent-provisioner`](skills/looker-demo-orchestrator/subagents/ca-agent-provisioner.md) (CA agent & golden queries; conditional on user confirmation)
   - [`embed-portal-engineer`](skills/looker-demo-orchestrator/subagents/embed-portal-engineer.md) (Vite embed portal; conditional on user confirmation)

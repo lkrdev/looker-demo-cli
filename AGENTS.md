@@ -79,7 +79,10 @@ After deploying the LookML model and dashboards in Step 4, the agent **MUST orch
 - For frontend embed configuration, reference skills in `skills/embed-portal/` (`setup-embed-demo`, `customize-frontend`).
 - For isolated task execution, invoke specialized subagents in [`skills/looker-demo-orchestrator/subagents/`](skills/looker-demo-orchestrator/subagents/):
   - [`data-engineer`](skills/looker-demo-orchestrator/subagents/data-engineer.md) (Batch synthesis & BQ load)
-  - [`lookml-snowflake-modeler`](skills/looker-demo-orchestrator/subagents/lookml-snowflake-modeler.md) (3NF modeling, NDT rollups & dashboards)
+  - [`lookml-modeler`](skills/looker-demo-orchestrator/subagents/lookml-modeler.md) (Front-door semantic modeling & 3NF triage)
+  - [`lookml-snowflake-modeler`](skills/looker-demo-orchestrator/subagents/lookml-snowflake-modeler.md) (3NF modeling, NDT rollups & diamond joins)
+  - [`lookml-dashboard-designer`](skills/looker-demo-orchestrator/subagents/lookml-dashboard-designer.md) (Pixel-perfect executive tabbed dashboards)
+  - [`lookml-performance-optimizer`](skills/looker-demo-orchestrator/subagents/lookml-performance-optimizer.md) (Google Cloud Looker performance best practices)
   - [`lookml-qa-validator`](skills/looker-demo-orchestrator/subagents/lookml-qa-validator.md) (Dev push, validation & max 3 query self-healing)
   - [`ca-agent-provisioner`](skills/looker-demo-orchestrator/subagents/ca-agent-provisioner.md) (CA agent & golden queries; conditional on user confirmation)
   - [`embed-portal-engineer`](skills/looker-demo-orchestrator/subagents/embed-portal-engineer.md) (Vite embed portal; conditional on user confirmation)

@@ -25,20 +25,27 @@ graph TD
     Phase12 --> Gate1{Human Gate: Scale & Volume Confirmation}
     Gate1 -->|Confirmed| S1["Subagent: data-engineer<br/>(Batch Parquet & BQ Upload)"]
     S1 -->|BQ Table IDs & Counts| InitProj[Orchestrator: Looker Project Init]
-    InitProj --> S2["Subagent: lookml-snowflake-modeler<br/>(3NF Views, NDT Rollups & Dashboards)"]
-    S2 --> S3["Subagent: lookml-qa-validator<br/>(Dev Push, Validator, 100% Query Pass, Max 3 Healing)"]
-    S3 -->|Deploy Certificate| Deploy[Orchestrator: Deploy to Production]
+    InitProj --> S2["Subagent: lookml-modeler<br/>(Front-Door Triage & Semantic Modeling)"]
+    S2 -->|If Normalized 3NF| S3["Subagent: lookml-snowflake-modeler<br/>(NDT Rollups & Chasm Trap Resolution)"]
+    S2 -->|If Star / Simple| S4["Subagent: lookml-dashboard-designer<br/>(Executive Tabbed Dashboards)"]
+    S3 --> S4
+    S4 --> S5["Subagent: lookml-performance-optimizer<br/>(Static Suggestions, Caching, Partition Pruning)"]
+    S5 --> S6["Subagent: lookml-qa-validator<br/>(Dev Push, Validator, 100% Query Pass, Max 3 Healing)"]
+    S6 -->|Deploy Certificate| Deploy[Orchestrator: Deploy to Production]
     Deploy --> GateCA{Human Gate: Provision CA Agent?}
     Deploy --> GateEmbed{Human Gate: External Embed Portal?}
-    GateCA -->|If Confirmed| S4["Subagent: ca-agent-provisioner<br/>(Golden Queries & GE Publish)"]
-    GateEmbed -->|If Confirmed| S5["Subagent: embed-portal-engineer<br/>(Vite Scaffolding, .env, Theme Tokens)"]
+    GateCA -->|If Confirmed| S7["Subagent: ca-agent-provisioner<br/>(Golden Queries & GE Publish)"]
+    GateEmbed -->|If Confirmed| S8["Subagent: embed-portal-engineer<br/>(Vite Scaffolding, .env, Theme Tokens)"]
 ```
 
 | Component | Responsibility | Tool Access & Scope |
 |---|---|---|
 | **Parent Orchestrator** | State machine, conversational co-design, human interactive gates (`ask_question`), production deploy, and final summary. | Full tool access, interactive UI modals. |
 | [`data-engineer`](subagents/data-engineer.md) | Synthesizes full Parquet dataset and loads tables into BigQuery; strict ADC error boundary. | Bash, filesystem. Read-only Looker. No `ask_question`. |
-| [`lookml-snowflake-modeler`](subagents/lookml-snowflake-modeler.md) | 3NF semantic modeling, NDT rollup chasm trap elimination, mandatory labels/descriptions, executive dashboards. | Filesystem, `schema_graph_analyzer.py`. No Looker deploy. |
+| [`lookml-modeler`](subagents/lookml-modeler.md) | Front-door semantic modeler. Models simple/star schemas directly; routes 3NF snowflake schemas with chasm traps to `lookml-snowflake-modeler`. | Filesystem tools. Read-only Looker. No deploy. |
+| [`lookml-snowflake-modeler`](subagents/lookml-snowflake-modeler.md) | 3NF semantic modeling, NDT rollup chasm trap elimination, role-playing diamond joins, and mandatory labels/descriptions. | Filesystem, `schema_graph_analyzer.py`. No Looker deploy. |
+| [`lookml-dashboard-designer`](subagents/lookml-dashboard-designer.md) | Pixel-perfect executive dashboard authoring grounded strictly in staged explores; tabbed layout, KPI stat cards, dual-axis timelines, `advanced_vis_config`, and popovers. | Filesystem tools. No Looker deploy. |
+| [`lookml-performance-optimizer`](subagents/lookml-performance-optimizer.md) | Audits and enriches staged LookML in-place with Google Cloud performance standards (static suggestions, suggestable: no, datagroups, partition filters, FK hiding). | Filesystem tools. No Looker deploy. |
 | [`lookml-qa-validator`](subagents/lookml-qa-validator.md) | Pushes dev branch, audits LookML, runs 100% of dashboard queries via API; bounded self-healing (max 3 attempts). | Code Mode, Looker API queries, single-file push. No deploy. |
 | [`ca-agent-provisioner`](subagents/ca-agent-provisioner.md) | Provisions CA Agent, extracts Golden Queries, links to agent, publishes to Gemini Enterprise. *(Spawned only if explicitly confirmed)*. | Code Mode, Looker REST API. |
 | [`embed-portal-engineer`](subagents/embed-portal-engineer.md) | Scaffolds `looker-embed-demo`, injects environment variables, customizes brand theme tokens, verifies build. *(Spawned only if explicitly confirmed)*. | Bash, frontend filesystem, Vite/npm. |
@@ -157,15 +164,16 @@ create_lookml_model(body={
 
 ---
 
-## 4. LookML Quality Standards & Mandatory Pre-Deployment Validation Gate
+## 4. LookML Quality Standards & 4-Stage Semantic Pipeline
 
-### A. Field Documentation & Mandatory Snowflake 3NF Architecture (Delegate to Modeler Subagent)
-Delegate 3NF relational modeling, NDT rollup creation, view generation, and tabbed dashboard authoring to the **[`lookml-snowflake-modeler`](subagents/lookml-snowflake-modeler.md)** subagent:
+### A. Semantic Modeling & Triage (Delegate to Modeler Subagent)
+
+Delegate semantic modeling to the front-door **[`lookml-modeler`](subagents/lookml-modeler.md)** subagent:
 
 ```yaml
 subagent:
-  type: "skills/looker-demo-orchestrator/subagents/lookml-snowflake-modeler.md"
-  prompt: "Model 3NF relational schema for {project_name}. Apply schema_graph_analyzer.py, eliminate chasm traps with NDT rollups, add mandatory labels and descriptions to all fields, and author tabbed executive dashboard."
+  type: "skills/looker-demo-orchestrator/subagents/lookml-modeler.md"
+  prompt: "Model LookML views, explores, and measures for {project_name}. If normalized 3NF structures with Chasm Traps or diamond joins exist, delegate to lookml-snowflake-modeler."
   inputs:
     project_name: "{looker_project_name}"
     connection_name: "{looker_connection_name}"
@@ -174,21 +182,63 @@ subagent:
     domain_metrics: "{domain_metrics_list}"
 ```
 
-- **Mandatory Snowflake & 3NF Modeling Gate (`skills/lookml-snowflake-modeler`)**:
-  Whenever the schema contains normalized 3NF structures, multiple 1:N child collections (e.g. comments, attachments, history logs), bridge tables, or diamond joins (e.g. users referenced as assignee/creator/lead):
-  - The modeler subagent **MUST explicitly apply the `lookml-snowflake-modeler` skill** (`schema_graph_analyzer.py`).
-  - **Never join multiple 1:N child tables directly to a parent Explore** (eliminates Chasm Traps).
-  - Pre-aggregate child metrics into **Native Derived Tables (NDTs) / rollup views** and join them **`one_to_one`** onto the parent Explore.
-  - Create dedicated **Event Stream Explores** for atomic activity/audit leaves where the event table is the **Base View** and parent dimensions are joined `many_to_one`.
-  - Resolve diamond joins with role-playing aliases (`from: users`) and explicit `view_label:` headers.
-- **Explicit `label:` and `description:`** parameters on every dimension, dimension group, and measure.
-- Human-friendly Title Case labels (e.g. `label: "Monthly Recurring Revenue"`).
-- Explicit `type:`, `sql:`, and `value_format_name:` (e.g. `usd_0`, `percent_2`, `decimal_1`).
-- Primary keys (`primary_key: yes`) on all dimension tables.
-- Drill fields (`drill_fields: [...]`) on key primary measures.
-- **Executive Polish & Tabbed Dashboard Architecture (`skills/lookml-dashboard`)**: Dashboards must follow modern, executive-grade design patterns (tabbed report consolidation, single-value KPI banners, dual Y-axis charts, `advanced_vis_config` rounded geometry, cross-filtering, and popover filters) tailored to domain specs (e.g. Linear Insights, Stripe Financials, Salesforce CRM).
+- **Triage Protocol**:
+  - **Standard / Star Schemas**: `lookml-modeler` writes `.view.lkml`, primary keys, formatted measures (`usd_0`, `percent_2`, `decimal_1`), drill fields, and `.explore.lkml` directly.
+  - **Normalized 3NF / Snowflake Schemas**: If multiple 1:N child collections or diamond joins are detected, hand off to **[`lookml-snowflake-modeler`](subagents/lookml-snowflake-modeler.md)**:
+    - Runs `schema_graph_analyzer.py` on the schema DAG.
+    - Sets Explore Base Views on leaf event facts ($d_{\text{in}} = 0$).
+    - Pre-aggregates child collections into **Native Derived Tables (NDTs)** and joins them **`relationship: one_to_one`** onto the parent Explore (eliminates Chasm Traps).
+    - Resolves diamond joins with role-playing aliases (`from: users`) and explicit `view_label:` headers.
+- **Mandatory Field Standards**: Explicit `label:` and `description:` parameters on EVERY dimension, dimension group, and measure (Title Case, e.g. `label: "Monthly Recurring Revenue"`).
 
-### B. Mandatory Pre-Deployment Validation Gate (Delegate to QA Validator Subagent)
+---
+
+### B. Executive Tabbed Dashboard Authoring (Delegate to Dashboard Designer Subagent)
+
+Delegate dashboard creation to the dedicated **[`lookml-dashboard-designer`](subagents/lookml-dashboard-designer.md)** subagent:
+
+```yaml
+subagent:
+  type: "skills/looker-demo-orchestrator/subagents/lookml-dashboard-designer.md"
+  prompt: "Author pixel-perfect, executive-ready tabbed dashboard for {project_name} grounded strictly in staged explores and views. Include KPI stat banners, dual-axis timelines, advanced_vis_config rounded geometry, cross-filtering, and popovers."
+  inputs:
+    project_name: "{looker_project_name}"
+    model_name: "{looker_model_name}"
+    primary_explore: "{primary_explore_name}"
+    lookml_dir: "lookml/"
+    domain_theme: "{domain_theme}"
+```
+
+- **Strict Explore-Grounded Authoring**: Inspects staged `explores/*.explore.lkml` and `views/*.view.lkml` files to discover available dimensions and measures (NEVER invents fields).
+- **Tabbed Architecture**: Modern 2–4 tab operational command center (e.g. *Executive Overview*, *Operations Deep Dive*, *Alerts & Exceptions*).
+- **Visual Standards**: Single-value KPI cards, dual-axis timelines, donut breakdowns, clustered bar charts, `advanced_vis_config` rounded geometry (`borderRadius: 8`), and universal cross-filtering.
+
+---
+
+### C. LookML Server Performance Optimization Gate (Delegate to Optimizer Subagent)
+
+Before pushing to the dev branch, execute the **[`lookml-performance-optimizer`](subagents/lookml-performance-optimizer.md)** subagent to audit and patch staged LookML files in-place according to [Google Cloud Looker Server Optimization Best Practices](https://docs.cloud.google.com/looker/docs/best-practices/how-to-optimize-looker-server-performance):
+
+```yaml
+subagent:
+  type: "skills/looker-demo-orchestrator/subagents/lookml-performance-optimizer.md"
+  prompt: "Audit staged LookML files for performance bottlenecks. Apply static suggestions on low-cardinality dims (<=15 values), set suggestable: no on IDs/text, configure datagroup caching in model, enforce partition pruning in explores, and hide raw foreign keys."
+  inputs:
+    project_name: "{looker_project_name}"
+    model_name: "{looker_model_name}"
+    lookml_dir: "lookml/"
+    table_specs: "{extracted_table_specs}"
+```
+
+- **Static Suggestions on Low-Cardinality Dims**: Injects `suggestions: ["val1", "val2", ...]` on categorical fields with $\le 15$ distinct values to eliminate database roundtrips when filters open.
+- **Disable Suggestions on Unique Keys**: Injects `suggestable: no` on primary keys, foreign key UUIDs, timestamps, and free text.
+- **Model Datagroup Caching**: Configures production datagroups (`max_cache_age: "4 hours"`) and applies `persist_with: default_caching_policy`.
+- **Partition Pruning**: Enforces `always_filter` or `conditionally_filter` on BigQuery partitioned date columns.
+- **Field Pruning**: Sets `hidden: yes` on raw foreign key IDs and asserts `primary_key: yes` on unique grains.
+
+---
+
+### D. Mandatory Pre-Deployment Validation Gate (Delegate to QA Validator Subagent)
 
 To ensure zero confirmation bias and protect the parent session from query execution log bloat, delegate dev branch deployment, LookML validation, and dashboard query verification to the independent **[`lookml-qa-validator`](subagents/lookml-qa-validator.md)** subagent:
 
