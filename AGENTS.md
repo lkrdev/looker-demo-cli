@@ -16,9 +16,9 @@ You are the Looker Demo Architect Agent. Your mission is to assist users in desi
    Execute `demo-create pre-check --fix` (or `uv run demo-create pre-check --fix`) to ensure BigQuery credentials, GCP projects, MCP servers, and intent-based skills are configured.
 2. **Mandatory 4-Target Interactive Confirmation Checklist**:
    Before designing schemas, creating BigQuery datasets, or touching Looker, the agent **MUST explicitly prompt the user** (via `ask_question` or interactive prompt) to select and confirm:
-   - **GCP User Account**: (e.g. `admin@maluka.altostrat.com` vs `user@google.com`)
-   - **Target Google Cloud Project ID**: (e.g. `looker-demo-392616`, `data-cloud-interactive-demo`)
-   - **Target Looker Instance / OAuth Account**: (from `uvx --from lkr-dev-cli lkr auth list`, e.g. `dev-looker.lukapuka.co` vs `dev-googledemo2`)
+   - **GCP User Account**: (e.g. `admin@example.com` vs `analyst@company.com`)
+   - **Target Google Cloud Project ID**: (e.g. `my-analytics-gcp-project`, `demo-data-warehouse`)
+   - **Target Looker Instance / OAuth Account**: (from `uvx --from lkr-dev-cli lkr auth list`, e.g. `my-company.looker.com` vs `demo-instance`)
    - **Target Database Connection Name**: (e.g. `default_bigquery_connection`)
    
    *NEVER assume or default the Looker instance or GCP project without explicit user confirmation.*
@@ -73,8 +73,26 @@ After deploying the LookML model and dashboards in Step 4, the agent **MUST orch
    - Remind the user to ensure Gemini Enterprise publishing is enabled on the instance (`Admin > Gemini Settings`) and a GE App is connected.
    - If confirmed, execute a `POST` (with empty body `{}`) against `POST /api/4.0/internal/agents/{agent_id}/publish` (via OAuth token or `lkr-dev-cli` Code Mode).
 
-### 6. Use Intent Skills
+### 6. Use Intent Skills & Specialized Subagents
 - For schema design & synthetic data generation, reference skills in `skills/data-design/` (`data-designer`, `data-designer-architect`).
 - For LookML views, explores, dashboards, and code-mode scripting, reference skills in `skills/lookml/` (`lkr-code-mode`, `repo-lookml`, `lookml-model`, `lookml-dashboard`).
 - For frontend embed configuration, reference skills in `skills/embed-portal/` (`setup-embed-demo`, `customize-frontend`).
+- For isolated task execution, invoke specialized subagents in [`skills/looker-demo-orchestrator/subagents/`](skills/looker-demo-orchestrator/subagents/):
+  - [`data-engineer`](skills/looker-demo-orchestrator/subagents/data-engineer.md) (Batch synthesis & BQ load)
+  - [`lookml-snowflake-modeler`](skills/looker-demo-orchestrator/subagents/lookml-snowflake-modeler.md) (3NF modeling, NDT rollups & dashboards)
+  - [`lookml-qa-validator`](skills/looker-demo-orchestrator/subagents/lookml-qa-validator.md) (Dev push, validation & max 3 query self-healing)
+  - [`ca-agent-provisioner`](skills/looker-demo-orchestrator/subagents/ca-agent-provisioner.md) (CA agent & golden queries; conditional on user confirmation)
+  - [`embed-portal-engineer`](skills/looker-demo-orchestrator/subagents/embed-portal-engineer.md) (Vite embed portal; conditional on user confirmation)
+
+### 7. Mandatory Final Delivery Report Protocol
+Upon completing deployment (and optional CA Agent / Embed Portal steps), the agent **MUST emit a comprehensive Executive Delivery Report** in markdown format (and persist to `DELIVERY_REPORT.md`). The report must strictly follow the format defined in [`skills/looker-demo-orchestrator/SKILL.md`](skills/looker-demo-orchestrator/SKILL.md#7-mandatory-final-delivery-report-protocol) and include:
+1. **Production Deployment Status Banner**: Looker host, project/model name, BigQuery dataset ID, connection name, and 100% query test pass rate.
+2. **Quick Access Links Table**: Clickable URLs to Executive Dashboard, CA AI Agent, all Explores, and Embed Portal.
+3. **BigQuery Warehouse Summary**: Tree structure detailing table names, row counts, and domain descriptions.
+4. **Relational Architecture & ERD**: Mermaid ER diagram (and Chasm Trap Mitigation architecture *only if snowflake modeling was required*).
+5. **Dashboard Tabbed Architecture Breakdown**: KPI banners, chart titles, and visual types per tab.
+6. **Pre-Deployment Validation Audit Record**: Log showing 100% query execution passes (HTTP 200 OK) across all dashboard tiles.
+7. **CA Agent & Gemini Enterprise / Embed Status**: Golden queries list, agent ID, and GE publish status.
+
+
 

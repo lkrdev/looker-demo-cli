@@ -13,6 +13,38 @@ This skill defines the mandatory operational procedure for an AI agent or engine
 
 ---
 
+## Multi-Agent Hub-and-Spoke Architecture
+
+To prevent context saturation, instruction drift, and self-confirmation bias across this multi-stage pipeline, the orchestrator utilizes a **Hub-and-Spoke Multi-Agent Model**:
+
+```mermaid
+graph TD
+    Start([User Request]) --> PreCheck[Orchestrator: Pre-Flight Pre-Check]
+    PreCheck --> Gate0{Human Gate: 4-Target Confirmation}
+    Gate0 -->|Interactive Co-Design| Phase12[Orchestrator: Schema ERD & Micro-Sample Preview]
+    Phase12 --> Gate1{Human Gate: Scale & Volume Confirmation}
+    Gate1 -->|Confirmed| S1["Subagent: data-engineer<br/>(Batch Parquet & BQ Upload)"]
+    S1 -->|BQ Table IDs & Counts| InitProj[Orchestrator: Looker Project Init]
+    InitProj --> S2["Subagent: lookml-snowflake-modeler<br/>(3NF Views, NDT Rollups & Dashboards)"]
+    S2 --> S3["Subagent: lookml-qa-validator<br/>(Dev Push, Validator, 100% Query Pass, Max 3 Healing)"]
+    S3 -->|Deploy Certificate| Deploy[Orchestrator: Deploy to Production]
+    Deploy --> GateCA{Human Gate: Provision CA Agent?}
+    Deploy --> GateEmbed{Human Gate: External Embed Portal?}
+    GateCA -->|If Confirmed| S4["Subagent: ca-agent-provisioner<br/>(Golden Queries & GE Publish)"]
+    GateEmbed -->|If Confirmed| S5["Subagent: embed-portal-engineer<br/>(Vite Scaffolding, .env, Theme Tokens)"]
+```
+
+| Component | Responsibility | Tool Access & Scope |
+|---|---|---|
+| **Parent Orchestrator** | State machine, conversational co-design, human interactive gates (`ask_question`), production deploy, and final summary. | Full tool access, interactive UI modals. |
+| [`data-engineer`](subagents/data-engineer.md) | Synthesizes full Parquet dataset and loads tables into BigQuery; strict ADC error boundary. | Bash, filesystem. Read-only Looker. No `ask_question`. |
+| [`lookml-snowflake-modeler`](subagents/lookml-snowflake-modeler.md) | 3NF semantic modeling, NDT rollup chasm trap elimination, mandatory labels/descriptions, executive dashboards. | Filesystem, `schema_graph_analyzer.py`. No Looker deploy. |
+| [`lookml-qa-validator`](subagents/lookml-qa-validator.md) | Pushes dev branch, audits LookML, runs 100% of dashboard queries via API; bounded self-healing (max 3 attempts). | Code Mode, Looker API queries, single-file push. No deploy. |
+| [`ca-agent-provisioner`](subagents/ca-agent-provisioner.md) | Provisions CA Agent, extracts Golden Queries, links to agent, publishes to Gemini Enterprise. *(Spawned only if explicitly confirmed)*. | Code Mode, Looker REST API. |
+| [`embed-portal-engineer`](subagents/embed-portal-engineer.md) | Scaffolds `looker-embed-demo`, injects environment variables, customizes brand theme tokens, verifies build. *(Spawned only if explicitly confirmed)*. | Bash, frontend filesystem, Vite/npm. |
+
+---
+
 ## 1. Pre-Flight Environment Inspection & Interactive Confirmation Gate
 
 Always execute the pre-check inspection first to inspect GCP credentials, available projects, Looker OAuth sessions, and MCP tools:
@@ -33,9 +65,9 @@ uvx --from lkr-dev-cli lkr auth list
 ### Mandatory Interactive Confirmation Checklist:
 Before designing schemas, creating BigQuery datasets, or touching Looker, the agent **MUST explicitly prompt the user** (via `ask_question` or interactive prompt) to confirm all four environment targets:
 
-1. **GCP User Account**: (e.g. `admin@maluka.altostrat.com` vs `user@google.com`)
-2. **Target Google Cloud Project ID**: (e.g. `looker-demo-392616`, `data-cloud-interactive-demo`)
-3. **Target Looker Instance / OAuth Account**: (e.g. `dev-looker.lukapuka.co` vs `dev-googledemo2` from `lkr auth list` or `available_oauth_instances`)
+1. **GCP User Account**: (e.g. `admin@example.com` vs `analyst@company.com`)
+2. **Target Google Cloud Project ID**: (e.g. `my-analytics-gcp-project`, `demo-data-warehouse`)
+3. **Target Looker Instance / OAuth Account**: (e.g. `my-company.looker.com` vs `demo-instance` from `lkr auth list` or `available_oauth_instances`)
 4. **Target Looker Database Connection**: (e.g. `looker_demo_bigquery` or `default_bigquery_connection`)
 
 > [!IMPORTANT]
@@ -73,19 +105,26 @@ graph TD
   - **Large** (~100,000–500,000+ rows) — High-volume enterprise demo
   - **Custom** table-specific sizing
 
-### Phase 4 — Batch Synthesis & BigQuery Load
-- Only after Phases 1–3 are explicitly acknowledged, generate the full dataset (Parquet) and upload tables into the confirmed BigQuery project and dataset.
+### Phase 4 — Batch Synthesis & BigQuery Load (Delegate to Subagent)
+- Only after Phases 1–3 are explicitly acknowledged by the user, delegate batch synthesis and BigQuery ingestion to the **[`data-engineer`](subagents/data-engineer.md)** subagent:
+
+```yaml
+subagent:
+  type: "skills/looker-demo-orchestrator/subagents/data-engineer.md"
+  prompt: "Synthesize full volume Parquet data for {confirmed_scale} rows and upload to BigQuery project {confirmed_gcp_project} dataset {dataset_name}."
+  inputs:
+    gcp_project_id: "{confirmed_gcp_project}"
+    dataset_id: "{dataset_name}"
+    location: "US"
+    schema_spec: "{approved_schema_json}"
+    scale: "{confirmed_scale}"
+    output_dir: "scratch/parquet"
+```
 
 > [!CAUTION]
 > ### 🛑 Strict Target Project Integrity & ADC Refresh Gate
 > 1. **NEVER silently fall back or divert to an alternate Google Cloud Project or dataset** if permissions errors (e.g. `403 Access Denied`, `bigquery.datasets.create`, or expired ADC tokens) occur during dataset creation or table loading.
-> 2. **IMMEDIATELY BLOCK AND PROMPT THE USER**: If credentials lack permissions or fail on the confirmed project, **the pipeline MUST BLOCK IMMEDIATELY** and explicitly prompt the user to refresh their ADC credentials (e.g. `gcloud auth application-default login`) or grant the necessary BigQuery IAM roles on the confirmed project.
-> 3. Under no circumstances should the agent create or load tables into a different project than the one explicitly confirmed by the user in Step 1.
-
-> [!CAUTION]
-> ### 🛑 Strict Target Project Integrity & ADC Refresh Gate
-> 1. **NEVER silently fall back or divert to an alternate Google Cloud Project or dataset** if permissions errors (e.g. `403 Access Denied`, `bigquery.datasets.create`, or expired ADC tokens) occur during dataset creation or table loading.
-> 2. **IMMEDIATELY BLOCK AND PROMPT THE USER**: If credentials lack permissions or fail on the confirmed project, **the pipeline MUST BLOCK IMMEDIATELY** and explicitly prompt the user to refresh their ADC credentials (e.g. `gcloud auth application-default login`) or grant the necessary BigQuery IAM roles on the confirmed project.
+> 2. If `data-engineer` returns status `PERMISSION_DENIED` or fails on the confirmed project, **the pipeline MUST BLOCK IMMEDIATELY and prompt the user** (via `ask_question` or terminal instruction) to refresh their ADC credentials (`gcloud auth application-default login`) or grant the necessary BigQuery IAM roles on the confirmed project.
 > 3. Under no circumstances should the agent create or load tables into a different project than the one explicitly confirmed by the user in Step 1.
 
 ---
@@ -120,10 +159,24 @@ create_lookml_model(body={
 
 ## 4. LookML Quality Standards & Mandatory Pre-Deployment Validation Gate
 
-### A. Field Documentation & Mandatory Snowflake 3NF Architecture
+### A. Field Documentation & Mandatory Snowflake 3NF Architecture (Delegate to Modeler Subagent)
+Delegate 3NF relational modeling, NDT rollup creation, view generation, and tabbed dashboard authoring to the **[`lookml-snowflake-modeler`](subagents/lookml-snowflake-modeler.md)** subagent:
+
+```yaml
+subagent:
+  type: "skills/looker-demo-orchestrator/subagents/lookml-snowflake-modeler.md"
+  prompt: "Model 3NF relational schema for {project_name}. Apply schema_graph_analyzer.py, eliminate chasm traps with NDT rollups, add mandatory labels and descriptions to all fields, and author tabbed executive dashboard."
+  inputs:
+    project_name: "{looker_project_name}"
+    connection_name: "{looker_connection_name}"
+    lookml_dir: "lookml/"
+    table_specs: "{extracted_table_specs}"
+    domain_metrics: "{domain_metrics_list}"
+```
+
 - **Mandatory Snowflake & 3NF Modeling Gate (`skills/lookml-snowflake-modeler`)**:
   Whenever the schema contains normalized 3NF structures, multiple 1:N child collections (e.g. comments, attachments, history logs), bridge tables, or diamond joins (e.g. users referenced as assignee/creator/lead):
-  - The agent **MUST explicitly apply the `lookml-snowflake-modeler` skill** (`schema_graph_analyzer.py`).
+  - The modeler subagent **MUST explicitly apply the `lookml-snowflake-modeler` skill** (`schema_graph_analyzer.py`).
   - **Never join multiple 1:N child tables directly to a parent Explore** (eliminates Chasm Traps).
   - Pre-aggregate child metrics into **Native Derived Tables (NDTs) / rollup views** and join them **`one_to_one`** onto the parent Explore.
   - Create dedicated **Event Stream Explores** for atomic activity/audit leaves where the event table is the **Base View** and parent dimensions are joined `many_to_one`.
@@ -135,62 +188,65 @@ create_lookml_model(body={
 - Drill fields (`drill_fields: [...]`) on key primary measures.
 - **Executive Polish & Tabbed Dashboard Architecture (`skills/lookml-dashboard`)**: Dashboards must follow modern, executive-grade design patterns (tabbed report consolidation, single-value KPI banners, dual Y-axis charts, `advanced_vis_config` rounded geometry, cross-filtering, and popover filters) tailored to domain specs (e.g. Linear Insights, Stripe Financials, Salesforce CRM).
 
-### B. Mandatory Pre-Deployment Validation Gate
+### B. Mandatory Pre-Deployment Validation Gate (Delegate to QA Validator Subagent)
 
-The agent **MUST follow this 4-step sequence** without skipping:
+To ensure zero confirmation bias and protect the parent session from query execution log bloat, delegate dev branch deployment, LookML validation, and dashboard query verification to the independent **[`lookml-qa-validator`](subagents/lookml-qa-validator.md)** subagent:
+
+```yaml
+subagent:
+  type: "skills/looker-demo-orchestrator/subagents/lookml-qa-validator.md"
+  prompt: "Push LookML files to dev branch, run LookML Validator, execute 100% of dashboard queries, and self-heal missing fields (up to max 3 attempts). Certify deploy readiness."
+  inputs:
+    project_name: "{looker_project_name}"
+    oauth_account: "{oauth_account}"
+    lookml_dir: "lookml/"
+    dashboard_files: ["dashboards/*.dashboard.lookml"]
+```
+
+The `lookml-qa-validator` subagent runs this 4-step sequence:
 
 ```mermaid
 graph LR
     Step1[1. Push to Dev Branch] --> Step2[2. Run LookML Validator]
     Step2 --> Step3[3. Run Dashboard Query Tests]
-    Step3 -->|100% Pass| Step4[4. Deploy to Production]
+    Step3 -->|Errors Found| Heal{Self-Heal Loop<br/>Max 3 Attempts}
+    Heal -->|Patch Applied| Step1
+    Heal -->|Exceeded 3| Fail[Report Failure]
+    Step3 -->|100% Pass| Step4[Return Deploy Certificate]
 ```
 
-```bash
-# Step 1: Push local LookML files to the Looker dev branch (using single-file push -f for reliability)
-for file in views/*.view.lkml models/*.model.lkml dashboards/*.dashboard.lookml; do
-  uvx --with "mcp<2" --from "lkr-dev-cli[all]" lkr --oauth-account=<oauth_account> tools lookml push <lookml_dir> --project=<project_name> -f "$file"
-done
-
-# Step 2: Run LookML Validator (via Looker API or Code Mode)
-# Assert that len(validation.errors) == 0 before proceeding.
-# If errors exist, fix them locally, re-push, and re-validate.
-
-# Step 3: Exhaustive Dashboard Query Verification Gate
-# Execute every query tile in *.dashboard.lookml files via /api/4.0/queries/run/json or run_inline_query.
-# Confirm 100% of dashboard queries execute with HTTP 200 OK.
-
-# Step 4: Deploy to Production (ONLY AFTER Step 2 and Step 3 pass completely)
-uvx --with "mcp<2" --from "lkr-dev-cli[all]" lkr --oauth-account=<oauth_account> tools lookml deploy --project=<project_name>
-```
+> [!IMPORTANT]
+> **Strict Bounded Self-Healing Ceiling: Maximum 3 Attempts**
+> If LookML validator errors or query failures occur, the `lookml-qa-validator` subagent is permitted up to a **maximum of 3 self-healing iterations** (using `lookml-dashboard-to-query`) to patch missing dimensions or syntax before escalating to the user.
 
 > [!CAUTION]
-> **NEVER call `deploy` or pass `--deploy` before verifying Step 2 (LookML Validator) and Step 3 (Query Verification).**
+> **Production Deployment Authority Remains with Parent Orchestrator**:
+> The `lookml-qa-validator` subagent is **strictly an auditing worker** and is prohibited from calling `tools lookml deploy`. Production deployment is executed by the **Parent Orchestrator ONLY AFTER** receiving `{ready_to_deploy: true}` from the validator subagent:
+>
+> ```bash
+> uvx --with "mcp<2" --from "lkr-dev-cli[all]" lkr --oauth-account=<oauth_account> tools lookml deploy --project=<project_name>
+> ```
 
 ---
 
-## 5. Provision Conversational Analytics Data Agent & Gemini Enterprise (GE) Publishing (Looker Native API via Code Mode)
+## 5. Provision Conversational Analytics Data Agent & Gemini Enterprise (GE) Publishing (Delegate to Subagent)
 
-After deploying the LookML model and dashboards to production in Step 4, the agent **MUST orchestrate Conversational Analytics (CA) agent creation** for both internal Looker and external embed scopes.
+> [!IMPORTANT]
+> **Conditional Subagent Trigger**:
+> The **[`ca-agent-provisioner`](subagents/ca-agent-provisioner.md)** subagent is **ONLY spawned if the user explicitly confirms CA Agent creation** in the interactive gate below.
 
 ```mermaid
 graph TD
-    Deploy["Step 4: LookML Model & Dashboard Deployed"] --> PromptCA{"Interactive Gate:<br/>Create Conversational Analytics Agent?"}
+    Deploy["Step 4: LookML Model & Dashboard Deployed"] --> PromptCA{"Interactive Gate (Orchestrator):<br/>Create Conversational Analytics Agent?"}
     
-    PromptCA -->|Skip| Scaffolding["Step 6: Embed Scaffolding / Finished"]
-    PromptCA -->|Yes / Custom| CoDesign["Agent Co-Design:<br/>1. Prompt / Default Persona & Query Rules<br/>2. Extract Dashboard Queries as Golden Queries"]
+    PromptCA -->|Skip| Scaffolding["Section 6: Embed Portal Gate"]
+    PromptCA -->|Yes / Custom| SpawnCA["Spawn Subagent: ca-agent-provisioner<br/>1. Create CA Agent<br/>2. Extract & Link Golden Queries<br/>3. Publish to GE (if confirmed)"]
     
-    CoDesign --> CodeModeAgent["lkr code-mode sandbox:<br/>create_agent(body={...})"]
-    CodeModeAgent --> CodeModeGolden["lkr code-mode sandbox:<br/>create_golden_query(agent_id, body={...})<br/>for each dashboard tile query"]
-    
-    CodeModeGolden --> PromptGE{"Interactive Gate:<br/>Publish Agent to Gemini Enterprise (GE)?"}
-    PromptGE -->|Yes| PublishGE["lkr code-mode sandbox / REST:<br/>POST /api/4.0/internal/agents/{agent_id}/publish"]
-    PromptGE -->|No / Skip| Summary["Output Agent ID, GE Status & Clickable Link"]
-    PublishGE --> Summary
-    Summary --> Scaffolding
+    SpawnCA --> ReturnCA["Return Summary: agent_id, golden_queries_count, chat_url"]
+    ReturnCA --> Scaffolding
 ```
 
-### A. Interactive CA Agent Confirmation Gate
+### A. Interactive CA Agent Confirmation Gate (Parent Orchestrator)
 Prompt the user via `ask_question`:
 - **Question**: "Would you like to provision a Looker Conversational Analytics (CA) Agent for the `{model_name}` model?"
 - **Options**:
@@ -198,110 +254,204 @@ Prompt the user via `ask_question`:
   - `Provide custom system instructions before provisioning`
   - `Skip Conversational Analytics Agent creation`
 
-### B. System Instruction Template (Persona, Query Patterns & Tone)
-> [!NOTE]
-> Entity metadata, table schemas, dimension types, and join relationships are **automatically inferred from the LookML model**. System instructions should focus strictly on **persona, deterministic query patterns, business rules, and formatting/style**.
-
-*Example Template*:
-```markdown
-You are an expert Senior Data Analyst specializing in {domain_name}.
-Your job is to answer questions by querying the `{model_name}` LookML model on the `{primary_explore}` explore.
-
-Business Rules & Query Patterns:
-- When users ask about revenue, financial performance, or core volume, use `{primary_explore}.total_{primary_metric}`.
-- For timeline questions, default to `{primary_explore}.created_date` grouped by month or week.
-- Exclude cancelled, deleted, or test records unless specifically requested.
-
-Styling & Response Guidelines:
-- Provide direct, executive-ready answers without conversational filler.
-- Always lead with the top-line takeaway number before providing supporting data tables or breakdowns.
-- Format currency, percentages, and metrics cleanly.
-```
-
-### C. Automatic Dashboard Query Extraction (Golden Queries)
-Inspect all query tiles in the generated `*.dashboard.lookml` files (single-value KPI cards, timeline area charts, categorical donuts, breakdown bar charts). For each tile:
-1. Synthesize a natural language business question (`prompt`) from the tile's title and metrics (e.g. *"What is the total revenue over the last 365 days?"*, *"Show monthly trajectory of orders"*).
-2. Extract the exact LookML query configuration (`model`, `view` / `explore`, `fields`, `filters`, `sorts`, `limit`).
-
-### D. Agent & Golden Query Provisioning via `lkr-dev-cli` Code Mode / SDK
-Execute the agent creation, golden query registration, and linking using Looker's 3-step native API flow:
-
-> [!IMPORTANT]
-> **Looker 4.0 Golden Query Requirements:**
-> 1. `create_golden_query` requires an `answer` (the `expanded_share_url` or `share_url` generated by `create_query`).
-> 2. Looker strictly enforces **exactly one question per Golden Query** (`questions: [prompt]`). Do not pass multiple questions in a single array.
-> 3. Golden queries are linked to the Agent via `update_agent(agent_id=agent_id, body={'golden_query_ids': [str(gq_id), ...]})`.
-
-```python
-# 1. Create Conversational Analytics Agent
-agent = create_agent(body={
-    'name': f'{PROJECT_NAME} Assistant',
-    'description': f'AI Conversational Analytics Assistant for {PROJECT_NAME}',
-    'sources': [{'model': MODEL_NAME, 'explore': PRIMARY_EXPLORE}],
-    'context': {'instructions': SYSTEM_INSTRUCTIONS},
-    'code_interpreter': True
-})
-agent_id = agent.get('id')
-print(f'Created CA Agent ID: {agent_id}')
-
-# 2. Register Dashboard Golden Queries (3-Step Flow)
-created_gq_ids = []
-for gq in golden_queries:
-    try:
-        # Step 2a: Create base Looker query to obtain expanded share URL
-        q = create_query(body=gq['query'])
-        answer_url = q.get('expanded_share_url') or q.get('share_url')
-        
-        # Step 2b: Create Golden Query resource
-        created_gq = create_golden_query(body={
-            'questions': [gq['prompt']],
-            'answer': answer_url,
-            'is_active': True
-        })
-        created_gq_ids.append(str(created_gq.get('id')))
-    except Exception as e:
-        print(f'Notice registering golden query: {e}')
-
-# Step 2c: Link all Golden Query IDs to the CA Agent
-update_agent(agent_id=agent_id, body={'golden_query_ids': created_gq_ids})
-print(f'Linked {len(created_gq_ids)} Golden Queries to Agent: {agent_id}')
-```
-
-### E. Interactive Gemini Enterprise (GE) Publishing Gate
-After the CA agent and golden queries are created, prompt the user via `ask_question`:
+### B. Interactive Gemini Enterprise (GE) Publishing Gate (Parent Orchestrator)
+If CA Agent creation is selected, ask whether to publish to Gemini Enterprise:
 - **Question**: "Would you like to publish this Conversational Analytics Agent to Gemini Enterprise (GE)?"
 - **Guidance / Prerequisite**:
   > [!IMPORTANT]
-  > Before publishing, ensure that Gemini Enterprise publishing is enabled on your Looker instance (under **Admin > Gemini Settings**) and a Gemini Enterprise (GE) App has been connected.
+  > Before publishing, confirm that Gemini Enterprise publishing is enabled on the Looker instance (under **Admin > Gemini Settings**) and a Gemini Enterprise (GE) App has been connected.
 - **Options**:
   - `(Recommended) Yes, publish agent to Gemini Enterprise`
   - `Skip publishing to Gemini Enterprise`
 
-If confirmed, execute a `POST` with an empty body `{}` against the internal agent publish endpoint using `lkr code-mode sandbox`:
+### C. Procedural Delegation: `ca-agent-provisioner` Subagent
+Once confirmed, delegate Golden Query extraction, agent creation, and GE publishing to **[`ca-agent-provisioner`](subagents/ca-agent-provisioner.md)**:
 
-```bash
-uvx --with "mcp<2" --from "lkr-dev-cli[all]" lkr --oauth-account=<oauth_account> code-mode sandbox --code="
-agent_id = '${AGENT_ID}'
-
-# Publish CA Agent to Gemini Enterprise
-res = request(
-    method='POST',
-    path=f'/api/4.0/internal/agents/{agent_id}/publish',
-    body={}
-)
-print(f'Gemini Enterprise Publish Result: {res}')
-"
+```yaml
+subagent:
+  type: "skills/looker-demo-orchestrator/subagents/ca-agent-provisioner.md"
+  prompt: "Provision Looker CA Agent for model {lookml_model_name} on explore {primary_explore}, extract dashboard tile golden queries, and publish to Gemini Enterprise if confirmed."
+  inputs:
+    project_name: "{looker_project_name}"
+    model_name: "{lookml_model_name}"
+    primary_explore: "{primary_explore}"
+    oauth_account: "{oauth_account}"
+    dashboard_files: ["dashboards/*.dashboard.lookml"]
+    system_instructions: "{system_instructions_or_default_template}"
+    publish_ge: "{publish_ge_boolean}"
 ```
+
+The subagent follows the strict Looker 4.0 Golden Query rules:
+1. `create_agent(body={...})` with persona, query patterns, and domain rules.
+2. For each dashboard tile: `create_query` $\to$ get `expanded_share_url` $\to$ `create_golden_query` with exactly **ONE question** $\to$ `update_agent` linking all IDs.
+3. If `publish_ge: true`: executes `POST /api/4.0/internal/agents/{agent_id}/publish` with body `{}`.
 
 ---
 
-## 6. External Embedded Portal Scaffolding (Optional)
+## 6. External Embedded Portal Scaffolding (Delegate to Subagent)
 
-When an external embedded analytics portal is requested:
+> [!IMPORTANT]
+> **Conditional Subagent Trigger**:
+> The **[`embed-portal-engineer`](subagents/embed-portal-engineer.md)** subagent is **ONLY spawned if the user explicitly confirms external embed portal creation** in the interactive gate below.
 
-```bash
-demo-create run --project=<project_name> --scope=external
+### A. Interactive External Embed Confirmation Gate (Parent Orchestrator)
+Prompt the user via `ask_question`:
+- **Question**: "Would you like to scaffold an external branded embedded analytics portal (`looker-embed-demo`)?"
+- **Options**:
+  - `(Recommended) Scaffold external embed portal with custom brand theme and embedded chat`
+  - `Skip external portal scaffolding (internal Looker only)`
+
+### B. Procedural Delegation: `embed-portal-engineer` Subagent
+If confirmed, delegate frontend scaffolding, environment configuration, brand tokens, and build verification to **[`embed-portal-engineer`](subagents/embed-portal-engineer.md)**:
+
+```yaml
+subagent:
+  type: "skills/looker-demo-orchestrator/subagents/embed-portal-engineer.md"
+  prompt: "Scaffold external embed demo for {project_name}, configure .env (VITE_CHAT_AGENT_ID={ca_agent_id}, dashboard ID={dashboard_id}), customize brand styling in styles.css, and verify build."
+  inputs:
+    project_name: "{looker_project_name}"
+    looker_instance_url: "{looker_instance_url}"
+    dashboard_id: "{deployed_dashboard_id}"
+    ca_agent_id: "{ca_agent_id}"
+    brand_name: "{brand_name}"
+    theme_colors: "{brand_theme_colors}"
+    target_dir: "embed-portal/"
 ```
 
-This clones `looker-embed-demo`, configures `.env` (including `VITE_CHAT_AGENT_ID=<agent_id>`), `src/constants.ts`, and applies custom brand styling.
+The subagent:
+1. Clones/scaffolds `looker-embed-demo`.
+2. Configures `.env` with `VITE_LOOKER_HOST`, `VITE_DEFAULT_DASHBOARD_ID`, and `VITE_CHAT_AGENT_ID`.
+3. Customizes `src/constants.ts` and CSS variables in `src/styles.css`.
+4. Runs `npm run build` or `vite build` to verify clean compilation.
+
+---
+
+## 7. Mandatory Final Delivery Report Protocol
+
+Upon completing the demo creation pipeline (production deployment, plus optional CA Agent or Embed Portal steps), the Parent Orchestrator **MUST synthesize all subagent outputs and emit a comprehensive Executive Delivery Report**.
+
+The report must be emitted directly in chat as the final deliverable and saved to the project directory as `DELIVERY_REPORT.md` (or artifact).
+
+### Mandatory Report Structure & Template:
+
+```markdown
+# {Domain Name} — Final Delivery Report
+
+> [!NOTE]
+> **Production Deployment Status: Active & Operational**
+> - **Looker Instance**: [{looker_instance_host}]({looker_instance_url})
+> - **Looker Project & Model**: `{looker_project_name}`
+> - **BigQuery Dataset**: `{gcp_project_id}.{bq_dataset_id}` ({gcp_location})
+> - **Looker Database Connection**: `{looker_connection_name}`
+> - **Validation Gate**: 0 LookML errors, {queries_passed}/{queries_tested} (100%) Dashboard Queries Passed
+
+---
+
+## 1. Quick Access Links
+
+| Asset | Direct URL / Access Path | Description |
+| :--- | :--- | :--- |
+| **Executive Dashboard** | [{dashboard_title}]({looker_instance_url}/dashboards/{lookml_model_name}::{dashboard_name}) | {tabs_count}-tab executive command center with cross-filtering |
+| **Conversational Analytics Agent** | [{agent_name}]({looker_instance_url}/conversational-analytics/agents/{ca_agent_id}) | AI Data Agent with {gq_count} pre-seeded Golden Queries *(if provisioned)* |
+| **{Primary Explore} Explore** | [Explore: {Primary Explore Label}]({looker_instance_url}/explore/{lookml_model_name}/{primary_explore}) | Primary domain entity, metrics & dimension analysis |
+| **{Event Stream} Explore** | [Explore: {Event Stream Label}]({looker_instance_url}/explore/{lookml_model_name}/{event_explore}) | Granular event/telemetry audit stream |
+| **Embed Analytics Portal** | [External Embed Portal]({embed_portal_url}) | White-labeled external embed application *(if scaffolded)* |
+
+---
+
+## 2. BigQuery Data Warehouse Summary
+
+All {table_count} relational tables were synthesized with realistic domain distributions, strict referential integrity, and uploaded to BigQuery:
+
+```{gcp_project_id}.{bq_dataset_id}
+├── {table_name_1}  ({rows_1} rows)  - {table_1_description}
+├── {table_name_2}  ({rows_2} rows)  - {table_2_description}
+└── {table_name_n}  ({rows_n} rows)  - {table_n_description}
+```
+
+Total dataset volume: **{total_rows} rows**.
+
+---
+
+## 3. Relational Architecture & ERD
+
+```mermaid
+erDiagram
+    {table_a} ||--o{ {table_b} : "{relationship_label} ({foreign_key})"
+```
+
+*(Optional — Include `### Chasm Trap Mitigation Architecture` below ONLY if snowflake modeling was required / 1:N child collections were detected)*:
+<!--
+### Chasm Trap Mitigation Architecture
+- Document NDT rollups pre-aggregating child 1:N metrics at the parent grain.
+- Document one_to_one joins onto parent table eliminating Cartesian products.
+- Document dedicated Event Stream Explores with event leaf as Base View.
+-->
+
+---
+
+## 4. LookML Dashboard Layout & Tabbed Architecture
+
+The dashboard (`{lookml_model_name}::{dashboard_name}`) is structured into **{tab_count} functional operational tabs** with universal cross-filtering and popover filters:
+
+### Tab 1: {Tab 1 Name}
+- **KPI Banners**: {List of primary single-value metrics}.
+- **{Chart 1 Title}**: {Chart visualization type and business question answered}.
+- **{Chart 2 Title}**: {Chart visualization type and business question answered}.
+
+### Tab 2: {Tab 2 Name}
+- **KPI Banners**: {List of secondary single-value metrics}.
+- **{Chart 1 Title}**: {Chart visualization type and business question answered}.
+
+---
+
+## 5. Pre-Deployment Validation Audit Record
+
+In strict compliance with the **Looker Demo Orchestrator** pre-deployment gate, all validation checks passed before production release:
+
+```
+[Phase 1] Code Push to Dev Branch:             100% COMPLETE ({files_count} LookML files pushed)
+[Phase 2] LookML Validator (validate_project):   0 ERRORS DETECTED
+[Phase 3] Exhaustive Dashboard Query Tests:      {queries_passed} / {queries_tested} (100%) QUERIES PASSED
+[Phase 4] Production Deployment:                SUCCESS (Deployed to Production at {timestamp})
+```
+
+### Detailed Query Test Results ({queries_passed}/{queries_tested} HTTP 200 OK)
+1. `{query_tile_1}` (Explore: `{explore_1}`) ➔ **PASS**
+2. `{query_tile_2}` (Explore: `{explore_2}`) ➔ **PASS**
+3. `{query_tile_n}` (Explore: `{explore_n}`) ➔ **PASS**
+
+---
+
+## 6. Conversational Analytics (CA) AI Agent Configuration *(if provisioned)*
+
+- **Agent ID**: `{ca_agent_id}`
+- **Agent Name**: `{ca_agent_name}`
+- **Explore Sources**: `{explore_sources_list}`
+- **Code Interpreter**: Enabled
+- **Direct Agent Chat URL**: [Open {ca_agent_name}]({looker_instance_url}/conversational-analytics/agents/{ca_agent_id})
+
+### Pre-Seeded Golden Queries
+1. *"{Natural language business question 1}"*
+2. *"{Natural language business question 2}"*
+3. *"{Natural language business question n}"*
+
+---
+
+## 7. Gemini Enterprise (GE) / Embed Portal Status
+
+*(If published to Gemini Enterprise)*:
+- **Publish State**: `published` (HTTP 200 OK)
+- **Status Message**: `Successfully published Agent {ca_agent_id} to GEMINI_ENTERPRISE.`
+- **Capabilities**: Full natural language synthesis over `{lookml_model_name}`, golden query semantic routing, and code interpretation within Gemini Enterprise apps.
+
+*(If external embed portal was scaffolded)*:
+- **Workspace Directory**: `{embed_workspace_dir}`
+- **Local Dev Command**: `npm run dev`
+- **Dashboard Embedded**: `{deployed_dashboard_id}`
+- **Chat Agent Connected**: `{ca_agent_id}`
+- **Build Status**: Verified 0 TypeScript / compilation errors
+```
+
+
 
