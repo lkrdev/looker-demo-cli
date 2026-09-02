@@ -1,17 +1,94 @@
 # Looker Demo Creator (`demo-create`)
 
-> **Automated, deterministic orchestrator for creating end-to-end Looker demos, synthetic BigQuery datasets, LookML semantic models, and Embedded Analytics portals.**
+> **From zero to production Looker demo in minutes.**
+> Automated, deterministic orchestrator for creating end-to-end Looker demos, synthetic BigQuery datasets, 3NF Snowflake LookML semantic models, 100% test-verified dashboards, Conversational Analytics (CA) Agents published to Gemini Enterprise (GE), and Embedded Analytics portals.
 
 ---
 
 ## Overview
 
-`demo-create` is a developer and AI agent tool that unifies the end-to-end Looker demo creation lifecycle into a single workflow:
-1. **Pre-flight & Environment Audit (`pre-check`)**: Verifies active GCP/ADC accounts, installs/patches global MCP tools (`data-designer`, `bigquery`, `knowledge-catalog`), checks Looker authentication (OAuth / API keys), and organizes agent skills (including `lkr-code-mode`) into intent-based subfolders.
+`demo-create` unifies the entire full-stack Looker demo creation lifecycle into a single automated pipeline:
+1. **Pre-flight & Environment Audit (`pre-check`)**: Verifies active GCP/ADC accounts, installs/patches global MCP tools (`data-designer`, `bigquery`, `knowledge-catalog`), checks Looker authentication (OAuth / API keys), and organizes agent skills into intent-based subfolders.
 2. **Dataset Decision & Synthesis**: Automatically checks for existing BigQuery datasets, enables data augmentation or green-field relational schema generation, and validates referential integrity.
 3. **BigQuery Loading**: Creates datasets and partitioned/clustered tables in BigQuery.
-4. **LookML Generation & Direct Code-Mode Deployment**: Autogenerates production-ready views, explores, and executive dashboards, provisioning and deploying them directly to the Looker instance using `lkr-dev-cli code-mode` without requiring an MCP server.
-5. **Embedded Portal Scaffolding**: Clones and configures a clean, dedicated `looker-embed-demo` workspace for external client demos.
+4. **LookML Generation & Direct Code-Mode Deployment**: Autogenerates production-ready views, explores, and executive dashboards, provisioning and deploying them directly to the Looker instance using `lkr code-mode` without requiring an MCP server.
+5. **Conversational Analytics & Gemini Enterprise**: Provisions Looker CA AI Agents, extracts dashboard queries into 1:1 Golden Queries, and publishes to Gemini Enterprise.
+6. **Embedded Portal Scaffolding**: Clones and configures a clean, dedicated `looker-embed-demo` workspace for external client demos.
+
+---
+
+## What Gets Automated: Production Deliverables Inventory
+
+Instead of spending days or weeks stitching together synthetic data scripts, debugging LookML joins, hand-crafting dashboard tiles, writing validation queries, and plumbing AI agent endpoints, `demo-create` produces a complete, production-grade enterprise demo in minutes:
+
+| Production Asset | What Gets Automated | Exact Output Format |
+| :--- | :--- | :--- |
+| **BigQuery Data Warehouse** | 3NF relational schema synthesis, realistic engineering distributions, PK/FK referential integrity, and batch Parquet upload | Clean BigQuery dataset with partitioned/clustered tables |
+| **LookML 3NF Semantic Model** | Explore Base View selection, Chasm Trap elimination with Native Derived Table (NDT) rollups joined `one_to_one`, role-playing diamond joins, and field metadata (`label:`, `description:`, `value_format_name:`, `drill_fields:`) | Complete `views/*.view.lkml`, `explores/*.explore.lkml`, and `models/*.model.lkml` |
+| **Executive Tabbed Dashboard** | Executive tabbed report architecture, single-value KPI banners, dual-axis timelines, `advanced_vis_config` rounded geometry, cross-filtering, and popovers | Production `dashboards/*.dashboard.lookml` deployed via API |
+| **Pre-Deployment QA Audit** | Dev branch push, LookML project validator, 100% test execution of all dashboard queries via Looker API, and bounded self-healing (max 3 iterations) | 100% HTTP 200 OK query pass certificate before production release |
+| **Conversational Analytics (CA) Agent** | Auto-generated domain persona and query rules, extraction of dashboard tiles into 1:1 Looker 4.0 Golden Queries with `expanded_share_url` grounding | Live AI Agent in Looker with natural language chat UI |
+| **Gemini Enterprise (GE) Integration** | Automated registration and one-click publishing to connected Gemini Enterprise apps via Looker internal API | Natural language querying across enterprise Gemini apps in minutes |
+| **White-Labeled Embed Portal (Optional)** | Scaffolding of React/Vite application (`looker-embed-demo`), `.env` configuration (`VITE_CHAT_AGENT_ID`), and CSS brand design tokens | Complete web application ready to run (`npm run dev`) |
+
+---
+
+### ⚡ Spotlight: From Raw Data to Gemini Enterprise in Minutes
+
+A flagship capability of `demo-create` is bridging the gap between raw data synthesis and cross-organizational enterprise AI in minutes:
+
+```mermaid
+graph LR
+    Tiles["Dashboard Query Tiles"] --> Ground["Extract & Ground Golden Queries<br/>(expanded_share_url)"]
+    Ground --> LinkAgent["Link to Looker CA Agent<br/>(PATCH /api/4.0/agents/{id})"]
+    LinkAgent --> PublishGE["One-Click Publish to GE<br/>(POST /api/4.0/internal/agents/{id}/publish)"]
+    PublishGE --> Chat["Natural Language Querying<br/>in Gemini Enterprise Apps"]
+```
+
+1. **Deterministic Dashboard-to-Query Extraction**: Every query tile from your generated executive dashboard is inspected and translated into an active Looker query.
+2. **Looker 4.0 Golden Query Grounding**: Base queries are created via `POST /api/4.0/queries` to obtain deterministic `expanded_share_url` permalinks, then registered as 1:1 Golden Queries (`POST /api/4.0/golden_queries`).
+3. **Agent Linking**: Golden queries are bound to the Conversational Analytics Agent (`PATCH /api/4.0/agents/{agent_id}`), establishing high-precision semantic grounding.
+4. **One-Click Gemini Enterprise Publishing**: The agent is published directly to connected Gemini Enterprise apps via `POST /api/4.0/internal/agents/{agent_id}/publish`.
+
+> Within minutes of starting the flow, non-technical users and executives can query the entire domain dataset in natural language directly within Gemini Enterprise.
+
+---
+
+### 📄 Inspect a Real Deliverable
+
+Curious what the final output looks like? Inspect a real deliverable produced by a completed run:
+
+👉 **[View Canonical Delivery Report: IoT Trucking Fleet Analytics](examples/DELIVERY_REPORT_EXAMPLE.md)**
+
+Key highlights from the report:
+- **BigQuery Summary**: 6 relational tables, 21,675 rows across `dim_vehicles`, `fct_trips`, `fct_sensor_telemetry`, etc.
+- **LookML Architecture**: 3NF ERD with Native Derived Table (`vehicle_metrics_ndt`) eliminating Chasm Traps.
+- **Quality Audit**: 19 / 19 (100%) dashboard tile queries tested with HTTP 200 OK before production release.
+- **Live AI Agent**: 7 pre-seeded Golden Queries and verified Gemini Enterprise publish state.
+
+---
+
+## Two Ways to Build
+
+### Mode 1: AI Agent Pair-Programmer (Recommended Default)
+
+Run with your AI coding assistant (Jetski, Claude Code, or AgentAPI) using the **[`looker-demo-orchestrator`](skills/looker-demo-orchestrator/SKILL.md)** skill.
+- **Interactive Schema Co-Design**: Collaborate with the agent on ERD diagrams, dimension fields, and micro-samples before generating full volume.
+- **Subagent Delegation**: The parent orchestrator maintains human gates while delegating heavy execution to specialized subagents:
+  - [`data-engineer`](skills/looker-demo-orchestrator/subagents/data-engineer.md) (Batch synthesis & BQ load)
+  - [`lookml-snowflake-modeler`](skills/looker-demo-orchestrator/subagents/lookml-snowflake-modeler.md) (3NF modeling, NDT rollups & dashboards)
+  - [`lookml-qa-validator`](skills/looker-demo-orchestrator/subagents/lookml-qa-validator.md) (Dev push, validation & max 3 query self-healing)
+  - [`ca-agent-provisioner`](skills/looker-demo-orchestrator/subagents/ca-agent-provisioner.md) (CA agent & golden queries; conditional on user confirmation)
+  - [`embed-portal-engineer`](skills/looker-demo-orchestrator/subagents/embed-portal-engineer.md) (Vite embed portal; conditional on user confirmation)
+- **Self-Healing QA**: Automatically fixes missing dimensions or syntax errors during query verification.
+
+### Mode 2: Standalone CLI (Headless Engine)
+
+Execute `demo-create` directly from your terminal or CI/CD pipeline:
+
+```bash
+demo-create run --project=retail_analytics --scope=internal
+```
 
 ---
 
