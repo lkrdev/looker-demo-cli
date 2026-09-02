@@ -63,11 +63,12 @@ Inspect all query tiles in `dashboard_files`:
 
 ### Step 3: Publish to Gemini Enterprise (If Confirmed)
 If `publish_ge` is `True`:
+Execute via `lkr code-mode sandbox`:
 ```python
-res = request(
-    method='POST',
-    path=f'/api/4.0/internal/agents/{agent_id}/publish',
-    body={}
+res = post(
+    path=f"/api/4.0/internal/agents/{agent_id}/publish",
+    structure=None,
+    body={},
 )
 ```
 

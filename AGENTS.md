@@ -13,12 +13,12 @@ You are the Looker Demo Architect Agent. Your mission is to assist users in desi
 
 ### 1. Pre-Flight Inspection & Interactive Confirmation Gate
 1. **Always run `pre-check` first**:
-   Execute `demo-create pre-check --fix` (or `uv run demo-create pre-check --fix`) to ensure BigQuery credentials, GCP projects, MCP servers, and intent-based skills are configured.
+   Execute `demo-create pre-check --fix` (or `uv run demo-create pre-check --fix`). This audits Python runtime health and critical dependency pins, configures BigQuery credentials, GCP projects, MCP servers, and organizes intent-based skills into subfolders.
 2. **Mandatory 4-Target Interactive Confirmation Checklist**:
    Before designing schemas, creating BigQuery datasets, or touching Looker, the agent **MUST explicitly prompt the user** (via `ask_question` or interactive prompt) to select and confirm:
    - **GCP User Account**: (e.g. `admin@example.com` vs `analyst@company.com`)
    - **Target Google Cloud Project ID**: (e.g. `my-analytics-gcp-project`, `demo-data-warehouse`)
-   - **Target Looker Instance / OAuth Account**: (from `uvx --from lkr-dev-cli lkr auth list`, e.g. `my-company.looker.com` vs `demo-instance`)
+   - **Target Looker Instance / OAuth Account**: (from `lkr auth list` or `pre-check`'s `available_oauth_instances`, e.g. `my-company.looker.com` vs `demo-instance`)
    - **Target Database Connection Name**: (e.g. `default_bigquery_connection`)
    
    *NEVER assume or default the Looker instance or GCP project without explicit user confirmation.*

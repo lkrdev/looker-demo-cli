@@ -34,11 +34,26 @@ The parent orchestrator invokes you with:
 
 ---
 
-## 2. Execution Responsibilities
+## 2. Execution Responsibilities & Script Standard
 
-1. **Synthesize Parquet Files**:
-   - Write a self-contained DataDesigner / pandas synthesis script.
-   - Generate realistic rows honoring the approved distributions, foreign key referential integrity, and timestamp sequencing.
+1. **Synthesize Parquet Files (Mandatory PEP 723 Metadata)**:
+   - Write a self-contained synthesis script.
+   - **MANDATORY PEP 723 HEADER**: All generated Python scripts MUST include inline script metadata at the top so they execute cleanly without ad-hoc `--with` flags:
+     ```python
+     # /// script
+     # requires-python = ">=3.12"
+     # dependencies = [
+     #     "pandas>=2.2.0",
+     #     "pyarrow>=15.0.0",
+     #     "google-cloud-bigquery>=3.20.0",
+     #     "faker>=24.0.0",
+     #     "looker-demo-cli",
+     # ]
+     # ///
+     ```
+   - **Execution Command**: Always execute via `uv run <script_path>` or `demo-create run-script <script_path>`.
+   - **NEVER execute bare `python3 <script_path>`** as system Python lacks required libraries.
+   - Generate realistic rows honoring approved distributions, foreign key referential integrity, and timestamp sequencing.
    - Write Parquet files into `output_dir` (e.g. `<scratch_dir>/parquet/*.parquet`).
 
 2. **Create BigQuery Dataset & Upload Tables**:

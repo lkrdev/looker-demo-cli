@@ -15,43 +15,19 @@
 
 ---
 
-## Quickstart & Execution
+## Quickstart & Installation
 
-### 1. Run Instantly with `uvx` (No Installation Required)
+### 1. Install as a Persistent CLI Tool (`uv tool` - Recommended)
 
-Once published to PyPI or your package index, you can execute the CLI on-demand in an ephemeral, isolated environment without creating a virtual environment or pre-installing dependencies:
-
-```bash
-# Run directly from the package name
-uvx looker-demo-cli pre-check --fix
-
-# Or invoke the `demo-create` binary explicitly
-uvx --from looker-demo-cli demo-create pre-check --fix
-```
-
-#### Run with Options & Flags:
-```bash
-# Run pre-flight audit and auto-fix MCP / skills
-uvx looker-demo-cli pre-check --fix
-
-# Run end-to-end interactive demo creator
-uvx looker-demo-cli run --project=retail_analytics --scope=internal
-```
-
----
-
-### 2. Install as a Persistent CLI Tool (`uv tool`)
-
-To make `demo-create` / `looker-demo-cli` globally available on your shell's `PATH`:
+To make `demo-create`, `looker-demo-cli`, AND `lkr` (`lkr-dev-cli`) globally available on your shell's `PATH` in a persistent, isolated environment:
 
 ```bash
-# Install the published package globally in an isolated environment
+# Install the published package globally
 uv tool install looker-demo-cli
 
-# Now you can run it directly anywhere:
+# Now all tools execute directly with zero startup latency and pre-pinned dependencies:
 demo-create pre-check --fix
-# or
-looker-demo-cli pre-check --fix
+lkr auth list
 ```
 
 To update to the latest version at any time:
@@ -61,20 +37,51 @@ uv tool upgrade looker-demo-cli
 
 ---
 
-### 3. Running from Local Source or Git (Development)
+### 2. Run Ephemerally with `uvx` (Zero-Install Alternative)
 
-If you are developing locally or testing before publishing:
+You can also execute the CLI on-demand in an ephemeral cache without pre-installing:
+
+```bash
+# Run pre-flight audit and auto-fix MCP / skills
+uvx looker-demo-cli pre-check --fix
+
+# Or invoke the demo-create binary explicitly
+uvx --from looker-demo-cli demo-create pre-check --fix
+
+# Run end-to-end interactive demo creator
+uvx looker-demo-cli run --project=retail_analytics --scope=internal
+```
+
+---
+
+### 3. Workspace Virtual Environment & Script Runner
+
+To eliminate missing dependency errors across agent scratch scripts or data synthesis pipelines:
+
+```bash
+# Initialize a local .venv with all demo packages pre-installed:
+demo-create env init
+source .venv/bin/activate
+
+# Execute ad-hoc scratch scripts using the CLI's bundled Python environment:
+demo-create run-script scratch/generate_data.py
+
+# Run one-off Python commands in the demo environment:
+demo-create python -c "import pandas, pyarrow, google.cloud.bigquery; print('Ready!')"
+```
+
+---
+
+### 4. Running from Local Source or Git (Development)
+
+If developing locally or testing from a Git repository:
 
 #### Run directly from local source directory:
 ```bash
-# Run from repository root
 uvx --from . demo-create pre-check --fix
-
-# Or run from anywhere by pointing to the repository path
-uvx --from /path/to/looker-demo-cli demo-create pre-check --fix
 ```
 
-#### Run directly from a Git repository:
+#### Run directly from Git:
 ```bash
 uvx --from git+https://github.com/lkrdev/looker-demo-cli.git demo-create pre-check --fix
 ```
@@ -82,7 +89,8 @@ uvx --from git+https://github.com/lkrdev/looker-demo-cli.git demo-create pre-che
 #### Local Editable Installation:
 ```bash
 cd ~/looker-demo-cli
-uv venv
+demo-create env init
+source .venv/bin/activate
 uv pip install -e .
 ```
 

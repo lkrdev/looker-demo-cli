@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+import shutil
+import subprocess
+import sys
 from pathlib import Path
 from typing import Annotated, Optional
 import typer
@@ -11,6 +14,11 @@ from looker_demo_cli.config import (
     DEFAULT_LOOKER_INSTANCE_URL,
     GEMINI_MCP_CONFIG,
     GEMINI_SKILLS_DIR,
+)
+from looker_demo_cli.precheck.env_checker import (
+    RuntimeEnvironmentStatus,
+    check_runtime_environment,
+    init_workspace_venv,
 )
 from looker_demo_cli.precheck.gcp_auth import (
     get_gcp_active_context,
@@ -39,6 +47,37 @@ app = typer.Typer(
 )
 
 
+def _render_env_tables(env_status: RuntimeEnvironmentStatus):
+    """Render Rich tables for Python runtime and critical dependency pins."""
+    console.print("\n[bold cyan]1. Python Runtime & Dependency Health[/bold cyan]")
+    t_env = Table(show_header=True, header_style="bold blue")
+    t_env.add_column("Property", style="dim")
+    t_env.add_column("Value", style="bold")
+    t_env.add_row("Python Executable", env_status.python_executable)
+    t_env.add_row("Python Version", env_status.python_version)
+    venv_str = f"[green]ACTIVE[/green] ({env_status.active_venv_path})" if env_status.is_virtualenv else "[red]NO (Bare System Python)[/red]"
+    t_env.add_row("Virtual Environment", venv_str)
+    t_env.add_row("uv Package Manager", f"[green]{env_status.uv_version}[/green]" if env_status.uv_installed else "[yellow]Not Found[/yellow]")
+    console.print(t_env)
+
+    t_deps = Table(show_header=True, header_style="bold blue")
+    t_deps.add_column("Package")
+    t_deps.add_column("Installed Version")
+    t_deps.add_column("Required Pin")
+    t_deps.add_column("Status")
+
+    for dep in env_status.dependency_checks:
+        status_label = "[green]VALID[/green]" if dep.is_satisfied else "[red]VIOLATION[/red]"
+        inst_label = dep.installed_version or "[dim]Missing[/dim]"
+        t_deps.add_row(dep.package_name, inst_label, dep.expected_constraint, status_label)
+    console.print(t_deps)
+
+    if not env_status.is_virtualenv:
+        print_warning("Execution is running on bare system Python without an isolated virtual environment.")
+        print_info("Run `demo-create env init` to bootstrap a local `.venv` or re-run with `demo-create pre-check --fix`.")
+
+
+
 @app.command(name="pre-check")
 def pre_check(
     fix: Annotated[bool, typer.Option("--fix", help="Automatically install missing MCP configs and organize global skills")] = False,
@@ -48,6 +87,13 @@ def pre_check(
     """Inspect and configure GCP/ADC accounts, MCP server definitions, and intent-based skill subfolders."""
     if not output_json:
         print_banner("PRE-CHECK: ENVIRONMENT, MCP & SKILL AUDIT", f"Target GCP Project: {gcp_project}")
+
+    # 0. Check Python Runtime & Dependency Health
+    env_status = check_runtime_environment()
+    if fix and not env_status.is_virtualenv:
+        print_info("Fix flag enabled: initializing local workspace virtual environment...")
+        init_workspace_venv(Path.cwd())
+        env_status = check_runtime_environment()
 
     # 1. Inspect Active GCP & ADC Context
     gcp_context = get_gcp_active_context()
@@ -78,6 +124,7 @@ def pre_check(
 
     if output_json:
         report = {
+            "runtime_environment": env_status.model_dump(),
             "active_gcp_context": gcp_context.model_dump(),
             "gcp_accounts": [a.model_dump() for a in gcp_accounts],
             "available_gcp_projects": available_projects,
@@ -99,7 +146,9 @@ def pre_check(
         return
 
     # Render Visual Summary
-    console.print("\n[bold cyan]1. GCP & ADC Context and Credentials[/bold cyan]")
+    _render_env_tables(env_status)
+
+    console.print("\n[bold cyan]2. GCP & ADC Context and Credentials[/bold cyan]")
     t_ctx = Table(show_header=True, header_style="bold blue")
     t_ctx.add_column("Setting", style="dim")
     t_ctx.add_column("Value", style="bold")
@@ -140,7 +189,7 @@ def pre_check(
         console.print("  [bold white]$ gcloud auth login[/bold white]")
         console.print("  [bold white]$ gcloud auth application-default login[/bold white]")
 
-    console.print("\n[bold cyan]2. Available Google Cloud Projects[/bold cyan]")
+    console.print("\n[bold cyan]3. Available Google Cloud Projects[/bold cyan]")
     if available_projects:
         t_proj = Table(show_header=True, header_style="bold blue")
         t_proj.add_column("Project ID", style="bold")
@@ -155,7 +204,7 @@ def pre_check(
         console.print("[yellow]To set your active GCP project, run:[/yellow]")
         console.print("  [bold white]$ gcloud config set project <PROJECT_ID>[/bold white]")
 
-    console.print("\n[bold cyan]3. Global MCP Tool Configurations[/bold cyan]")
+    console.print("\n[bold cyan]4. Global MCP Tool Configurations[/bold cyan]")
     t_mcp = Table(show_header=True, header_style="bold blue")
     t_mcp.add_column("MCP Server")
     t_mcp.add_column("Status")
@@ -167,7 +216,7 @@ def pre_check(
         t_mcp.add_row(m.server_name, status_label, details)
     console.print(t_mcp)
 
-    console.print("\n[bold cyan]4. Intent-Organized Agent Skills (~/.gemini/config/skills/)[/bold cyan]")
+    console.print("\n[bold cyan]5. Intent-Organized Agent Skills (~/.gemini/config/skills/)[/bold cyan]")
     t_skills = Table(show_header=True, header_style="bold blue")
     t_skills.add_column("Intent Category")
     t_skills.add_column("Skill Name")
@@ -180,7 +229,7 @@ def pre_check(
         t_skills.add_row(s.category, s.skill_name, inst_label, src_label)
     console.print(t_skills)
 
-    console.print("\n[bold cyan]5. Looker Authentication (OAuth / API Key)[/bold cyan]")
+    console.print("\n[bold cyan]6. Looker Authentication (OAuth / API Key)[/bold cyan]")
     if looker_status.is_authenticated:
         auth_badge = f"[cyan]OAuth ({looker_status.oauth_account})[/cyan]" if looker_status.auth_method == "oauth" else "[cyan]API Key[/cyan]"
         print_success(f"Connected via {auth_badge} to {looker_status.instance_url} as {looker_status.user_name} ({looker_status.user_email})")
@@ -252,5 +301,63 @@ def list_skills(
     print_success(f"Organized {len(statuses)} skills across intent categories into {GEMINI_SKILLS_DIR}")
 
 
+env_app = typer.Typer(
+    name="env",
+    help="Manage local demo workspace virtual environment and runtime health.",
+    no_args_is_help=True,
+)
+app.add_typer(env_app, name="env")
+
+
+@env_app.command(name="init")
+def env_init(
+    target_dir: Annotated[Path, typer.Option("--dir", help="Directory where .venv will be created")] = Path.cwd(),
+):
+    """Initialize a dedicated .venv in the target directory with all pinned tools."""
+    success, msg = init_workspace_venv(target_dir=target_dir)
+    if success:
+        print_success(f"Workspace environment ready! Activate it with:\n  $ {msg}")
+    else:
+        print_error(f"Failed to initialize environment: {msg}")
+        raise typer.Exit(code=1)
+
+
+@env_app.command(name="info")
+def env_info():
+    """Display runtime environment details and critical dependency pin health."""
+    env_status = check_runtime_environment()
+    _render_env_tables(env_status)
+
+
+@app.command(
+    name="run-script",
+    context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
+)
+def run_script(
+    script_path: Annotated[Path, typer.Argument(help="Path to Python script to execute with CLI environment")],
+    ctx: typer.Context,
+):
+    """Execute a Python script using the CLI's bundled runtime environment and dependencies."""
+    if not script_path.exists():
+        print_error(f"Script file not found: {script_path}")
+        raise typer.Exit(code=1)
+
+    cmd = [sys.executable, str(script_path)] + ctx.args
+    res = subprocess.run(cmd)
+    raise typer.Exit(code=res.returncode)
+
+
+@app.command(
+    name="python",
+    context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
+)
+def run_python(ctx: typer.Context):
+    """Execute Python commands within the CLI's environment (e.g. demo-create python -c '...')."""
+    cmd = [sys.executable] + ctx.args
+    res = subprocess.run(cmd)
+    raise typer.Exit(code=res.returncode)
+
+
 if __name__ == "__main__":
     app()
+

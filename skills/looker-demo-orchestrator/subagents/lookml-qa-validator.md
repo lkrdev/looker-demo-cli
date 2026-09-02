@@ -39,7 +39,7 @@ The parent orchestrator invokes you with:
 Push all local LookML files to the target Looker dev branch using reliable single-file push (`-f`):
 ```bash
 for file in $(find views models dashboards -type f -name "*.lkml" -o -name "*.lookml"); do
-  uvx --with "mcp<2" --from "lkr-dev-cli[all]" lkr --oauth-account=<oauth_account> tools lookml push <lookml_dir> --project=<project_name> -f "$file"
+  lkr --oauth-account=<oauth_account> tools lookml push <lookml_dir> --project=<project_name> -f "$file"
 done
 ```
 

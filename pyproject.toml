@@ -1,6 +1,6 @@
 [project]
 name = "looker-demo-cli"
-version = "0.1.1"
+version = "0.1.2"
 description = "Deterministic Looker Demo Orchestrator CLI for synthetic data generation, BigQuery upload, LookML modeling, and Embedded Portal scaffolding."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -12,7 +12,11 @@ dependencies = [
     "google-cloud-bigquery>=3.20.0",
     "google-auth>=2.29.0",
     "looker-sdk>=24.4.0",
-    "lkr-dev-cli>=0.0.50",
+    "lkr-dev-cli[all]>=0.0.50",
+    "mcp<2",
+    "pydantic-monty<0.0.10",
+    "requests>=2.31.0",
+    "pyyaml>=6.0",
     "pyarrow>=15.0.0",
     "pandas>=2.2.0",
     "faker>=24.0.0",

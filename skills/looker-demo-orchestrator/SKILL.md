@@ -51,7 +51,7 @@ Always execute the pre-check inspection first to inspect GCP credentials, availa
 
 ```bash
 demo-create pre-check --json
-uvx --from lkr-dev-cli lkr auth list
+lkr auth list
 ```
 
 > [!CAUTION]
@@ -137,7 +137,7 @@ Looker authentication is managed directly via `lkr-dev-cli` using the confirmed 
 Ensure the project exists on the target Looker instance with a bare Git repository:
 
 ```bash
-uvx --with "mcp<2" --from "lkr-dev-cli[all]" lkr --oauth-account=<oauth_account> code-mode sandbox --code="
+lkr --oauth-account=<oauth_account> code-mode sandbox --code="
 if session().get('workspace_id') != 'dev':
     update_session(body={'workspace_id': 'dev'})
 
@@ -224,7 +224,7 @@ graph LR
 > The `lookml-qa-validator` subagent is **strictly an auditing worker** and is prohibited from calling `tools lookml deploy`. Production deployment is executed by the **Parent Orchestrator ONLY AFTER** receiving `{ready_to_deploy: true}` from the validator subagent:
 >
 > ```bash
-> uvx --with "mcp<2" --from "lkr-dev-cli[all]" lkr --oauth-account=<oauth_account> tools lookml deploy --project=<project_name>
+> lkr --oauth-account=<oauth_account> tools lookml deploy --project=<project_name>
 > ```
 
 ---
