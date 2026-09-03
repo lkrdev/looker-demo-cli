@@ -69,13 +69,82 @@ Key highlights from the report:
 
 ---
 
-## Two Ways to Build
+---
 
-### Mode 1: AI Agent Pair-Programmer (Recommended Default)
+## Getting Started: Two Ways to Build
 
-Run with your AI coding assistant (Jetski, Claude Code, or AgentAPI) using the **[`looker-demo-orchestrator`](skills/looker-demo-orchestrator/SKILL.md)** skill.
-- **Interactive Schema Co-Design**: Collaborate with the agent on ERD diagrams, dimension fields, and micro-samples before generating full volume.
-- **Subagent Delegation**: The parent orchestrator maintains human gates while delegating heavy execution to specialized subagents:
+### 🚀 Mode 1: AI Agent Pair-Programmer (Primary Hero Flow)
+
+Run interactively with your AI coding assistant (Jetski, Claude Code, or AgentAPI) using the **[`looker-demo-orchestrator`](skills/looker-demo-orchestrator/SKILL.md)** skill.
+
+#### Step 1: Install Persistent CLI Tools
+On any fresh machine, bootstrap the environment globally in seconds using `uv`:
+```bash
+uv tool install looker-demo-cli
+```
+This installs `demo-create`, `looker-demo-cli`, and `lkr` (`lkr-dev-cli`) into an isolated, persistent environment available across all terminal sessions.
+
+#### Step 2: Run Pre-Flight Audit & Auto-Fix
+Immediately run `pre-check --fix` to configure MCP servers, check dependencies, and sync agent skills:
+```bash
+demo-create pre-check --fix
+```
+> [!IMPORTANT]
+> **Strict Authentication Hard Gate**: `pre-check` fails immediately (exit code 1) if Google Cloud or Looker authentication is missing, blocking downstream synthesis before broken calls can occur.
+
+#### Step 3: Configure Authentication (If Blocked)
+
+1. **Google Cloud & Application Default Credentials (ADC)**:
+   ```bash
+   gcloud auth login
+   gcloud auth application-default login
+   gcloud config set project <PROJECT_ID>
+   ```
+
+2. **Looker Authentication (`lkr auth login`)**:
+   Run the interactive Looker OAuth login:
+   ```bash
+   lkr auth login
+   ```
+   *(Or ephemerally: `uvx --from "lkr-dev-cli[codemode]" lkr-dev-cli auth login`)*
+
+   > [!NOTE]
+   > **First-Time Looker OAuth Client Setup (API Explorer)**:
+   > If `lkr-cli` has not yet been registered on your Looker instance, an admin must register it once:
+   > 1. Open the Looker API Explorer endpoint:
+   >    `https://<your-looker-instance>/extensions/marketplace_extension_api_explorer::api-explorer/4.0/methods/Auth/register_oauth_client_app`
+   > 2. Set **`client_id`**: `lkr-cli`
+   > 3. Provide the following JSON payload in the request body:
+   >    ```json
+   >    {
+   >      "redirect_uri": "http://localhost:8000/callback",
+   >      "display_name": "LKR",
+   >      "description": "lkr.dev language server, MCP and CLI",
+   >      "enabled": true
+   >    }
+   >    ```
+   > 4. Check **"I Understand"** and click **"Run"**.
+
+   > [!TIP]
+   > **Remote Hosts, Cloudtop & SSH Port Forwarding**:
+   > The Looker OAuth callback redirects your browser to `http://localhost:8000/callback`.
+   > If developing on a remote machine, Cloudtop, or VM, forward port 8000 through SSH:
+   > ```bash
+   > ssh -L 8000:localhost:8000 <remote-host>
+   > ```
+   > If port 8000 is occupied by an existing process, terminate it before logging in:
+   > ```bash
+   > lsof -ti:8000 | xargs kill -9   # (or: fuser -k 8000/tcp)
+   > ```
+   > **Headless / Agent Fallback**: If your browser redirects to `http://localhost:8000/callback?code=...` and displays a connection error, copy the entire URL from your browser address bar and paste it into chat. The AI agent will curl the callback URL locally on the remote host to complete authentication!
+
+#### Step 4: Launch the AI Demo Creation Flow
+Once authenticated, instruct your AI assistant in chat:
+> *"Create an end-to-end Looker demo for IoT Fleet Analytics (or SaaS ARR, Retail, Fintech)."*
+
+The AI agent orchestrates the entire workflow interactively:
+- **Interactive Schema Co-Design**: Collaborate with the agent on ERD diagrams, field definitions, and micro-sample data previews before generating full scale.
+- **Subagent Hub-and-Spoke Execution**: The parent orchestrator delegates execution to specialized subagents:
   - [`data-engineer`](skills/looker-demo-orchestrator/subagents/data-engineer.md) (Batch synthesis & BQ load)
   - [`lookml-modeler`](skills/looker-demo-orchestrator/subagents/lookml-modeler.md) (Front-door semantic modeling & 3NF triage)
   - [`lookml-snowflake-modeler`](skills/looker-demo-orchestrator/subagents/lookml-snowflake-modeler.md) (3NF modeling, NDT rollups & diamond joins)
@@ -84,9 +153,27 @@ Run with your AI coding assistant (Jetski, Claude Code, or AgentAPI) using the *
   - [`lookml-qa-validator`](skills/looker-demo-orchestrator/subagents/lookml-qa-validator.md) (Dev push, validation & max 3 query self-healing)
   - [`ca-agent-provisioner`](skills/looker-demo-orchestrator/subagents/ca-agent-provisioner.md) (CA agent & golden queries; conditional on user confirmation)
   - [`embed-portal-engineer`](skills/looker-demo-orchestrator/subagents/embed-portal-engineer.md) (Vite embed portal; conditional on user confirmation)
-- **Self-Healing QA**: Automatically fixes missing dimensions or syntax errors during query verification.
 
-### Mode 2: Standalone CLI (Headless Engine)
+---
+
+### ⚙️ Gemini Enterprise (GE) Integration & Looker Service Account Setup
+
+When provisioning Conversational Analytics (CA) Agents to publish into Gemini Enterprise (GE), confirm the **4 mandatory prerequisites**:
+
+1. **Active GE Instance**: An active Gemini Enterprise instance/app exists in your Google Cloud Console.
+2. **Looker Admin Configuration**: GE is configured under Looker **Admin > Gemini Settings**:
+   - **Instance ID** is set.
+   - **Region** (e.g. `us-central1`) is set.
+   - **GCP Project Number** is set.
+3. **Looker Service Account IAM Role**: The Looker Service Account has the **Discovery Engine Admin** (`roles/discoveryengine.admin`) role granted in GCP IAM.
+4. **Looker Service Account GE License**: The Looker Service Account has been explicitly assigned a **Gemini Enterprise user license**.
+
+> [!NOTE]
+> **Automatic Self-Healing Re-Publishing**: If dashboard queries or LookML models are updated during QA validation, `demo-create` automatically re-extracts golden queries, synchronizes the CA Agent, and re-publishes to Gemini Enterprise with automatic verification and retry loops.
+
+---
+
+### 💻 Mode 2: Standalone CLI (Headless Engine)
 
 Execute `demo-create` directly from your terminal or CI/CD pipeline:
 
@@ -96,49 +183,20 @@ demo-create run --project=retail_analytics --scope=internal
 
 ---
 
-## Quickstart & Installation
+## Alternative Installation Methods
 
-### 1. Install as a Persistent CLI Tool (`uv tool` - Recommended)
-
-To make `demo-create`, `looker-demo-cli`, AND `lkr` (`lkr-dev-cli`) globally available on your shell's `PATH` in a persistent, isolated environment:
-
-```bash
-# Install the published package globally
-uv tool install looker-demo-cli
-
-# Now all tools execute directly with zero startup latency and pre-pinned dependencies:
-demo-create pre-check --fix
-lkr auth list
-```
-
-To update to the latest version at any time:
-```bash
-uv tool upgrade looker-demo-cli
-```
-
----
-
-### 2. Run Ephemerally with `uvx` (Zero-Install Alternative)
-
+### Run Ephemerally with `uvx` (Zero-Install Alternative)
 You can also execute the CLI on-demand in an ephemeral cache without pre-installing:
-
 ```bash
 # Run pre-flight audit and auto-fix MCP / skills
 uvx looker-demo-cli pre-check --fix
-
-# Or invoke the demo-create binary explicitly
-uvx --from looker-demo-cli demo-create pre-check --fix
 
 # Run end-to-end interactive demo creator
 uvx looker-demo-cli run --project=retail_analytics --scope=internal
 ```
 
----
-
-### 3. Workspace Virtual Environment & Script Runner
-
+### Workspace Virtual Environment & Script Runner
 To eliminate missing dependency errors across agent scratch scripts or data synthesis pipelines:
-
 ```bash
 # Initialize a local .venv with all demo packages pre-installed:
 demo-create env init
@@ -151,24 +209,15 @@ demo-create run-script scratch/generate_data.py
 demo-create python -c "import pandas, pyarrow, google.cloud.bigquery; print('Ready!')"
 ```
 
----
-
-### 4. Running from Local Source or Git (Development)
-
-If developing locally or testing from a Git repository:
-
-#### Run directly from local source directory:
+### Running from Local Source or Git (Development)
 ```bash
+# Run directly from local source directory:
 uvx --from . demo-create pre-check --fix
-```
 
-#### Run directly from Git:
-```bash
+# Run directly from Git:
 uvx --from git+https://github.com/lkrdev/looker-demo-cli.git demo-create pre-check --fix
-```
 
-#### Local Editable Installation:
-```bash
+# Local Editable Installation:
 cd ~/looker-demo-cli
 demo-create env init
 source .venv/bin/activate

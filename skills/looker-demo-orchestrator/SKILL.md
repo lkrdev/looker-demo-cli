@@ -52,6 +52,20 @@ graph TD
 
 ---
 
+## 0. Bootstrap on Fresh Machines (Mandatory Step 0)
+
+If `demo-create` is not available on `PATH`, the agent **MUST immediately run**:
+```bash
+uv tool install looker-demo-cli
+```
+Immediately after installation, the agent **MUST run**:
+```bash
+demo-create pre-check --fix
+```
+This guarantees all pinned dependencies, MCP servers (`data-designer`, `bigquery`, `knowledge-catalog`), and global agent skills (`~/.gemini/config/skills/`) are synchronized before executing any other commands.
+
+---
+
 ## 1. Pre-Flight Environment Inspection & Interactive Confirmation Gate
 
 Always execute the pre-check inspection first to inspect GCP credentials, available projects, Looker OAuth sessions, and MCP tools:
@@ -62,12 +76,41 @@ lkr auth list
 ```
 
 > [!CAUTION]
-> ### 🛑 Mandatory Pre-Flight Hard Stop Protocol
-> Immediately after running `demo-create pre-check`:
-> 1. **DO NOT execute any further tool calls** (e.g. do not probe database connections, inspect models, or test SDK commands).
-> 2. **IMMEDIATELY invoke `ask_question`** in the very next step to prompt the user to confirm all 4 targets below.
-> 3. If `available_connections` is empty in `pre-check`, provide standard recommendations (e.g. `looker_demo_bigquery`, `default_bigquery_connection`) along with a write-in option rather than trying to query Looker first.
-> 4. Only proceed to Phase 1 (Schema Proposal) after the user has explicitly submitted their answers.
+> ### 🛑 Mandatory Pre-Flight Hard Stop & Immediate Auth Fail Gate
+> 1. **Immediate Fail on Missing Auth**: If `demo-create pre-check` exits with code 1 or reports `is_blocked: true`:
+>    - **GCP Missing / Unauthenticated**: STOP immediately. Prompt the user to run:
+>      ```bash
+>      gcloud auth login
+>      gcloud auth application-default login
+>      gcloud config set project <PROJECT_ID>
+>      ```
+>    - **Looker Unauthenticated**: Prompt the user to run `lkr auth login` (or configure API keys).
+>      If `lkr-cli` OAuth client is not registered on the Looker instance, provide:
+>      - **API Explorer URL**: `https://<your-instance>/extensions/marketplace_extension_api_explorer::api-explorer/4.0/methods/Auth/register_oauth_client_app`
+>      - **Client ID**: `lkr-cli`
+>      - **Request Body JSON**:
+>        ```json
+>        {
+>          "redirect_uri": "http://localhost:8000/callback",
+>          "display_name": "LKR",
+>          "description": "lkr.dev language server, MCP and CLI",
+>          "enabled": true
+>        }
+>        ```
+>      - **Remote Host / SSH Tunneling**: If operating on a remote machine / Cloudtop / VM, remind the user to forward port 8000:
+>        ```bash
+>        ssh -L 8000:localhost:8000 <remote-host>
+>        ```
+>      - **Port 8000 Conflict Cleanup**: Free port 8000 before running `lkr auth login`:
+>        ```bash
+>        lsof -ti:8000 | xargs kill -9   # (or: fuser -k 8000/tcp)
+>        ```
+>      - **Headless / Agent OAuth Callback Fallback**: If the user's browser redirects to `http://localhost:8000/callback?code=...` and cannot load the page, the user can paste the full callback URL into the chat so the agent can curl it locally.
+>    - **DO NOT proceed** until authentication is re-verified via `demo-create pre-check --fix`.
+> 2. **DO NOT execute any further tool calls** (e.g. do not probe database connections, inspect models, or test SDK commands).
+> 3. **IMMEDIATELY invoke `ask_question`** in the very next step to prompt the user to confirm all 4 targets below.
+> 4. If `available_connections` is empty in `pre-check`, provide standard recommendations (e.g. `looker_demo_bigquery`, `default_bigquery_connection`) along with a write-in option rather than trying to query Looker first.
+> 5. Only proceed to Phase 1 (Schema Proposal) after the user has explicitly submitted their answers.
 
 ### Mandatory Interactive Confirmation Checklist:
 Before designing schemas, creating BigQuery datasets, or touching Looker, the agent **MUST explicitly prompt the user** (via `ask_question` or interactive prompt) to confirm all four environment targets:
@@ -305,14 +348,23 @@ Prompt the user via `ask_question`:
   - `Skip Conversational Analytics Agent creation`
 
 ### B. Interactive Gemini Enterprise (GE) Publishing Gate (Parent Orchestrator)
-If CA Agent creation is selected, ask whether to publish to Gemini Enterprise:
-- **Question**: "Would you like to publish this Conversational Analytics Agent to Gemini Enterprise (GE)?"
-- **Guidance / Prerequisite**:
-  > [!IMPORTANT]
-  > Before publishing, confirm that Gemini Enterprise publishing is enabled on the Looker instance (under **Admin > Gemini Settings**) and a Gemini Enterprise (GE) App has been connected.
+If CA Agent creation is selected, prompt the user via `ask_question` to confirm publication to Gemini Enterprise:
+
+> [!CAUTION]
+> ### 🛑 Mandatory 4-Point Gemini Enterprise (GE) Setup Checklist
+> Prior to asking the user to confirm GE publishing, ensure all 4 requirements are fulfilled:
+> 1. **Active GE Instance**: User has an active Gemini Enterprise instance/app in Google Cloud Console.
+> 2. **Looker Admin Configuration**: GE is enabled and configured under Looker **Admin > Gemini Settings** with:
+>    - Instance ID
+>    - Region
+>    - GCP Project Number
+> 3. **Looker Service Account IAM Role**: The Looker Service Account has the **Discovery Engine Admin** (`roles/discoveryengine.admin`) role in the GCP project.
+> 4. **Looker Service Account GE License**: The Looker Service Account has been explicitly assigned a **Gemini Enterprise license**.
+
+- **Question**: "Confirm Gemini Enterprise prerequisites: Do you have a GE instance created, Admin > Gemini configured (Instance ID, Region, Project Number), and the Looker SA granted Discovery Engine Admin + a GE license?"
 - **Options**:
-  - `(Recommended) Yes, publish agent to Gemini Enterprise`
-  - `Skip publishing to Gemini Enterprise`
+  - `(Recommended) Yes, all 4 GE prerequisites are verified; proceed to publish agent to Gemini Enterprise`
+  - `Skip publishing to Gemini Enterprise (internal Looker CA Agent only)`
 
 ### C. Procedural Delegation: `ca-agent-provisioner` Subagent
 Once confirmed, delegate Golden Query extraction, agent creation, and GE publishing to **[`ca-agent-provisioner`](subagents/ca-agent-provisioner.md)**:
@@ -334,7 +386,8 @@ subagent:
 The subagent follows the strict Looker 4.0 Golden Query rules:
 1. `create_agent(body={...})` with persona, query patterns, and domain rules.
 2. For each dashboard tile: `create_query` $\to$ get `expanded_share_url` $\to$ `create_golden_query` with exactly **ONE question** $\to$ `update_agent` linking all IDs.
-3. If `publish_ge: true`: executes `POST /api/4.0/internal/agents/{agent_id}/publish` with body `{}`.
+3. If `publish_ge: true`: executes `POST /api/4.0/internal/agents/{agent_id}/publish` with body `{}` and verifies publication state via `GET /api/4.0/internal/agents/{agent_id}` with automatic retries (up to 3 attempts).
+4. **Re-Publishing Guarantee**: If any LookML self-healing or dashboard corrections occurred during QA validation, the orchestrator/subagent **MUST re-extract golden queries, update the agent, and re-publish to GE** so that the agent is guaranteed to be operational in Gemini Enterprise.
 
 ---
 

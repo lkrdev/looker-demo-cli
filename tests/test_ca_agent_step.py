@@ -77,6 +77,39 @@ class TestCAAgentStep(unittest.TestCase):
             self.assertIn("monthly breakdown", gqs[1]["prompt"])
             self.assertIn("breakdown of distribution by status", gqs[2]["prompt"])
 
+    def test_publish_agent_to_ge(self):
+        from unittest.mock import MagicMock, patch
+        from looker_demo_cli.workflow.steps.step_ca_agent import publish_agent_to_ge
+
+        # 1. Test success on first attempt
+        mock_resp_success = MagicMock(status_code=200)
+        mock_resp_verify = MagicMock(status_code=200, json=lambda: {"publish_status": "published"})
+
+        with patch("requests.post", return_value=mock_resp_success) as mock_post, \
+             patch("requests.get", return_value=mock_resp_verify) as mock_get:
+            res = publish_agent_to_ge(
+                instance_url="https://demo.looker.com",
+                agent_id="42",
+                headers={"Authorization": "Bearer fake_token"},
+                max_attempts=1,
+            )
+            self.assertTrue(res)
+            mock_post.assert_called_once()
+
+        # 2. Test retry on failure
+        mock_resp_fail = MagicMock(status_code=500, text="Internal Error")
+        with patch("requests.post", side_effect=[mock_resp_fail, mock_resp_success]) as mock_post_retry, \
+             patch("requests.get", return_value=mock_resp_verify), \
+             patch("time.sleep"):
+            res = publish_agent_to_ge(
+                instance_url="https://demo.looker.com",
+                agent_id="42",
+                headers={"Authorization": "Bearer fake_token"},
+                max_attempts=2,
+            )
+            self.assertTrue(res)
+            self.assertEqual(mock_post_retry.call_count, 2)
+
 
 if __name__ == "__main__":
     unittest.main()

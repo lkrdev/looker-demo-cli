@@ -5,8 +5,10 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
-from typing import Annotated, Optional
+from typing import Annotated, List, Optional
 import typer
+from rich.panel import Panel
+from rich.syntax import Syntax
 from rich.table import Table
 
 from looker_demo_cli.config import (
@@ -25,7 +27,12 @@ from looker_demo_cli.precheck.gcp_auth import (
     inspect_gcp_accounts,
     list_available_gcp_projects,
 )
-from looker_demo_cli.precheck.looker_auth import check_looker_auth
+from looker_demo_cli.precheck.looker_auth import (
+    LKR_OAUTH_CLIENT_ID,
+    LKR_OAUTH_CLIENT_PAYLOAD,
+    LKR_OAUTH_REDIRECT_URI,
+    check_looker_auth,
+)
 from looker_demo_cli.precheck.mcp_checker import check_mcp_servers, patch_mcp_config
 from looker_demo_cli.precheck.skills_organizer import audit_and_organize_skills
 from looker_demo_cli.utils.console import (
@@ -115,15 +122,32 @@ def pre_check(
     # 5. Check Looker Auth
     looker_status = check_looker_auth()
 
-    # Determine if re-auth is needed
+    # Determine if re-auth or account setup is needed
     reauth_required = any(
         (a.is_active and not a.has_bigquery_access) or ("reauth" in (a.error_message or "").lower())
         for a in gcp_accounts
     )
     no_accounts_configured = len(gcp_accounts) == 0
 
+    # Determine blocking conditions
+    blocking_reasons: List[str] = []
+    if no_accounts_configured:
+        blocking_reasons.append("No Google Cloud accounts configured. Run `gcloud auth login` and `gcloud auth application-default login`.")
+    elif reauth_required:
+        blocking_reasons.append("Active GCP account requires reauthentication. Run `gcloud auth login` and `gcloud auth application-default login`.")
+    elif not any(a.has_bigquery_access for a in gcp_accounts):
+        blocking_reasons.append(f"No configured GCP account has BigQuery access on project '{effective_project or 'default'}'.")
+
+    if not looker_status.is_authenticated:
+        blocking_reasons.append(f"Looker is not authenticated ({looker_status.error_message or 'No active OAuth session or API key'}).")
+
+    is_blocked = len(blocking_reasons) > 0
+
     if output_json:
         report = {
+            "status": "BLOCKED" if is_blocked else "HEALTHY",
+            "is_blocked": is_blocked,
+            "blocking_reasons": blocking_reasons,
             "runtime_environment": env_status.model_dump(),
             "active_gcp_context": gcp_context.model_dump(),
             "gcp_accounts": [a.model_dump() for a in gcp_accounts],
@@ -132,17 +156,36 @@ def pre_check(
             "mcp_servers": [m.model_dump() for m in mcp_statuses],
             "skills": [s.model_dump() for s in skill_statuses],
             "looker_auth": looker_status.model_dump(),
+            "oauth_registration_payload": LKR_OAUTH_CLIENT_PAYLOAD,
             "agent_instructions": {
-                "mandatory_stop_gate": "CRITICAL: STOP all further tool executions immediately after pre-check. Do NOT probe database connections, inspect models, or test Looker SDKs. You MUST prompt the user (via ask_question) to confirm the 4 environment targets below before taking any further action.",
+                "is_blocked": is_blocked,
+                "blocking_reasons": blocking_reasons,
+                "mandatory_stop_gate": (
+                    "CRITICAL: STOP all further tool executions immediately after pre-check. "
+                    "If is_blocked is true, do NOT proceed. Prompt the user with the required commands to authenticate. "
+                    "If is_blocked is false, prompt the user (via ask_question) to confirm the 4 environment targets before taking any further action."
+                ),
+                "gcp_auth_commands": [
+                    "gcloud auth login",
+                    "gcloud auth application-default login",
+                    "gcloud config set project <PROJECT_ID>",
+                ],
+                "looker_oauth_commands": [
+                    "lkr auth login",
+                    "Register OAuth client 'lkr-cli' in Looker API Explorer with redirect_uri 'http://localhost:8000/callback'",
+                    "If remote/SSH, forward port: ssh -L 8000:localhost:8000 <remote_host>",
+                    "If port 8000 conflict: lsof -ti:8000 | xargs kill -9",
+                    "If browser cannot reach localhost, paste redirected URL in chat so agent can curl it locally",
+                ],
                 "gcp_account": "Prompt user to select/confirm the active GCP account from gcp_accounts.",
                 "gcp_project": "Prompt user to select/confirm the target Google Cloud project from available_gcp_projects.",
-                "looker_instance": "Prompt user to select/confirm the target Looker OAuth instance from available_oauth_instances (e.g. dev-looker.lukapuka.co vs dev-googledemo2).",
-                "database_connection": "Prompt user to confirm the Looker database connection name (suggest defaults like looker_demo_bigquery / default_bigquery_connection, or allow write-in).",
-                "reauth_action": "If reauth_required is true, prompt the user to run 'gcloud auth login' and 'gcloud auth application-default login'.",
-                "setup_commands": "If no accounts or projects are configured on gcloud, prompt the user to run: 'gcloud auth login', 'gcloud auth application-default login', and 'gcloud config set project <PROJECT_ID>'.",
+                "looker_instance": "Prompt user to select/confirm the target Looker OAuth instance from available_oauth_instances.",
+                "database_connection": "Prompt user to confirm the Looker database connection name.",
             },
         }
         typer.echo(json.dumps(report, indent=2))
+        if is_blocked:
+            raise typer.Exit(code=1)
         return
 
     # Render Visual Summary
@@ -174,20 +217,6 @@ def pre_check(
         console.print(t_gcp)
         if len(gcp_accounts) > 1:
             print_info("Multiple GCP accounts found. Agent/User Instruction: Confirm which GCP account to use for synthesis.")
-
-    if no_accounts_configured:
-        console.print("\n[bold red]⚠️  No GCP Accounts Configured[/bold red]")
-        console.print("[yellow]Please run the following commands to authenticate with Google Cloud:[/yellow]")
-        console.print("  [bold white]$ gcloud auth login[/bold white]")
-        console.print("  [bold white]$ gcloud auth application-default login[/bold white]")
-        console.print("  [bold white]$ gcloud config set project <PROJECT_ID>[/bold white]")
-
-    elif reauth_required:
-        console.print("\n[bold red]⚠️  GCP Reauthentication Required[/bold red]")
-        console.print("[yellow]Agent & User Instruction:[/yellow] One or more active GCP accounts require reauthentication.")
-        console.print("Please prompt the user to run the following in their terminal:")
-        console.print("  [bold white]$ gcloud auth login[/bold white]")
-        console.print("  [bold white]$ gcloud auth application-default login[/bold white]")
 
     console.print("\n[bold cyan]3. Available Google Cloud Projects[/bold cyan]")
     if available_projects:
@@ -241,13 +270,66 @@ def pre_check(
         print_warning(f"Looker not authenticated: {looker_status.error_message}")
         if looker_status.available_oauth_instances:
             console.print(f"[dim]Found {len(looker_status.available_oauth_instances)} saved OAuth session(s) in ~/.lkr/auth.db[/dim]")
-        console.print("[yellow]To authenticate Looker, choose one of the following methods:[/yellow]")
-        console.print("  1. [bold white]OAuth (Recommended):[/bold white] Run `uvx --from \"lkr-dev-cli[codemode]\" lkr-dev-cli auth login`")
-        console.print("  2. [bold white]API Key:[/bold white] Set `LOOKERSDK_BASE_URL`, `LOOKERSDK_CLIENT_ID`, `LOOKERSDK_CLIENT_SECRET` (or add to `.env`)")
-        console.print("[dim]Note: Code Mode commands execute directly via CLI (`uvx --from 'lkr-dev-cli[codemode]' lkr-dev-cli code-mode sandbox --code='...'`)[/dim]")
 
     if not fix and any(not m.is_configured for m in mcp_statuses):
         print_info("\nTip: Run `demo-create pre-check --fix` to automatically repair missing MCP configs and organize skills.")
+
+    # Render Blocked Banner and Guidance if authentication is missing
+    if is_blocked:
+        console.print("\n")
+        console.print(
+            Panel.fit(
+                "[bold white on red] 🛑 EXECUTION BLOCKED: AUTHENTICATION REQUIRED [/bold white on red]\n\n"
+                + "\n".join(f"[bold red]❌ {r}[/bold red]" for r in blocking_reasons)
+                + "\n\n[bold yellow]You must resolve the authentication requirements below before proceeding with demo creation.[/bold yellow]",
+                title="[bold red]PRE-CHECK BLOCKED[/bold red]",
+                border_style="red",
+            )
+        )
+
+        if no_accounts_configured or reauth_required or not any(a.has_bigquery_access for a in gcp_accounts):
+            console.print("\n[bold cyan]1. Google Cloud Authentication Commands:[/bold cyan]")
+            console.print("  Authenticate your GCP user account and configure Application Default Credentials (ADC):")
+            console.print("    [bold white]$ gcloud auth login[/bold white]")
+            console.print("    [bold white]$ gcloud auth application-default login[/bold white]")
+            console.print("    [bold white]$ gcloud config set project <PROJECT_ID>[/bold white]")
+
+        if not looker_status.is_authenticated:
+            console.print("\n[bold cyan]2. Looker Authentication & OAuth Setup:[/bold cyan]")
+            console.print("  [bold]A. Login via OAuth (Recommended):[/bold]")
+            console.print("     [bold white]$ lkr auth login[/bold white]")
+            console.print("     (or: [bold white]$ uvx --from \"lkr-dev-cli[codemode]\" lkr-dev-cli auth login[/bold white])")
+
+            console.print("\n  [bold]B. First-Time OAuth Client Registration in Looker:[/bold]")
+            console.print("     If `lkr-cli` has not been registered on this Looker instance, an admin must register it once:")
+            console.print("     [bold underline]API Explorer Method:[/bold underline]")
+            console.print("     Open: [cyan]https://<your-looker-instance>/extensions/marketplace_extension_api_explorer::api-explorer/4.0/methods/Auth/register_oauth_client_app[/cyan]")
+            console.print("     - [bold]client_id:[/bold] [green]lkr-cli[/green]")
+            console.print("     - [bold]Body (JSON):[/bold]")
+            oauth_payload_json = json.dumps(LKR_OAUTH_CLIENT_PAYLOAD, indent=2)
+            console.print(Syntax(oauth_payload_json, "json", theme="monokai", line_numbers=False))
+            console.print("     - Check [bold]\"I Understand\"[/bold] and click [bold]\"Run\"[/bold].")
+
+            console.print("\n  [bold]C. Remote Host / Cloudtop / SSH Port Forwarding:[/bold]")
+            console.print("     Because the OAuth callback redirects to [cyan]http://localhost:8000/callback[/cyan], forward port 8000 from your local machine:")
+            console.print("     [bold white]$ ssh -L 8000:localhost:8000 <remote-host>[/bold white]")
+
+            console.print("\n  [bold]D. Port 8000 Conflict Resolution:[/bold]")
+            console.print("     If port 8000 is in use by another process, free it before running `lkr auth login`:")
+            console.print("     [bold white]$ lsof -ti:8000 | xargs kill -9[/bold white]   [dim](or: fuser -k 8000/tcp)[/dim]")
+
+            console.print("\n  [bold]E. Headless / Agent OAuth Callback Fallback:[/bold]")
+            console.print("     If your browser redirects to [cyan]http://localhost:8000/callback?code=...[/cyan] and cannot load the page,")
+            console.print("     copy the full URL from your browser address bar and paste it into chat.")
+            console.print("     The AI agent will curl the callback URL locally on the remote machine to finish authentication.")
+
+            console.print("\n  [bold]Alternatively, configure API Keys in your environment or `.env`:[/bold]")
+            console.print("     LOOKERSDK_BASE_URL=https://<your-instance>.looker.com")
+            console.print("     LOOKERSDK_CLIENT_ID=<client_id>")
+            console.print("     LOOKERSDK_CLIENT_SECRET=<client_secret>")
+
+        console.print("\n[bold red]Execution blocked. Please complete authentication and re-run `demo-create pre-check --fix`.[/bold red]\n")
+        raise typer.Exit(code=1)
 
 
 @app.command(name="run")

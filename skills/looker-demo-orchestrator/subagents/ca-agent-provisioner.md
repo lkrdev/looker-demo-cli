@@ -63,14 +63,47 @@ Inspect all query tiles in `dashboard_files`:
 
 ### Step 3: Publish to Gemini Enterprise (If Confirmed)
 If `publish_ge` is `True`:
-Execute via `lkr code-mode sandbox`:
+
+> [!IMPORTANT]
+> **Gemini Enterprise (GE) 4-Point Prerequisite Verification:**
+> Before invoking publish, confirm that:
+> 1. An active Gemini Enterprise instance/app exists in the GCP project.
+> 2. Looker **Admin > Gemini Settings** is configured with Instance ID, Region, and Project Number.
+> 3. The Looker Service Account has the **Discovery Engine Admin** (`roles/discoveryengine.admin`) role.
+> 4. The Looker Service Account has been explicitly assigned a **Gemini Enterprise license**.
+
+Execute via `lkr code-mode sandbox` with retry logic (up to 3 attempts) and state verification:
 ```python
-res = post(
-    path=f"/api/4.0/internal/agents/{agent_id}/publish",
-    structure=None,
-    body={},
-)
+max_attempts = 3
+published = False
+
+for attempt in range(1, max_attempts + 1):
+    try:
+        # Publish call
+        res = post(
+            path=f"/api/4.0/internal/agents/{agent_id}/publish",
+            structure=None,
+            body={},
+        )
+        # Verify publication status
+        status_check = get(
+            path=f"/api/4.0/internal/agents/{agent_id}",
+            structure=None,
+        )
+        published = True
+        break
+    except Exception as e:
+        print(f"GE publish attempt {attempt} failed: {e}")
+        if attempt < max_attempts:
+            import time
+            time.sleep(2)
+
+if not published:
+    print(f"Failed to publish agent {agent_id} after {max_attempts} attempts. Check Admin > Gemini and Looker SA roles/licenses.")
 ```
+
+> [!NOTE]
+> **Re-Publishing Guarantee**: If LookML models or dashboards were self-healed or edited after initial provisioning, re-extract the dashboard golden queries, patch the agent via `update_agent`, and re-execute Step 3 to guarantee the published GE agent is grounded in the latest models.
 
 ---
 

@@ -98,6 +98,61 @@ Styling & Response Guidelines:
 """
 
 
+def publish_agent_to_ge(instance_url: str, agent_id: str, headers: Dict[str, str], max_attempts: int = 3) -> bool:
+    """Publish CA Agent to Gemini Enterprise with verification and automatic retry up to max_attempts."""
+    clean_url = instance_url.rstrip("/")
+    print_info("Gemini Enterprise (GE) Prerequisites Checklist:")
+    print_info("  1. Active Gemini Enterprise instance/app in Google Cloud Console")
+    print_info("  2. Looker Admin -> Gemini Settings configured (Instance ID, Region, Project Number)")
+    print_info("  3. Looker Service Account granted 'roles/discoveryengine.admin' role")
+    print_info("  4. Looker Service Account explicitly assigned a Gemini Enterprise license")
+
+    if not headers:
+        print_warning("No Looker authentication headers available to publish to Gemini Enterprise.")
+        return False
+
+    for attempt in range(1, max_attempts + 1):
+        print_info(f"Publishing CA Agent `{agent_id}` to Gemini Enterprise (GE) (Attempt {attempt}/{max_attempts})...")
+        try:
+            r_pub = requests.post(
+                f"{clean_url}/api/4.0/internal/agents/{agent_id}/publish",
+                json={},
+                headers=headers,
+                timeout=15,
+            )
+            if r_pub.status_code in (200, 201):
+                # Verify agent publication state
+                try:
+                    r_verify = requests.get(
+                        f"{clean_url}/api/4.0/internal/agents/{agent_id}",
+                        headers=headers,
+                        timeout=10,
+                    )
+                    if r_verify.status_code == 200:
+                        agent_data = r_verify.json()
+                        pub_status = agent_data.get("publish_status") or agent_data.get("status") or "published"
+                        print_info(f"Verified agent publication state: `{pub_status}`.")
+                except Exception:
+                    pass
+
+                print_success(f"Agent `{agent_id}` successfully published to Gemini Enterprise (GE)!")
+                return True
+            else:
+                print_warning(
+                    f"GE publish attempt {attempt} returned HTTP {r_pub.status_code}: {r_pub.text[:300]}\n"
+                    "Please verify: 1) Admin > Gemini is configured, 2) Looker SA has Discovery Engine Admin, and 3) Looker SA has a GE license."
+                )
+        except Exception as pub_err:
+            print_warning(f"GE publish attempt {attempt} error: {pub_err}")
+
+        if attempt < max_attempts:
+            import time
+            time.sleep(2)
+
+    print_error(f"Failed to publish CA Agent `{agent_id}` to Gemini Enterprise after {max_attempts} attempts.")
+    return False
+
+
 def run_ca_agent_step(state: FlowState, custom_instructions: Optional[str] = None, publish_to_ge: bool = True) -> FlowState:
     """Step 6: Provision Conversational Analytics Agent, register dashboard golden queries, and publish to GE."""
     print_step_header(6, state.total_steps, "Conversational Analytics Agent & Golden Queries Provisioning")
@@ -251,21 +306,11 @@ print(f"AGENT_ID_OUTPUT:{{agent.get('id')}}")
 
     # 4. Publish Agent to Gemini Enterprise (GE) if requested
     if publish_to_ge:
-        print_info(f"Publishing CA Agent `{agent_id}` to Gemini Enterprise (GE)...")
-        if headers:
-            try:
-                r_pub = requests.post(
-                    f"{state.looker_instance_url}/api/4.0/internal/agents/{agent_id}/publish",
-                    json={},
-                    headers=headers,
-                    timeout=15,
-                )
-                if r_pub.status_code in (200, 201):
-                    state.published_to_ge = True
-                    print_success("Agent successfully published to Gemini Enterprise (GE)!")
-                else:
-                    print_warning(f"GE publish endpoint returned status {r_pub.status_code} (Ensure GE publishing is enabled in Looker Admin).")
-            except Exception as pub_err:
-                print_warning(f"Notice while publishing to Gemini Enterprise: {pub_err}")
+        state.published_to_ge = publish_agent_to_ge(
+            instance_url=state.looker_instance_url,
+            agent_id=agent_id,
+            headers=headers,
+            max_attempts=3,
+        )
 
     return state

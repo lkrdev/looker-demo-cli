@@ -63,11 +63,21 @@ def get_authenticated_oauth_instances() -> List[Dict[str, Any]]:
     return instances
 
 
+LKR_OAUTH_CLIENT_ID = "lkr-cli"
+LKR_OAUTH_REDIRECT_URI = "http://localhost:8000/callback"
+LKR_OAUTH_CLIENT_PAYLOAD = {
+    "redirect_uri": "http://localhost:8000/callback",
+    "display_name": "LKR",
+    "description": "lkr.dev language server, MCP and CLI",
+    "enabled": True,
+}
+
+
 def validate_looker_oauth_preflight(instance_url: str) -> Tuple[bool, str]:
     """Run a pre-flight GET check against the Looker instance auth endpoint for the lkr-cli OAuth client."""
     clean_url = instance_url.rstrip("/")
     preflight_url = (
-        f"{clean_url}/auth?client_id=lkr-cli&redirect_uri=http%3A%2F%2Flocalhost%3A8080%2Fcallback"
+        f"{clean_url}/auth?client_id={LKR_OAUTH_CLIENT_ID}&redirect_uri=http%3A%2F%2Flocalhost%3A8000%2Fcallback"
         f"&response_type=code&scope=api&state=preflight_state&code_challenge=preflight_challenge&code_challenge_method=S256"
     )
     try:

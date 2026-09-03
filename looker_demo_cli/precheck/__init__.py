@@ -7,6 +7,9 @@ from looker_demo_cli.precheck.gcp_auth import (
     select_gcp_credentials,
 )
 from looker_demo_cli.precheck.looker_auth import (
+    LKR_OAUTH_CLIENT_ID,
+    LKR_OAUTH_CLIENT_PAYLOAD,
+    LKR_OAUTH_REDIRECT_URI,
     LookerAuthStatus,
     check_looker_auth,
     get_authenticated_oauth_instances,
@@ -18,6 +21,9 @@ from looker_demo_cli.precheck.skills_organizer import audit_and_organize_skills
 __all__ = [
     "GCPAccountInfo",
     "GCPActiveContext",
+    "LKR_OAUTH_CLIENT_ID",
+    "LKR_OAUTH_CLIENT_PAYLOAD",
+    "LKR_OAUTH_REDIRECT_URI",
     "LookerAuthStatus",
     "audit_and_organize_skills",
     "check_looker_auth",
