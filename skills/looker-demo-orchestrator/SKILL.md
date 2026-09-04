@@ -50,6 +50,14 @@ graph TD
 | [`ca-agent-provisioner`](subagents/ca-agent-provisioner.md) | Provisions CA Agent, extracts Golden Queries, links to agent, publishes to Gemini Enterprise. *(Spawned only if explicitly confirmed)*. | Code Mode, Looker REST API. |
 | [`embed-portal-engineer`](subagents/embed-portal-engineer.md) | Scaffolds `looker-embed-demo`, injects environment variables, customizes brand theme tokens, verifies build. *(Spawned only if explicitly confirmed)*. | Bash, frontend filesystem, Vite/npm. |
 
+> [!IMPORTANT]
+> ### Mandatory Programmatic Subagent Registration via `define_subagent`
+> To maintain strict role boundaries and prevent parent context saturation, the parent orchestrator **MUST register each specialized subagent via `define_subagent`** at the beginning of the workflow:
+> - Supply the exact contents of the respective `.md` file in `subagents/` as the `system_prompt`.
+> - Configure `enable_write_tools=True` and `enable_subagent_tools=False`.
+> - **Never execute LookML modeling, dashboard authoring, performance optimization, QA validation, or CA agent provisioning directly inside the parent conversation turn.**
+> - Subagents do NOT have `ask_question`; all interactive user confirmations remain strictly with the parent orchestrator.
+
 ---
 
 ## 0. Bootstrap on Fresh Machines (Mandatory Step 0)
@@ -226,6 +234,7 @@ subagent:
 ```
 
 - **Triage Protocol**:
+  - **Existing BigQuery Dataset & Knowledge Catalog**: If modeling from an existing dataset (`dataset_id` provided or running `demo-create lookml model --dataset <id>`), introspect BigQuery table schema, primary/foreign key constraints (`INFORMATION_SCHEMA.TABLE_CONSTRAINTS`), and Google Cloud Data Catalog / Dataplex metadata (`@bigquery` entry group). If the `knowledge-catalog` MCP server is installed, invoke it to retrieve business glossaries and column tags to enrich LookML descriptions.
   - **Standard / Star Schemas**: `lookml-modeler` writes `.view.lkml`, primary keys, formatted measures (`usd_0`, `percent_2`, `decimal_1`), drill fields, and `.explore.lkml` directly.
   - **Normalized 3NF / Snowflake Schemas**: If multiple 1:N child collections or diamond joins are detected, hand off to **[`lookml-snowflake-modeler`](subagents/lookml-snowflake-modeler.md)**:
     - Runs `schema_graph_analyzer.py` on the schema DAG.
@@ -328,16 +337,14 @@ graph LR
 > **Conditional Subagent Trigger**:
 > The **[`ca-agent-provisioner`](subagents/ca-agent-provisioner.md)** subagent is **ONLY spawned if the user explicitly confirms CA Agent creation** in the interactive gate below.
 
-```mermaid
-graph TD
-    Deploy["Step 4: LookML Model & Dashboard Deployed"] --> PromptCA{"Interactive Gate (Orchestrator):<br/>Create Conversational Analytics Agent?"}
-    
-    PromptCA -->|Skip| Scaffolding["Section 6: Embed Portal Gate"]
-    PromptCA -->|Yes / Custom| SpawnCA["Spawn Subagent: ca-agent-provisioner<br/>1. Create CA Agent<br/>2. Extract & Link Golden Queries<br/>3. Publish to GE (if confirmed)"]
-    
-    SpawnCA --> ReturnCA["Return Summary: agent_id, golden_queries_count, chat_url"]
-    ReturnCA --> Scaffolding
-```
+> [!CAUTION]
+> ### 🛑 Strict Sequential Gate Isolation: NEVER Bundle CA, GE, and Embed Gates
+> The orchestrator **MUST present each post-deployment gate sequentially in its own discrete step**:
+> 1. **Phase 1: LookML Model & Dashboard Deployed to Production**
+> 2. **Phase 2: CA Agent Confirmation Gate** (`ask_question`)
+> 3. **Phase 3: GE Verification & Publishing Gate** (`ask_question`, if CA Agent created)
+> 4. **Phase 4: External Embed Portal Gate** (`ask_question`, ONLY after Looker assets, CA Agent, and GE status are completely finished)
+> Under NO circumstances may the agent bundle these questions into a single multi-question modal.
 
 ### A. Interactive CA Agent Confirmation Gate (Parent Orchestrator)
 Prompt the user via `ask_question`:
@@ -347,24 +354,23 @@ Prompt the user via `ask_question`:
   - `Provide custom system instructions before provisioning`
   - `Skip Conversational Analytics Agent creation`
 
-### B. Interactive Gemini Enterprise (GE) Publishing Gate (Parent Orchestrator)
-If CA Agent creation is selected, prompt the user via `ask_question` to confirm publication to Gemini Enterprise:
+### B. Interactive Gemini Enterprise (GE) Verification & Publishing Gate (Parent Orchestrator)
+If CA Agent creation is selected, the orchestrator/CLI checks Looker GE settings via `GET /api/4.0/gemini_enablement`:
 
-> [!CAUTION]
-> ### 🛑 Mandatory 4-Point Gemini Enterprise (GE) Setup Checklist
-> Prior to asking the user to confirm GE publishing, ensure all 4 requirements are fulfilled:
-> 1. **Active GE Instance**: User has an active Gemini Enterprise instance/app in Google Cloud Console.
-> 2. **Looker Admin Configuration**: GE is enabled and configured under Looker **Admin > Gemini Settings** with:
->    - Instance ID
->    - Region
->    - GCP Project Number
-> 3. **Looker Service Account IAM Role**: The Looker Service Account has the **Discovery Engine Admin** (`roles/discoveryengine.admin`) role in the GCP project.
-> 4. **Looker Service Account GE License**: The Looker Service Account has been explicitly assigned a **Gemini Enterprise license**.
+- **Case 1: GE is already configured** (`ai_ge_project_id`, `ai_ge_instance_id`, `ai_ge_location` populated):
+  - Displays the active GE app ID, location, and GCP project.
+  - Prompts user: "Gemini Enterprise is configured for app `{ge_instance_id}`. Publish CA Agent to this GE app?"
+  - Options:
+    - `(Recommended) Yes, publish agent to existing Gemini Enterprise app`
+    - `Reconfigure Looker with a different Gemini Enterprise app`
+    - `Skip Gemini Enterprise publishing (internal Looker only)`
 
-- **Question**: "Confirm Gemini Enterprise prerequisites: Do you have a GE instance created, Admin > Gemini configured (Instance ID, Region, Project Number), and the Looker SA granted Discovery Engine Admin + a GE license?"
-- **Options**:
-  - `(Recommended) Yes, all 4 GE prerequisites are verified; proceed to publish agent to Gemini Enterprise`
-  - `Skip publishing to Gemini Enterprise (internal Looker CA Agent only)`
+- **Case 2: GE is not configured** (or user requested reconfigure):
+  - Automatically queries active GCP project for available GE apps via Discovery Engine API / `gcloud`.
+  - Prompts user to select from discovered GE apps (or enter custom App ID / Region).
+  - Updates Looker settings via `PATCH /api/4.0/gemini_enablement` sending the full payload with `ai_ge_publish_enabled: true`.
+  - Grants `roles/discoveryengine.admin` to the Looker SA email via `gcloud projects add-iam-policy-binding`.
+  - Confirms the Looker SA has a Gemini Enterprise license before proceeding to publish.
 
 ### C. Procedural Delegation: `ca-agent-provisioner` Subagent
 Once confirmed, delegate Golden Query extraction, agent creation, and GE publishing to **[`ca-agent-provisioner`](subagents/ca-agent-provisioner.md)**:
@@ -555,6 +561,27 @@ In strict compliance with the **Looker Demo Orchestrator** pre-deployment gate, 
 - **Chat Agent Connected**: `{ca_agent_id}`
 - **Build Status**: Verified 0 TypeScript / compilation errors
 ```
+
+---
+
+## 8. Modular CLI Execution & State Persistence
+
+When performing isolated operations or delegating granular tasks to specialized subagents, use the modular CLI subcommands. Execution state is persisted across invocations in `.demo-state.json` (auto-loaded and updated with CLI option overrides):
+
+| Command Group | Subcommand | Purpose | Key Flags |
+|---|---|---|---|
+| **`demo-create data`** | `generate` | Synthesizes local Parquet dataset tables | `--domain`, `--scale`, `--output-dir` |
+| | `upload` | Creates dataset and uploads Parquet tables to BigQuery | `--parquet-dir`, `--project`, `--dataset`, `--location` |
+| | `inspect` | Introspects tables and schema in existing BigQuery dataset | `--project`, `--dataset` |
+| **`demo-create lookml`** | `model` | Generates LookML views, explores, and models from BigQuery (with Knowledge Catalog & PK/FK constraints) or Parquet | `--project`, `--dataset`, `--parquet-dir`, `--connection`, `--output-dir` |
+| | `deploy` | Pushes staged LookML to dev workspace, validates, runs query tests, and deploys to production | `--project`, `--lookml-dir`, `--oauth-account` |
+| **`demo-create agent`** | `create` | Creates CA Agent, grounds golden queries, and optionally publishes to GE | `--model`, `--explore`, `--dashboard-id`, `--publish-ge` |
+| | `golden-queries` | Extracts queries from dashboard files/IDs and links as Golden Queries | `--agent-id`, `--dashboard-id`, `--dashboards-dir` |
+| | `publish` | Verifies GE config and publishes agent to connected GE apps | `--agent-id`, `--oauth-account` |
+| **`demo-create embed`** | `scaffold` | Scaffolds React/Vite embed portal workspace with `.env` and theme tokens | `--project`, `--dashboard-id`, `--agent-id`, `--brand-name`, `--target-dir` |
+| **`demo-create ge`** | `status` | Displays current Looker Gemini enablement and GE config | `--oauth-account` |
+| | `configure` | Discovers GE apps on GCP, configures Looker GE settings, and grants IAM roles | `--instance-id`, `--location`, `--gcp-project` |
+
 
 
 

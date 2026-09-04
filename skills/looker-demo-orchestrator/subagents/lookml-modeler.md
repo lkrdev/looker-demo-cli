@@ -9,9 +9,9 @@ tools:
   - replace_file_content
   - list_dir
   - grep_search
+  - call_mcp_tool
 disallowedTools:
   - ask_question
-  - call_mcp_tool
 skills:
   - lookml-view
   - lookml-explore
@@ -32,11 +32,24 @@ The parent orchestrator invokes you with:
 - `connection_name`: Looker database connection name (e.g. `bigquery_connection`).
 - `lookml_dir`: Working directory for LookML files (e.g. `lookml/`).
 - `table_specs`: List of table specifications (table names, types, schema fields, primary keys, foreign keys).
+- `dataset_id`: (Optional) Existing BigQuery dataset to model from.
 - `domain_metrics`: Primary business KPIs to model.
 
 ---
 
-## 2. Schema Triage & Execution Protocol
+## 2. Knowledge Catalog & Existing Dataset Introspection
+
+When modeling an existing BigQuery dataset (`dataset_id` provided or running `demo-create lookml model --dataset <id>`):
+1. **Knowledge Catalog MCP Integration**:
+   - If the `knowledge-catalog` MCP server is available, use `call_mcp_tool` or `demo-create lookml model --dataset <id>` to introspect table semantics, business glossaries, column descriptions, and primary/foreign key relationships.
+   - The CLI automatically queries BigQuery `INFORMATION_SCHEMA.TABLE_CONSTRAINTS` and Google Cloud Data Catalog / Dataplex entry tags (`@bigquery` entry group).
+2. **Incorporate Semantic Metadata**:
+   - Map Data Catalog field descriptions directly into LookML `description:` parameters.
+   - Use discovered foreign key constraints to define join paths and explore topologies.
+
+---
+
+## 3. Schema Triage & Execution Protocol
 
 ### Step 1: Triage Schema Complexity
 Evaluate the `table_specs` relational graph:
@@ -55,25 +68,35 @@ Evaluate the `table_specs` relational graph:
 
 ### Step 2: Direct Modeling (Simple / Star Schemas)
 
-1. **Generate View Files (`views/*.view.lkml`)**:
+1. **Automated CLI Modeling (Recommended)**:
+   You can invoke the CLI to introspect BigQuery/Knowledge Catalog metadata and scaffold views and explores:
+   ```bash
+   demo-create lookml model --project <project_name> --dataset <dataset_id> --connection <connection_name> --output-dir lookml/
+   ```
+   Or model from local Parquet files:
+   ```bash
+   demo-create lookml model --project <project_name> --parquet-dir <parquet_path> --connection <connection_name> --output-dir lookml/
+   ```
+
+2. **Generate View Files (`views/*.view.lkml`)**:
    - Explicit `primary_key: yes` on unique grain column for every view.
    - Explicit `label:` and `description:` on EVERY dimension, dimension group, and measure.
    - Formatted primary metrics (`type: sum`, `type: average`, `type: count_distinct`) with `value_format_name:` (e.g. `usd_0`, `percent_2`, `decimal_1`).
    - Drill fields (`drill_fields: [...]`) on primary measures.
    - Clean Title Case labels (e.g. `label: "Order Created Date"`).
 
-2. **Generate Explores (`explores/*.explore.lkml`)**:
+3. **Generate Explores (`explores/*.explore.lkml`)**:
    - Base View sits on the central fact table.
    - Dimensions joined `relationship: many_to_one` with explicit `sql_on:`.
    - Clean `view_label:` headers for clarity in the Looker field picker.
 
-3. **Generate Model File (`models/*.model.lkml`)**:
+4. **Generate Model File (`models/*.model.lkml`)**:
    - Include all view and explore files (`include: "/views/**/*.view.lkml"`, `include: "/explores/**/*.explore.lkml"`).
    - Set connection: `connection: "{connection_name}"`.
 
 ---
 
-## 3. Output Contract (Return Synthesis)
+## 4. Output Contract (Return Synthesis)
 
 ### If Modeled Directly:
 ```json

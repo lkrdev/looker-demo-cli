@@ -35,7 +35,34 @@ The parent orchestrator invokes you with:
 
 ---
 
-## 2. Execution Responsibilities & 3-Step Native API Flow
+## 2. Execution Responsibilities & CLI Automation
+
+The CA Agent provisioner can execute the entire flow via `demo-create agent` and `demo-create ge` CLI commands or via Python Code Mode:
+
+### Automated CLI Flow (Recommended):
+1. **Create Agent & Link Golden Queries**:
+   ```bash
+   demo-create agent create \
+     --model <model_name> \
+     --explore <primary_explore> \
+     --name "<project_name> Assistant" \
+     --dashboard-id <dashboard_id> \
+     --publish-ge
+   ```
+2. **Link Golden Queries to an Existing Agent**:
+   ```bash
+   demo-create agent golden-queries --agent-id <agent_id> --dashboard-id <dashboard_id>
+   ```
+3. **Inspect or Configure Gemini Enterprise**:
+   ```bash
+   demo-create ge status
+   demo-create ge configure --instance-id <ge_instance_id> --location <location>
+   demo-create agent publish --agent-id <agent_id>
+   ```
+
+---
+
+### Python Code Mode / Native API Flow:
 
 ### Step 1: Create Conversational Analytics Agent
 Execute via `lkr code-mode sandbox`:
@@ -65,12 +92,10 @@ Inspect all query tiles in `dashboard_files`:
 If `publish_ge` is `True`:
 
 > [!IMPORTANT]
-> **Gemini Enterprise (GE) 4-Point Prerequisite Verification:**
-> Before invoking publish, confirm that:
-> 1. An active Gemini Enterprise instance/app exists in the GCP project.
-> 2. Looker **Admin > Gemini Settings** is configured with Instance ID, Region, and Project Number.
-> 3. The Looker Service Account has the **Discovery Engine Admin** (`roles/discoveryengine.admin`) role.
-> 4. The Looker Service Account has been explicitly assigned a **Gemini Enterprise license**.
+> **Gemini Enterprise (GE) Automated Verification & Configuration:**
+> Before invoking publish, the agent/CLI verifies GE enablement via `GET /api/4.0/gemini_enablement`:
+> - If unconfigured: Scans GCP project for GE apps across `global`/`us`/`eu`, updates Looker via `PATCH /api/4.0/gemini_enablement` (sending full payload with `ai_ge_publish_enabled: true`), and grants `roles/discoveryengine.admin` to the Looker Service Account.
+> - Confirms the Looker Service Account has an active **Gemini Enterprise license**.
 
 Execute via `lkr code-mode sandbox` with retry logic (up to 3 attempts) and state verification:
 ```python

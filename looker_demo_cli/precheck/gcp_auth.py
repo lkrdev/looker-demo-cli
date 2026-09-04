@@ -188,8 +188,16 @@ def inspect_gcp_accounts(target_project: str = DEFAULT_GCP_PROJECT) -> List[GCPA
                     _ = list(client.list_datasets(max_results=2))
                 info.has_bigquery_access = True
             except Exception as e:
-                info.has_bigquery_access = False
-                info.error_message = str(e).split("\n")[0]
+                try:
+                    adc_creds, _ = google.auth.default()
+                    if info.project_id:
+                        client = bigquery.Client(project=info.project_id, credentials=adc_creds)
+                        _ = list(client.list_datasets(max_results=2))
+                    info.has_bigquery_access = True
+                    info.error_message = None
+                except Exception:
+                    info.has_bigquery_access = False
+                    info.error_message = str(e).split("\n")[0]
         else:
             info.error_message = "No OAuth tokens in credentials.db"
 

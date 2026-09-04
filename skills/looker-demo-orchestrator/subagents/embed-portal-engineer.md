@@ -37,10 +37,19 @@ The parent orchestrator invokes you with:
 
 ---
 
-## 2. Execution Responsibilities
+## 2. Execution Responsibilities & CLI Automation
 
-1. **Scaffold Portal Codebase**:
-   - Run `demo-create run --project=<project_name> --scope=external` or clone `looker-embed-demo`.
+1. **Scaffold Portal Codebase (CLI Automated)**:
+   Use the dedicated CLI scaffolding command:
+   ```bash
+   demo-create embed scaffold \
+     --project <project_name> \
+     --dashboard-id <dashboard_id> \
+     --agent-id <ca_agent_id> \
+     --brand-name "<brand_name>" \
+     --target-dir <target_dir>
+   ```
+   Or manually clone `looker-embed-demo` and initialize dependencies.
 2. **Inject Environment & Routes**:
    - Configure `.env`:
      ```env

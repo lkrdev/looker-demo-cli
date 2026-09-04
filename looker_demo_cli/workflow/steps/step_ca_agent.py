@@ -16,19 +16,27 @@ from looker_demo_cli.config import (
     DEFAULT_LOOKER_INSTANCE_URL,
 )
 from looker_demo_cli.precheck.looker_auth import get_authenticated_oauth_instances
+from looker_demo_cli.services.ge_service import ensure_gemini_enterprise_configured
 from looker_demo_cli.utils.console import print_error, print_info, print_step_header, print_success, print_warning
 from looker_demo_cli.workflow.state import FlowState
 
 
-def extract_golden_queries_from_dashboards(lookml_dir: Path, default_model: str, default_explore: str) -> List[Dict[str, Any]]:
+def extract_golden_queries_from_dashboards(
+    lookml_dir: Path,
+    default_model: str,
+    default_explore: str,
+    dashboard_file: Optional[Path] = None,
+) -> List[Dict[str, Any]]:
     """Extract query specifications from LookML dashboard files and convert to golden queries."""
-    dash_dir = lookml_dir / "dashboards"
     golden_queries: List[Dict[str, Any]] = []
 
-    if not dash_dir.exists():
-        return golden_queries
-
-    dash_files = list(dash_dir.glob("*.dashboard.lookml"))
+    if dashboard_file and Path(dashboard_file).is_file():
+        dash_files = [Path(dashboard_file)]
+    else:
+        dash_dir = lookml_dir / "dashboards" if lookml_dir.name != "dashboards" else lookml_dir
+        if not dash_dir.exists():
+            return golden_queries
+        dash_files = list(dash_dir.glob("*.dashboard.lookml"))
     for df in dash_files:
         try:
             content = df.read_text(encoding="utf-8")
@@ -124,7 +132,7 @@ def publish_agent_to_ge(instance_url: str, agent_id: str, headers: Dict[str, str
                 # Verify agent publication state
                 try:
                     r_verify = requests.get(
-                        f"{clean_url}/api/4.0/internal/agents/{agent_id}",
+                        f"{clean_url}/api/4.0/agents/{agent_id}",
                         headers=headers,
                         timeout=10,
                     )
@@ -304,8 +312,14 @@ print(f"AGENT_ID_OUTPUT:{{agent.get('id')}}")
             except Exception as patch_err:
                 print_warning(f"Notice while linking golden queries to agent: {patch_err}")
 
-    # 4. Publish Agent to Gemini Enterprise (GE) if requested
+    # 4. Verify/Configure and Publish Agent to Gemini Enterprise (GE) if requested
     if publish_to_ge:
+        state = ensure_gemini_enterprise_configured(
+            state=state,
+            headers=headers,
+            interactive=True,
+            allow_reconfigure=True,
+        )
         state.published_to_ge = publish_agent_to_ge(
             instance_url=state.looker_instance_url,
             agent_id=agent_id,

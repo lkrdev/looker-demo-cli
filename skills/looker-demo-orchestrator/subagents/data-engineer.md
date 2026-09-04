@@ -56,9 +56,24 @@ The parent orchestrator invokes you with:
    - Generate realistic rows honoring approved distributions, foreign key referential integrity, and timestamp sequencing.
    - Write Parquet files into `output_dir` (e.g. `<scratch_dir>/parquet/*.parquet`).
 
-2. **Create BigQuery Dataset & Upload Tables**:
+2. **Modular CLI Data Commands**:
+   The data engineer can utilize `demo-create data` subcommands:
+   - **Synthesize Parquet locally**:
+     ```bash
+     demo-create data generate --domain <domain> --scale <small|medium|large> --output-dir <parquet_dir>
+     ```
+   - **Upload Parquet tables to BigQuery**:
+     ```bash
+     demo-create data upload --parquet-dir <parquet_dir> --project <gcp_project_id> --dataset <dataset_id> --location <location>
+     ```
+   - **Inspect existing BigQuery dataset**:
+     ```bash
+     demo-create data inspect --project <gcp_project_id> --dataset <dataset_id>
+     ```
+
+3. **Create BigQuery Dataset & Upload Tables**:
    - Ensure target BigQuery dataset exists in `location`.
-   - Upload Parquet tables to BigQuery using BigQuery client or CLI.
+   - Upload Parquet tables to BigQuery using BigQuery client or `demo-create data upload`.
    - Assert all tables load successfully and verify row counts match target scale.
 
 ---

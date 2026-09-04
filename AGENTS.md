@@ -102,26 +102,48 @@ After deploying the LookML model and dashboards in Step 4, the agent **MUST orch
    - Step B: Create Golden Query resource (`POST /api/4.0/golden_queries`) with `{"questions": [prompt], "answer": expanded_share_url, "is_active": True}`. *(Note: Looker strictly requires exactly 1 question per Golden Query object).*
    - Step C: Link Golden Queries to the Agent via `PATCH /api/4.0/agents/{agent_id}` with `{"golden_query_ids": [str(gq_id), ...]}`.
 3. **Provision via Code Mode / SDK**: Execute Looker native API methods (`create_agent`, `create_query`, `create_golden_query`, and `update_agent`).
-4. **Mandatory 4-Point Gemini Enterprise (GE) Confirmation Gate (`ask_question`)**:
-   Before triggering publication to Gemini Enterprise (GE), the agent **MUST verify that all 4 prerequisites are met** with the user:
-   - 1. User has an active Gemini Enterprise instance/app created in Google Cloud Console.
-   - 2. GE is configured in Looker under **Admin > Gemini Settings** (Instance ID, Region, and GCP Project Number are all populated).
-   - 3. The Looker Service Account has been granted the **Discovery Engine Admin** (`roles/discoveryengine.admin`) role in the GCP project.
-   - 4. The Looker Service Account has been explicitly assigned a **Gemini Enterprise license**.
-   *Prompt the user via interactive modal to confirm all 4 prerequisites have been fulfilled before executing the publish call.*
+4. **Automated Gemini Enterprise (GE) Verification & Configuration Gate (`ask_question`)**:
+   Before triggering publication to Gemini Enterprise (GE), the agent/CLI inspects the Looker GE configuration via `GET /api/4.0/gemini_enablement`:
+   - **If already configured** (`ai_ge_project_id`, `ai_ge_instance_id`, and `ai_ge_location` populated):
+     Display the active configuration (Project ID, GE App/Instance ID, Region, Looker SA Email) and prompt the user via `ask_question` to confirm publication to this existing GE instance, with an option to reconfigure if desired.
+   - **If not configured** (or when reconfiguring):
+     1. Automatically scan the target GCP project for active GE apps/instances across common regions (`global`, `us`, `eu`) using Google Cloud credentials.
+     2. Prompt the user via `ask_question` to select from discovered GE apps or provide custom App ID and location.
+     3. Update Looker configuration via `PATCH /api/4.0/gemini_enablement` providing the full payload with `ai_ge_publish_enabled: true`.
+     4. Automatically grant the Looker Service Account (`ai_ge_service_account_email`) the **Discovery Engine Admin** (`roles/discoveryengine.admin`) role on the target GCP project via `gcloud projects add-iam-policy-binding`. If IAM permissions fail, display the exact command and Google Cloud Console IAM link with retry/continue options.
+     5. Verify that the Looker Service Account has been assigned a **Gemini Enterprise license** before executing publish.
 5. **GE Publishing Execution & Error Recovery**:
    - Execute `POST /api/4.0/internal/agents/{agent_id}/publish` (with empty body `{}`) via OAuth token or `lkr-dev-cli` Code Mode.
    - Verify publication state via `GET /api/4.0/internal/agents/{agent_id}`.
    - If publish fails or returns non-200 status, retry up to 3 times with error reporting.
    - **Re-Publishing Guarantee**: If any LookML self-healing or dashboard changes occurred during QA, the agent **MUST re-extract golden queries, update the agent, and re-publish to GE** to ensure the published agent is never left in an outdated or unpublished state.
 
-### 6. Use Intent Skills & Specialized Subagents
+### 6. Modular CLI Subcommands & State Persistence
+For targeted operations or granular subagent execution, `demo-create` provides independent modular subcommands that maintain state via `.demo-state.json`:
+- **`demo-create data`**:
+  - `generate`: Synthesize local Parquet datasets (`--domain <domain> --scale <scale> --output-dir <dir>`).
+  - `upload`: Upload Parquet tables to BigQuery (`--parquet-dir <dir> --project <gcp_project> --dataset <dataset_id>`).
+  - `inspect`: Inspect existing BigQuery tables, column types, and record counts.
+- **`demo-create lookml`**:
+  - `model`: Generate LookML views, explores, and models from Parquet files or an existing BigQuery dataset (`--dataset <dataset_id>`). When `--dataset` is specified, the CLI automatically queries BigQuery PK/FK constraints and Google Cloud Data Catalog / Dataplex `@bigquery` entry group tags. Agents can also invoke the `knowledge-catalog` MCP server directly to extract business glossaries and column descriptions.
+  - `deploy`: Push staged LookML to Looker dev workspace, validate project, run query tests, and deploy to production.
+- **`demo-create agent`**:
+  - `create`: Provision Looker Conversational Analytics agent, ground with golden queries, and optionally publish to GE (`--model <name> --explore <name> --dashboard-id <id> --publish-ge`).
+  - `golden-queries`: Extract queries from dashboard files or IDs and link as Golden Queries to an existing agent.
+  - `publish`: Verify GE configuration and publish agent to connected Gemini Enterprise apps.
+- **`demo-create embed`**:
+  - `scaffold`: Scaffold a standalone full-stack React/Vite analytics embed portal with configured `.env` and theme styling.
+- **`demo-create ge`**:
+  - `status`: Inspect Looker's active Gemini Enterprise configuration.
+  - `configure`: Discover GCP Discovery Engine apps, patch Looker GE settings, and grant IAM roles.
+
+### 7. Use Intent Skills & Specialized Subagents
 - For schema design & synthetic data generation, reference skills in `skills/data-design/` (`data-designer`, `data-designer-architect`).
 - For LookML views, explores, dashboards, and code-mode scripting, reference skills in `skills/lookml/` (`lkr-code-mode`, `repo-lookml`, `lookml-model`, `lookml-dashboard`).
 - For frontend embed configuration, reference skills in `skills/embed-portal/` (`setup-embed-demo`, `customize-frontend`).
 - For isolated task execution, invoke specialized subagents in [`skills/looker-demo-orchestrator/subagents/`](skills/looker-demo-orchestrator/subagents/):
   - [`data-engineer`](skills/looker-demo-orchestrator/subagents/data-engineer.md) (Batch synthesis & BQ load)
-  - [`lookml-modeler`](skills/looker-demo-orchestrator/subagents/lookml-modeler.md) (Front-door semantic modeling & 3NF triage)
+  - [`lookml-modeler`](skills/looker-demo-orchestrator/subagents/lookml-modeler.md) (Front-door semantic modeling, Knowledge Catalog introspection & 3NF triage)
   - [`lookml-snowflake-modeler`](skills/looker-demo-orchestrator/subagents/lookml-snowflake-modeler.md) (3NF modeling, NDT rollups & diamond joins)
   - [`lookml-dashboard-designer`](skills/looker-demo-orchestrator/subagents/lookml-dashboard-designer.md) (Pixel-perfect executive tabbed dashboards)
   - [`lookml-performance-optimizer`](skills/looker-demo-orchestrator/subagents/lookml-performance-optimizer.md) (Google Cloud Looker performance best practices)
@@ -129,7 +151,7 @@ After deploying the LookML model and dashboards in Step 4, the agent **MUST orch
   - [`ca-agent-provisioner`](skills/looker-demo-orchestrator/subagents/ca-agent-provisioner.md) (CA agent & golden queries; conditional on user confirmation)
   - [`embed-portal-engineer`](skills/looker-demo-orchestrator/subagents/embed-portal-engineer.md) (Vite embed portal; conditional on user confirmation)
 
-### 7. Mandatory Final Delivery Report Protocol
+### 8. Mandatory Final Delivery Report Protocol
 Upon completing deployment (and optional CA Agent / Embed Portal steps), the agent **MUST emit a comprehensive Executive Delivery Report** in markdown format (and persist to `DELIVERY_REPORT.md`). The report must strictly follow the format defined in [`skills/looker-demo-orchestrator/SKILL.md`](skills/looker-demo-orchestrator/SKILL.md#7-mandatory-final-delivery-report-protocol) and include:
 1. **Production Deployment Status Banner**: Looker host, project/model name, BigQuery dataset ID, connection name, and 100% query test pass rate.
 2. **Quick Access Links Table**: Clickable URLs to Executive Dashboard, CA AI Agent, all Explores, and Embed Portal.

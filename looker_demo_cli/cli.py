@@ -5,7 +5,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
-from typing import Annotated, List, Optional
+from typing import Annotated, Any, List, Optional
 import typer
 from rich.panel import Panel
 from rich.syntax import Syntax
@@ -44,8 +44,33 @@ from looker_demo_cli.utils.console import (
     print_success,
     print_warning,
 )
-from looker_demo_cli.workflow.runner import FlowRunner
-from looker_demo_cli.workflow.state import FlowState
+from looker_demo_cli.services.ge_service import (
+    ensure_gemini_enterprise_configured,
+    get_looker_auth_context,
+    get_looker_ge_config,
+    is_ge_configured,
+    render_ge_status_table,
+)
+from looker_demo_cli.generators.embed_scaffolder import EmbedConfigOptions, EmbedScaffolder
+from looker_demo_cli.generators.lookml_generator import LookMLGenerator, LookMLTableSpec
+from looker_demo_cli.generators.schema_generator import (
+    create_dynamic_blueprint_from_name,
+    generate_domain_dataset,
+)
+from looker_demo_cli.services.agent_service import (
+    extract_golden_queries_from_dashboard_id,
+    provision_ca_agent,
+    register_and_link_golden_queries,
+)
+from looker_demo_cli.services.knowledge_service import introspect_bq_table_specs
+from looker_demo_cli.utils.bigquery_client import BigQueryHelper
+from looker_demo_cli.workflow.runner import FlowRunner, extract_table_specs_from_parquet_dir
+from looker_demo_cli.workflow.state import FlowState, load_flow_state, save_flow_state
+from looker_demo_cli.workflow.steps.step_ca_agent import (
+    extract_golden_queries_from_dashboards,
+    publish_agent_to_ge,
+)
+from looker_demo_cli.workflow.steps.step_looker_deploy import run_looker_deploy_step
 
 app = typer.Typer(
     name="demo-create",
@@ -124,7 +149,7 @@ def pre_check(
 
     # Determine if re-auth or account setup is needed
     reauth_required = any(
-        (a.is_active and not a.has_bigquery_access) or ("reauth" in (a.error_message or "").lower())
+        (a.is_active and not a.has_bigquery_access) or (a.is_active and "reauth" in (a.error_message or "").lower())
         for a in gcp_accounts
     )
     no_accounts_configured = len(gcp_accounts) == 0
@@ -409,6 +434,524 @@ def env_info():
     """Display runtime environment details and critical dependency pin health."""
     env_status = check_runtime_environment()
     _render_env_tables(env_status)
+
+
+ge_app = typer.Typer(
+    name="ge",
+    help="Inspect and configure Looker Gemini Enterprise (GE) integration.",
+    no_args_is_help=True,
+)
+app.add_typer(ge_app, name="ge")
+
+
+@ge_app.command(name="status")
+def ge_status(
+    instance_url: Annotated[Optional[str], typer.Option("--instance", help="Looker instance base URL")] = None,
+    account: Annotated[Optional[str], typer.Option("--looker-account", help="Saved Looker OAuth account alias")] = None,
+):
+    """Fetch and display current Looker Gemini enablement and GE configuration."""
+    headers, base_url = get_looker_auth_context(instance_url=instance_url, preferred_account=account)
+    if not base_url:
+        print_error("No Looker instance URL configured. Provide --instance or authenticate with `lkr auth login`.")
+        raise typer.Exit(code=1)
+
+    config = get_looker_ge_config(base_url, headers)
+    if not config:
+        print_error("Failed to retrieve Gemini enablement configuration from Looker.")
+        raise typer.Exit(code=1)
+
+    render_ge_status_table(config)
+    if is_ge_configured(config):
+        print_success("Gemini Enterprise is fully configured in Looker.")
+    else:
+        print_warning("Gemini Enterprise is NOT fully configured. Run `demo-create ge configure` to set it up.")
+
+
+@ge_app.command(name="configure")
+def ge_configure(
+    gcp_project: Annotated[str, typer.Option("--gcp-project", help="Target Google Cloud Project ID")] = DEFAULT_GCP_PROJECT,
+    instance_url: Annotated[Optional[str], typer.Option("--instance", help="Looker instance base URL")] = None,
+    account: Annotated[Optional[str], typer.Option("--looker-account", help="Saved Looker OAuth account alias")] = None,
+    app_id: Annotated[Optional[str], typer.Option("--app-id", help="Gemini Enterprise App/Engine ID")] = None,
+    location: Annotated[str, typer.Option("--location", help="Gemini Enterprise Location/Region")] = "global",
+):
+    """Interactively or explicitly configure Gemini Enterprise settings in Looker and grant IAM role."""
+    headers, base_url = get_looker_auth_context(instance_url=instance_url, preferred_account=account)
+    if not base_url:
+        print_error("No Looker instance URL configured. Provide --instance or authenticate with `lkr auth login`.")
+        raise typer.Exit(code=1)
+
+    state = FlowState(
+        gcp_project_id=gcp_project,
+        looker_instance_url=base_url,
+        looker_account=account,
+        ge_instance_id=app_id,
+        ge_location=location,
+    )
+
+    updated_state = ensure_gemini_enterprise_configured(
+        state=state,
+        headers=headers,
+        interactive=True,
+        allow_reconfigure=True,
+    )
+
+    if updated_state.ge_configured:
+        print_success(
+            f"Gemini Enterprise successfully configured for app `{updated_state.ge_instance_id}` on project `{updated_state.gcp_project_id}`."
+        )
+    else:
+        print_error("Failed to complete Gemini Enterprise configuration.")
+        raise typer.Exit(code=1)
+
+
+# -------------------------------------------------------------------------
+# DATA GROUP: demo-create data [generate | upload | inspect]
+# -------------------------------------------------------------------------
+data_app = typer.Typer(
+    name="data",
+    help="Design, synthesize, inspect, and upload BigQuery demo datasets.",
+    no_args_is_help=True,
+)
+app.add_typer(data_app, name="data")
+
+
+@data_app.command(name="generate")
+def data_generate(
+    domain: Annotated[str, typer.Option("--domain", help="Domain theme name (e.g. supply_chain, trucking_iot)")] = "logistics_analytics",
+    row_count: Annotated[int, typer.Option("--row-count", help="Target fact row count")] = 1000,
+    output_dir: Annotated[Optional[Path], typer.Option("--output-dir", help="Local directory to write Parquet files")] = None,
+    upload: Annotated[bool, typer.Option("--upload", help="Automatically upload synthesized Parquet tables to BigQuery")] = False,
+    gcp_project: Annotated[str, typer.Option("--gcp-project", help="Target GCP Project ID if uploading")] = DEFAULT_GCP_PROJECT,
+    dataset: Annotated[Optional[str], typer.Option("--dataset", help="Target BigQuery dataset ID if uploading")] = None,
+):
+    """Synthesize high-fidelity relational Parquet dataset tables locally."""
+    state = load_flow_state()
+    target_dir = output_dir or (Path.home() / "scratch" / "demo_create" / (dataset or domain))
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    print_info(f"Synthesizing dataset for domain `{domain}` into `{target_dir}`...")
+    blueprint = create_dynamic_blueprint_from_name(domain)
+    for entity in blueprint.entities:
+        if entity.table_type == "fact":
+            entity.row_count = row_count
+
+    specs = generate_domain_dataset(target=blueprint, output_dir=target_dir)
+    table_names = [s.table_name for s in specs]
+
+    state.domain_name = domain
+    state.bq_dataset_id = dataset or domain
+    state.generated_parquet_dir = target_dir
+    state.generated_tables = table_names
+    state.gcp_project_id = gcp_project or state.gcp_project_id
+
+    print_success(f"Generated {len(table_names)} tables in `{target_dir}`: {table_names}")
+
+    if upload:
+        print_info(f"Uploading generated tables to BigQuery dataset `{state.bq_dataset_id}`...")
+        bq_helper = BigQueryHelper(project_id=state.gcp_project_id, location=state.gcp_location)
+        bq_helper.ensure_dataset(state.bq_dataset_id)
+        for t_name in table_names:
+            p_file = target_dir / f"{t_name}.parquet"
+            if p_file.exists():
+                cnt = bq_helper.load_parquet_table(state.bq_dataset_id, t_name, p_file)
+                print_success(f"Loaded `{t_name}` ({cnt:,} rows) into BigQuery")
+        state.dataset_exists = True
+
+    saved_path = save_flow_state(state)
+    print_info(f"Updated state saved to `{saved_path}`")
+
+
+@data_app.command(name="upload")
+def data_upload(
+    parquet_dir: Annotated[Optional[Path], typer.Option("--parquet-dir", help="Directory containing Parquet files")] = None,
+    dataset: Annotated[Optional[str], typer.Option("--dataset", help="Target BigQuery dataset ID")] = None,
+    gcp_project: Annotated[str, typer.Option("--gcp-project", help="Target GCP Project ID")] = DEFAULT_GCP_PROJECT,
+    location: Annotated[str, typer.Option("--location", help="BigQuery dataset location")] = "US",
+):
+    """Upload local Parquet tables into a BigQuery dataset."""
+    state = load_flow_state()
+    p_dir = parquet_dir or state.generated_parquet_dir
+    if not p_dir or not p_dir.exists():
+        print_error("No Parquet directory found. Specify --parquet-dir or run `demo-create data generate` first.")
+        raise typer.Exit(code=1)
+
+    ds_id = dataset or state.bq_dataset_id
+    proj_id = gcp_project or state.gcp_project_id
+
+    bq_helper = BigQueryHelper(project_id=proj_id, location=location)
+    bq_helper.ensure_dataset(ds_id)
+
+    parquet_files = sorted(list(p_dir.glob("*.parquet")))
+    if not parquet_files:
+        print_warning(f"No .parquet files found in `{p_dir}`.")
+        raise typer.Exit(code=1)
+
+    print_info(f"Loading {len(parquet_files)} Parquet files into `{proj_id}.{ds_id}`...")
+    for pf in parquet_files:
+        t_name = pf.stem
+        rows = bq_helper.load_parquet_table(ds_id, t_name, pf)
+        print_success(f"Loaded `{t_name}` ({rows:,} rows)")
+        if t_name not in state.generated_tables:
+            state.generated_tables.append(t_name)
+
+    state.dataset_exists = True
+    state.bq_dataset_id = ds_id
+    state.gcp_project_id = proj_id
+    state.gcp_location = location
+    saved_path = save_flow_state(state)
+    print_info(f"Updated state saved to `{saved_path}`")
+
+
+@data_app.command(name="inspect")
+def data_inspect(
+    dataset: Annotated[Optional[str], typer.Option("--dataset", help="BigQuery dataset ID")] = None,
+    gcp_project: Annotated[str, typer.Option("--gcp-project", help="Target GCP Project ID")] = DEFAULT_GCP_PROJECT,
+    location: Annotated[str, typer.Option("--location", help="BigQuery dataset location")] = "US",
+):
+    """Inspect tables, schemas, and metadata in a BigQuery dataset."""
+    state = load_flow_state()
+    ds_id = dataset or state.bq_dataset_id
+    proj_id = gcp_project or state.gcp_project_id
+
+    bq_helper = BigQueryHelper(project_id=proj_id, location=location)
+    if not bq_helper.dataset_exists(ds_id):
+        print_error(f"Dataset `{proj_id}.{ds_id}` does not exist.")
+        raise typer.Exit(code=1)
+
+    tables = bq_helper.list_tables(ds_id)
+    if not tables:
+        print_warning(f"Dataset `{ds_id}` exists but has no tables.")
+        return
+
+    table_report = Table(title=f"BigQuery Dataset: {proj_id}.{ds_id}", show_header=True, header_style="bold blue")
+    table_report.add_column("Table Name", style="bold")
+    table_report.add_column("Type", style="cyan")
+    table_report.add_column("Columns", justify="right")
+    table_report.add_column("Rows", justify="right")
+
+    for t_id in tables:
+        tbl_ref = bq_helper.client.dataset(ds_id).table(t_id)
+        try:
+            tbl = bq_helper.client.get_table(tbl_ref)
+            table_report.add_row(t_id, tbl.table_type, str(len(tbl.schema)), f"{tbl.num_rows:,}")
+        except Exception:
+            table_report.add_row(t_id, "UNKNOWN", "?", "?")
+
+    console.print(table_report)
+
+
+# -------------------------------------------------------------------------
+# LOOKML GROUP: demo-create lookml [model | deploy]
+# -------------------------------------------------------------------------
+lookml_app = typer.Typer(
+    name="lookml",
+    help="Generate LookML models from BigQuery/Knowledge Catalog or Parquet, and deploy.",
+    no_args_is_help=True,
+)
+app.add_typer(lookml_app, name="lookml")
+
+
+@lookml_app.command(name="model")
+def lookml_model(
+    dataset: Annotated[Optional[str], typer.Option("--dataset", help="Existing BigQuery dataset ID to model")] = None,
+    tables: Annotated[Optional[str], typer.Option("--tables", help="Comma-separated list of table names to include")] = None,
+    parquet_dir: Annotated[Optional[Path], typer.Option("--parquet-dir", help="Directory containing Parquet files")] = None,
+    project: Annotated[Optional[str], typer.Option("--project", help="Looker project and model name")] = None,
+    connection: Annotated[str, typer.Option("--connection", help="Looker database connection name")] = "default_bigquery_connection",
+    output_dir: Annotated[Optional[Path], typer.Option("--output-dir", help="Directory to output generated LookML files")] = None,
+    gcp_project: Annotated[str, typer.Option("--gcp-project", help="Target GCP Project ID")] = DEFAULT_GCP_PROJECT,
+):
+    """Generate LookML views, explores, and dashboards from BigQuery/Knowledge Catalog or Parquet."""
+    state = load_flow_state()
+    proj_name = project or state.looker_project_name or "logistics_analytics"
+    ds_name = dataset or state.bq_dataset_id or proj_name
+    conn_name = connection or state.looker_connection_name
+    gcp_proj = gcp_project or state.gcp_project_id
+    out_dir = output_dir or (Path.home() / "scratch" / "demo_create" / f"lookml_{proj_name}")
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    table_filter = [t.strip() for t in tables.split(",") if t.strip()] if tables else None
+    table_specs: list[LookMLTableSpec] = []
+
+    # 1. Source: Live BigQuery Dataset with Knowledge Catalog semantics
+    if dataset or (state.dataset_exists and not parquet_dir):
+        print_info(f"Introspecting BigQuery dataset `{gcp_proj}.{ds_name}` and querying Knowledge Catalog semantics...")
+        table_specs = introspect_bq_table_specs(
+            project_id=gcp_proj,
+            dataset_id=ds_name,
+            location=state.gcp_location,
+            table_filter=table_filter,
+        )
+        if table_specs:
+            print_success(f"Discovered and enriched {len(table_specs)} table(s) via BigQuery & Knowledge Catalog.")
+
+    # 2. Source: Local Parquet files
+    if not table_specs:
+        p_dir = parquet_dir or state.generated_parquet_dir
+        if p_dir and p_dir.exists() and any(p_dir.glob("*.parquet")):
+            print_info(f"Extracting table specifications from Parquet directory: `{p_dir}`...")
+            all_specs = extract_table_specs_from_parquet_dir(p_dir)
+            table_specs = [s for s in all_specs if not table_filter or s.table_name in table_filter]
+            print_success(f"Extracted {len(table_specs)} table spec(s) from Parquet files.")
+
+    if not table_specs:
+        print_error("No tables found to model. Provide --dataset or --parquet-dir, or run `demo-create data generate`.")
+        raise typer.Exit(code=1)
+
+    print_info(f"Generating LookML files into `{out_dir}`...")
+    gen = LookMLGenerator(project_id=gcp_proj, dataset_id=ds_name, connection_name=conn_name)
+    written = gen.write_lookml_project_files(
+        output_dir=out_dir,
+        model_name=proj_name,
+        tables=table_specs,
+    )
+    print_success(f"Generated {len(written)} LookML files in `{out_dir}`:")
+    for f in written:
+        console.print(f"  • {f.relative_to(out_dir)}")
+
+    state.looker_project_name = proj_name
+    state.lookml_model_name = proj_name
+    state.bq_dataset_id = ds_name
+    state.looker_connection_name = conn_name
+    state.lookml_output_dir = out_dir
+    state.gcp_project_id = gcp_proj
+    state.existing_tables = [s.table_name for s in table_specs]
+    saved_path = save_flow_state(state)
+    print_info(f"Updated state saved to `{saved_path}`")
+
+
+@lookml_app.command(name="deploy")
+def lookml_deploy(
+    lookml_dir: Annotated[Optional[Path], typer.Option("--lookml-dir", help="Directory containing LookML files")] = None,
+    project: Annotated[Optional[str], typer.Option("--project", help="Looker project name")] = None,
+    account: Annotated[Optional[str], typer.Option("--looker-account", help="Saved Looker OAuth account alias")] = None,
+):
+    """Push local LookML files to dev workspace, validate, and deploy to Looker production."""
+    state = load_flow_state()
+    if lookml_dir:
+        state.lookml_output_dir = lookml_dir
+    if project:
+        state.looker_project_name = project
+        state.lookml_model_name = project
+    if account:
+        state.looker_account = account
+
+    if not state.lookml_output_dir or not state.lookml_output_dir.exists():
+        print_error("No LookML directory found to deploy. Provide --lookml-dir or run `demo-create lookml model`.")
+        raise typer.Exit(code=1)
+
+    final_state = run_looker_deploy_step(state)
+    saved_path = save_flow_state(final_state)
+    print_info(f"Updated state saved to `{saved_path}`")
+
+
+# -------------------------------------------------------------------------
+# AGENT GROUP: demo-create agent [create | golden-queries | publish]
+# -------------------------------------------------------------------------
+agent_app = typer.Typer(
+    name="agent",
+    help="Provision Looker Conversational Analytics AI agents, ground golden queries, and publish to GE.",
+    no_args_is_help=True,
+)
+app.add_typer(agent_app, name="agent")
+
+
+@agent_app.command(name="create")
+def agent_create(
+    model: Annotated[Optional[str], typer.Option("--model", help="LookML model name")] = None,
+    explore: Annotated[Optional[str], typer.Option("--explore", help="Primary explore name")] = None,
+    dashboards_dir: Annotated[Optional[Path], typer.Option("--dashboards-dir", help="Directory with *.dashboard.lookml files")] = None,
+    dashboard_file: Annotated[Optional[Path], typer.Option("--dashboard-file", help="Specific *.dashboard.lookml file")] = None,
+    dashboard_id: Annotated[Optional[str], typer.Option("--dashboard-id", help="Deployed Looker dashboard ID for query extraction")] = None,
+    name: Annotated[Optional[str], typer.Option("--name", help="Custom Assistant name")] = None,
+    instructions: Annotated[Optional[str], typer.Option("--instructions", help="Custom system prompt instructions")] = None,
+    publish_ge: Annotated[bool, typer.Option("--publish-ge", help="Automatically configure and publish to Gemini Enterprise")] = False,
+    account: Annotated[Optional[str], typer.Option("--looker-account", help="Saved Looker OAuth account alias")] = None,
+    instance_url: Annotated[Optional[str], typer.Option("--instance", help="Looker instance base URL")] = None,
+):
+    """Create a Conversational Analytics agent, ground with dashboard golden queries, and optionally publish to GE."""
+    state = load_flow_state()
+    headers, base_url = get_looker_auth_context(instance_url=instance_url or state.looker_instance_url, preferred_account=account or state.looker_account)
+    if not base_url or not headers.get("Authorization"):
+        print_error("Looker authentication required. Run `lkr auth login` or provide credentials.")
+        raise typer.Exit(code=1)
+
+    state.looker_instance_url = base_url
+    model_name = model or state.lookml_model_name
+    explore_name = explore or (state.generated_tables[0] if state.generated_tables else model_name)
+
+    print_info(f"Provisioning Looker CA Agent for model `{model_name}` on explore `{explore_name}`...")
+    agent_id = provision_ca_agent(
+        instance_url=base_url,
+        headers=headers,
+        model_name=model_name,
+        explore_name=explore_name,
+        agent_name=name,
+        custom_instructions=instructions,
+    )
+
+    if not agent_id:
+        print_error("Failed to provision Conversational Analytics Agent.")
+        raise typer.Exit(code=1)
+
+    state.ca_agent_id = agent_id
+    state.ca_agent_name = name or f"{model_name.replace('_', ' ').title()} Assistant"
+
+    # Extract & Link Golden Queries
+    golden_queries: list[dict[str, Any]] = []
+
+    # From deployed dashboard ID
+    if dashboard_id:
+        print_info(f"Extracting Golden Queries from deployed dashboard `{dashboard_id}`...")
+        golden_queries.extend(extract_golden_queries_from_dashboard_id(base_url, headers, dashboard_id))
+
+    # From local dashboard files
+    dash_path = dashboard_file or dashboards_dir or (state.lookml_output_dir / "dashboards" if state.lookml_output_dir else None)
+    if dash_path and dash_path.exists():
+        d_dir = dash_path if dash_path.is_dir() else dash_path.parent
+        print_info(f"Extracting Golden Queries from local dashboard files in `{d_dir}`...")
+        golden_queries.extend(
+            extract_golden_queries_from_dashboards(
+                lookml_dir=d_dir.parent if d_dir.name == "dashboards" else d_dir,
+                default_model=model_name,
+                default_explore=explore_name,
+                dashboard_file=dashboard_file if (dashboard_file and dashboard_file.is_file()) else None,
+            )
+        )
+
+    if golden_queries:
+        print_info(f"Registering {len(golden_queries)} Golden Queries to CA Agent `{agent_id}`...")
+        linked_count = register_and_link_golden_queries(base_url, headers, agent_id, golden_queries)
+        state.golden_queries_count = linked_count
+
+    # Optional: Gemini Enterprise Enablement & Publish
+    if publish_ge:
+        state = ensure_gemini_enterprise_configured(state, headers, interactive=True)
+        state.published_to_ge = publish_agent_to_ge(base_url, agent_id, headers)
+
+    saved_path = save_flow_state(state)
+    chat_url = f"{base_url}/conversational-analytics/agents/{agent_id}"
+    print_success(f"Conversational Analytics Agent Chat URL: {chat_url}")
+    print_info(f"Updated state saved to `{saved_path}`")
+
+
+@agent_app.command(name="golden-queries")
+def agent_golden_queries(
+    agent_id: Annotated[Optional[str], typer.Option("--agent-id", help="Target CA Agent ID")] = None,
+    dashboard_id: Annotated[Optional[str], typer.Option("--dashboard-id", help="Deployed Looker dashboard ID")] = None,
+    dashboards_dir: Annotated[Optional[Path], typer.Option("--dashboards-dir", help="Directory with *.dashboard.lookml files")] = None,
+    dashboard_file: Annotated[Optional[Path], typer.Option("--dashboard-file", help="Specific *.dashboard.lookml file")] = None,
+    account: Annotated[Optional[str], typer.Option("--looker-account", help="Saved Looker OAuth account alias")] = None,
+    instance_url: Annotated[Optional[str], typer.Option("--instance", help="Looker instance base URL")] = None,
+):
+    """Extract queries from dashboard files or IDs and link as Golden Queries to an existing agent."""
+    state = load_flow_state()
+    target_id = agent_id or state.ca_agent_id
+    if not target_id:
+        print_error("No agent ID specified. Provide --agent-id or run `demo-create agent create` first.")
+        raise typer.Exit(code=1)
+
+    headers, base_url = get_looker_auth_context(instance_url=instance_url or state.looker_instance_url, preferred_account=account or state.looker_account)
+    if not base_url:
+        print_error("Looker instance URL not configured.")
+        raise typer.Exit(code=1)
+
+    golden_queries = []
+    if dashboard_id:
+        golden_queries.extend(extract_golden_queries_from_dashboard_id(base_url, headers, dashboard_id))
+
+    dash_path = dashboard_file or dashboards_dir or (state.lookml_output_dir / "dashboards" if state.lookml_output_dir else None)
+    if dash_path and dash_path.exists():
+        d_dir = dash_path if dash_path.is_dir() else dash_path.parent
+        golden_queries.extend(
+            extract_golden_queries_from_dashboards(
+                lookml_dir=d_dir.parent if d_dir.name == "dashboards" else d_dir,
+                default_model=state.lookml_model_name,
+                default_explore=state.generated_tables[0] if state.generated_tables else state.lookml_model_name,
+            )
+        )
+
+    if not golden_queries:
+        print_warning("No query tiles found to extract.")
+        return
+
+    count = register_and_link_golden_queries(base_url, headers, target_id, golden_queries)
+    state.golden_queries_count = count
+    save_flow_state(state)
+
+
+@agent_app.command(name="publish")
+def agent_publish(
+    agent_id: Annotated[Optional[str], typer.Option("--agent-id", help="Target CA Agent ID to publish")] = None,
+    account: Annotated[Optional[str], typer.Option("--looker-account", help="Saved Looker OAuth account alias")] = None,
+    instance_url: Annotated[Optional[str], typer.Option("--instance", help="Looker instance base URL")] = None,
+):
+    """Verify Gemini Enterprise configuration and publish CA Agent to connected GE apps."""
+    state = load_flow_state()
+    target_id = agent_id or state.ca_agent_id
+    if not target_id:
+        print_error("No CA agent ID found. Provide --agent-id or run `demo-create agent create` first.")
+        raise typer.Exit(code=1)
+
+    headers, base_url = get_looker_auth_context(instance_url=instance_url or state.looker_instance_url, preferred_account=account or state.looker_account)
+    if not base_url:
+        print_error("Looker instance URL not configured.")
+        raise typer.Exit(code=1)
+
+    state = ensure_gemini_enterprise_configured(state, headers, interactive=True)
+    published = publish_agent_to_ge(base_url, target_id, headers)
+    state.published_to_ge = published
+    save_flow_state(state)
+
+
+# -------------------------------------------------------------------------
+# EMBED GROUP: demo-create embed [scaffold]
+# -------------------------------------------------------------------------
+embed_app = typer.Typer(
+    name="embed",
+    help="Scaffold standalone Embedded Analytics web applications and portals.",
+    no_args_is_help=True,
+)
+app.add_typer(embed_app, name="embed")
+
+
+@embed_app.command(name="scaffold")
+def embed_scaffold(
+    project: Annotated[Optional[str], typer.Option("--project", help="Demo project name")] = None,
+    target_dir: Annotated[Optional[Path], typer.Option("--target-dir", help="Directory where the web app will be scaffolded")] = None,
+    dashboard_id: Annotated[Optional[str], typer.Option("--dashboard-id", help="Looker dashboard ID to embed")] = None,
+    brand_name: Annotated[Optional[str], typer.Option("--brand-name", help="Customer brand display name")] = None,
+    instance_url: Annotated[Optional[str], typer.Option("--instance", help="Looker instance URL")] = None,
+):
+    """Scaffold a full-stack React/Vite analytics embed portal workspace."""
+    state = load_flow_state()
+    proj_name = project or state.looker_project_name
+    inst_url = instance_url or state.looker_instance_url
+    dash_id = dashboard_id or state.deployed_dashboard_id or f"{proj_name}::{proj_name}_overview"
+    b_name = brand_name or proj_name.replace("_", " ").title()
+
+    dest = target_dir or (Path.home() / f"looker-embed-{proj_name}")
+
+    opts = EmbedConfigOptions(
+        demo_name=proj_name,
+        target_dir=dest,
+        brand_name=b_name,
+        brand_title=f"{b_name} Intelligence Portal",
+        looker_instance_url=inst_url,
+        looker_project_name=proj_name,
+        lookml_model_name=state.lookml_model_name or proj_name,
+        dashboard_id=dash_id,
+    )
+
+    scaffolded_dir = EmbedScaffolder.scaffold_demo_workspace(opts)
+    state.embed_workspace_dir = scaffolded_dir
+    state.embed_portal_url = "http://localhost:8008"
+    state.demo_scope = "external_embed"
+
+    print_success(f"External Embed Portal configured at: `{scaffolded_dir}`")
+    saved_path = save_flow_state(state)
+    print_info(f"Updated state saved to `{saved_path}`")
 
 
 @app.command(

@@ -48,9 +48,48 @@ class FlowState(BaseModel):
     ca_agent_name: Optional[str] = None
     published_to_ge: bool = False
     golden_queries_count: int = 0
+    ge_configured: bool = False
+    ge_project_id: Optional[str] = None
+    ge_instance_id: Optional[str] = None
+    ge_location: Optional[str] = None
+    ge_service_account_email: Optional[str] = None
 
     # Step lifecycle
     current_step: int = 1
     total_steps: int = 7
     status: Literal["pending", "in_progress", "completed", "failed"] = "pending"
     error_message: Optional[str] = None
+
+
+STATE_FILE_NAME = ".demo-state.json"
+
+
+def get_default_state_path(scratch_dir: Optional[Path] = None) -> Path:
+    """Find or determine the target state file path."""
+    cwd_file = Path.cwd() / STATE_FILE_NAME
+    if cwd_file.exists():
+        return cwd_file
+    if scratch_dir and (scratch_dir / STATE_FILE_NAME).exists():
+        return scratch_dir / STATE_FILE_NAME
+    return cwd_file
+
+
+def save_flow_state(state: FlowState, path: Optional[Path] = None) -> Path:
+    """Serialize FlowState to a JSON file."""
+    target = path or (Path.cwd() / STATE_FILE_NAME)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(state.model_dump_json(indent=2), encoding="utf-8")
+    return target
+
+
+def load_flow_state(path: Optional[Path] = None, scratch_dir: Optional[Path] = None) -> FlowState:
+    """Load FlowState from file if present, otherwise return fresh default FlowState."""
+    target = path or get_default_state_path(scratch_dir=scratch_dir)
+    if target.exists():
+        try:
+            content = target.read_text(encoding="utf-8")
+            return FlowState.model_validate_json(content)
+        except Exception:
+            pass
+    return FlowState()
+

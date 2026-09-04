@@ -156,17 +156,26 @@ The AI agent orchestrates the entire workflow interactively:
 
 ---
 
-### ⚙️ Gemini Enterprise (GE) Integration & Looker Service Account Setup
+### ⚙️ Gemini Enterprise (GE) Integration & Automated Provisioning
 
-When provisioning Conversational Analytics (CA) Agents to publish into Gemini Enterprise (GE), confirm the **4 mandatory prerequisites**:
+When deploying Conversational Analytics (CA) Agents to publish into Gemini Enterprise (GE), `demo-create` automatically verifies and configures Looker GE settings:
 
-1. **Active GE Instance**: An active Gemini Enterprise instance/app exists in your Google Cloud Console.
-2. **Looker Admin Configuration**: GE is configured under Looker **Admin > Gemini Settings**:
-   - **Instance ID** is set.
-   - **Region** (e.g. `us-central1`) is set.
-   - **GCP Project Number** is set.
-3. **Looker Service Account IAM Role**: The Looker Service Account has the **Discovery Engine Admin** (`roles/discoveryengine.admin`) role granted in GCP IAM.
-4. **Looker Service Account GE License**: The Looker Service Account has been explicitly assigned a **Gemini Enterprise user license**.
+1. **Automated Inspection (`GET /api/4.0/gemini_enablement`)**:
+   - Inspects active Looker Gemini enablement settings.
+   - If already configured, prompts to publish directly to the configured app or reconfigure.
+2. **Automated GCP Discovery & Configuration (`PATCH /api/4.0/gemini_enablement`)**:
+   - If unconfigured, scans the GCP project for active Discovery Engine apps across standard regions (`global`, `us`, `eu`).
+   - Updates Looker GE settings sending the full enablement payload with `ai_ge_publish_enabled: true`.
+3. **Automated Looker Service Account IAM Role**:
+   - Automatically grants the Looker Service Account (`ai_ge_service_account_email`) the **Discovery Engine Admin** (`roles/discoveryengine.admin`) role via `gcloud projects add-iam-policy-binding`.
+4. **Standalone CLI Inspection & Management**:
+   ```bash
+   # Check Looker GE status
+   demo-create ge status
+
+   # Configure Looker GE settings interactively
+   demo-create ge configure --gcp-project <PROJECT_ID>
+   ```
 
 > [!NOTE]
 > **Automatic Self-Healing Re-Publishing**: If dashboard queries or LookML models are updated during QA validation, `demo-create` automatically re-extracts golden queries, synchronizes the CA Agent, and re-publishes to Gemini Enterprise with automatic verification and retry loops.
@@ -252,6 +261,60 @@ demo-create run \
   --gcp-project=my-analytics-project \
   --gcp-account=user@example.com \
   --agent-mode
+```
+
+### 3. Modular Pipeline Commands
+You can run any phase of the pipeline independently. State is automatically persisted in `.demo-state.json` across executions:
+
+#### Data Synthesis & Ingestion (`demo-create data`)
+```bash
+# Synthesize local Parquet files
+demo-create data generate --domain retail --scale medium --output-dir scratch/parquet
+
+# Upload Parquet tables to BigQuery
+demo-create data upload --parquet-dir scratch/parquet --project my-gcp-project --dataset retail_analytics
+
+# Inspect existing BigQuery tables and schema
+demo-create data inspect --project my-gcp-project --dataset retail_analytics
+```
+
+#### Semantic Modeling & Deployment (`demo-create lookml`)
+```bash
+# Generate LookML from an existing BigQuery dataset with Knowledge Catalog / Dataplex introspection
+demo-create lookml model --project retail_analytics --dataset retail_analytics --connection bigquery_connection
+
+# Generate LookML from local Parquet files
+demo-create lookml model --project retail_analytics --parquet-dir scratch/parquet --connection bigquery_connection
+
+# Deploy staged LookML files to dev workspace, run query tests, and release to production
+demo-create lookml deploy --project retail_analytics --lookml-dir lookml/
+```
+
+#### Conversational Analytics & Golden Queries (`demo-create agent`)
+```bash
+# Provision CA Agent, extract dashboard Golden Queries, and publish to Gemini Enterprise
+demo-create agent create --model retail_analytics --explore orders --dashboard-id retail_analytics::executive_overview --publish-ge
+
+# Extract and link Golden Queries from dashboard files to an existing agent
+demo-create agent golden-queries --agent-id 1042 --dashboard-id retail_analytics::executive_overview
+
+# Publish agent to Gemini Enterprise
+demo-create agent publish --agent-id 1042
+```
+
+#### Standalone Embed Portal Scaffolding (`demo-create embed`)
+```bash
+# Scaffold React/Vite portal with .env configured for Looker, dashboard, and CA chat
+demo-create embed scaffold --project retail_analytics --dashboard-id 1042 --agent-id 1042 --brand-name "Retail Insights"
+```
+
+#### Gemini Enterprise Management (`demo-create ge`)
+```bash
+# Check Looker Gemini enablement and GE status
+demo-create ge status
+
+# Discover GCP GE instances, configure Looker, and grant IAM roles
+demo-create ge configure --instance-id my-ge-app --location us
 ```
 
 ---
