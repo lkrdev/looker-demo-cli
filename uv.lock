@@ -947,7 +947,7 @@ all = [
 
 [[package]]
 name = "looker-demo-cli"
-version = "0.1.2"
+version = "0.1.6"
 source = { editable = "." }
 dependencies = [
     { name = "faker" },
