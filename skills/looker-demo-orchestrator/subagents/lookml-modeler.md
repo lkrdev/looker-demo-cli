@@ -86,13 +86,22 @@ Evaluate the `table_specs` relational graph:
    - Clean Title Case labels (e.g. `label: "Order Created Date"`).
 
 3. **Generate Explores (`explores/*.explore.lkml`)**:
+   - **MANDATORY VIEW INCLUDE**: Every `.explore.lkml` file MUST start with `include: "/views/*.view.lkml"` so Looker can resolve joined views without "Could not find field" errors.
    - Base View sits on the central fact table.
    - Dimensions joined `relationship: many_to_one` with explicit `sql_on:`.
    - Clean `view_label:` headers for clarity in the Looker field picker.
 
 4. **Generate Model File (`models/*.model.lkml`)**:
-   - Include all view and explore files (`include: "/views/**/*.view.lkml"`, `include: "/explores/**/*.explore.lkml"`).
+   - Include all view, explore, and dashboard files (`include: "/views/**/*.view.lkml"`, `include: "/explores/**/*.explore.lkml"`, `include: "/dashboards/**/*.dashboard.lookml"`).
    - Set connection: `connection: "{connection_name}"`.
+
+5. **BigQuery Python Script Standard**:
+   - When querying BigQuery directly via Python, always run via `uv run` or CLI Python, and set:
+     ```python
+     import os
+     os.environ["CLOUDSDK_CONTEXT_AWARE_USE_CLIENT_CERTIFICATE"] = "false"
+     os.environ["GOOGLE_API_USE_CLIENT_CERTIFICATE"] = "false"
+     ```
 
 ---
 

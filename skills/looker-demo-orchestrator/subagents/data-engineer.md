@@ -53,6 +53,13 @@ The parent orchestrator invokes you with:
      ```
    - **Execution Command**: Always execute via `uv run <script_path>` or `demo-create run-script <script_path>`.
    - **NEVER execute bare `python3 <script_path>`** as system Python lacks required libraries.
+   - **Mandatory Cloudtop/mTLS Bypass**: All BigQuery scripts running in Google environments must set:
+     ```python
+     import os
+     os.environ["CLOUDSDK_CONTEXT_AWARE_USE_CLIENT_CERTIFICATE"] = "false"
+     os.environ["GOOGLE_API_USE_CLIENT_CERTIFICATE"] = "false"
+     ```
+     This prevents `google.auth.exceptions.MutualTLSChannelError: Cert provider command returns non-zero status code -11`.
    - Generate realistic rows honoring approved distributions, foreign key referential integrity, and timestamp sequencing.
    - Write Parquet files into `output_dir` (e.g. `<scratch_dir>/parquet/*.parquet`).
 

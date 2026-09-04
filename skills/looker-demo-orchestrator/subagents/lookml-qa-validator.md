@@ -45,12 +45,47 @@ done
 
 ### Phase 2: Run LookML Validator
 Execute the LookML Validator via Code Mode:
-- Assert that `len(validation.errors) == 0`.
-- If errors exist, proceed to Self-Healing Loop.
+```bash
+lkr --oauth-account=<oauth_account> code-mode sandbox --dev-mode --code="
+if session().get('workspace_id') != 'dev':
+    update_session(body={'workspace_id': 'dev'})
+
+res = validate_project(project_id='<project_name>')
+errors = res.get('errors', [])
+print(f'Validation errors count: {len(errors)}')
+for err in errors:
+    print(f'  - {err.get(\"message\")} (field: {err.get(\"field_name\")})')
+"
+```
+
+> [!IMPORTANT]
+> **Monty Sandbox Execution Rules & Function Cheat-Sheet**:
+> - Looker SDK methods are exposed directly as **bare top-level functions** in the sandbox.
+> - **DO NOT USE**: `globals()`, `sdk()`, `client = sdk()`, or `import looker_sdk` (these will raise `NameError` or `TypeError`).
+> - **Available Top-Level Functions**:
+>   - `validate_project(project_id="<project>")`: Validates project and returns `{"errors": [...], "project_digest": "..."}`.
+>   - `run_inline_query(result_format="json", body={...})`: Executes query directly against the dev workspace.
+>   - `all_project_files(project_id="<project>")`: Lists staged files in dev mode.
+>   - `session()` and `update_session(body={"workspace_id": "dev"})`: Gets/updates session state.
+> - **Explore View Includes**: Ensure all `.explore.lkml` files include `include: "/views/*.view.lkml"` so Looker can resolve joined fields without throwing `Could not find a field named ...`.
 
 ### Phase 3: Exhaustive Dashboard Query Verification
 - Extract every inline query from all `*.dashboard.lookml` files.
-- Execute each query against the live dev Looker instance via `/api/4.0/queries/run/json` (or `run_inline_query`).
+- Execute each query against the live dev Looker instance via `run_inline_query(result_format="json", body=query_body)`:
+```bash
+lkr --oauth-account=<oauth_account> code-mode sandbox --dev-mode --code="
+if session().get('workspace_id') != 'dev':
+    update_session(body={'workspace_id': 'dev'})
+
+res = run_inline_query(result_format='json', body={
+    'model': '<model_name>',
+    'view': '<explore_name>',
+    'fields': ['<field_1>', '<field_2>'],
+    'limit': '50'
+})
+print('Result rows count:', len(res))
+"
+```
 - Verify that 100% of queries execute with HTTP 200 OK.
 
 ### Phase 4: Bounded Self-Healing Loop (Max 3 Iterations)

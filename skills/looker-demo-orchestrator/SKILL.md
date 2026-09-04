@@ -130,6 +130,17 @@ Before designing schemas, creating BigQuery datasets, or touching Looker, the ag
 
 > [!IMPORTANT]
 > **NEVER assume or default the Looker instance or GCP project** without explicit user confirmation, even if an active session exists in `pre-check`.
+>
+> ### 🛑 Strict Pre-Flight GCP Account Activation & Validation
+> Immediately upon user selection of the GCP User Account in Step 1:
+> 1. Set the active gcloud CLI account: `gcloud config set account <selected_account>`
+> 2. Verify token validity: `gcloud auth print-access-token --account=<selected_account>`
+> 3. If token check fails, exits non-zero, or prompts for re-authentication, **STOP IMMEDIATELY**. Prompt the user to run:
+>    ```bash
+>    gcloud auth login <selected_account>
+>    gcloud auth application-default login
+>    ```
+>    DO NOT fall back silently to another account or ambient ADC. Confirm credentials before proceeding.
 
 ---
 
@@ -144,17 +155,24 @@ graph TD
     C -->|User Scale Selection| D[Phase 4: Full Synthesis & BigQuery Load]
 ```
 
+> [!CAUTION]
+> ### 🛑 Strict 2-Step Sequential Visible Presentation Rule (Anti-Zero-Length Turn)
+> **NEVER call `ask_question` in an empty or content-free message turn.**
+> 1. **Phase 1 Must Render ERD & Schema in Chat First**: In the exact same response turn, the agent MUST write the full Markdown ERD diagram (`mermaid`), dimension/fact tables, column datatypes, primary/foreign keys, and target domain metrics in visible chat BEFORE calling `ask_question` to approve the schema.
+> 2. **Phase 2 Must Render Data Tables in Chat First**: Once Phase 1 is approved, the agent MUST output complete Markdown preview tables (5–10 rows per table demonstrating parent/child referential integrity and realistic distributions) in visible chat BEFORE calling `ask_question` to validate the sample and select the volume scale.
+> 3. Bypassing visible preview rendering in chat blinds the user and is strictly forbidden.
+
 ### Phase 1 — Schema Proposal & Review (Human-in-the-Loop)
-- Present the relational model (ERD diagram, dimension vs. fact tables, field names, data types, primary keys, and foreign key relationships).
+- Render the relational model (ERD diagram, dimension vs. fact tables, field names, data types, primary keys, and foreign key relationships) directly in chat.
 - Highlight key business metrics (e.g., MRR/ARR, churn rates, NPS, telemetry).
-- **PAUSE and prompt the user** for feedback on fields, custom dimensions, or adjustments before generating any data rows.
+- Invoke `ask_question` prompting the user for approval or modifications.
 
 ### Phase 2 — Micro-Sample Synthesis & Preview (Human-in-the-Loop)
 - Synthesize a micro-sample dataset (5–10 realistic sample rows per table).
-- Display Markdown preview tables in chat demonstrating:
+- Display Markdown preview tables directly in chat demonstrating:
   - Referential integrity across parent/child IDs.
   - Realistic domain-specific values and categorical distributions.
-- **PAUSE and prompt the user** to inspect and validate the sample records.
+- Prompt the user to inspect and validate the sample records.
 
 ### Phase 3 — Volume & Scale Confirmation (Human-in-the-Loop)
 - Prompt the user to select the target scale:

@@ -112,7 +112,7 @@ for attempt in range(1, max_attempts + 1):
         )
         # Verify publication status
         status_check = get(
-            path=f"/api/4.0/internal/agents/{agent_id}",
+            path=f"/api/4.0/agents/{agent_id}",
             structure=None,
         )
         published = True
