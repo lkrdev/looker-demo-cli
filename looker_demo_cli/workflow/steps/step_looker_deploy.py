@@ -108,6 +108,24 @@ def run_looker_deploy_step(state: FlowState) -> FlowState:
         except Exception as prov_err:
             print_info(f"SDK project provisioning note: {prov_err}")
 
+    # 1b. Pre-flight Dashboard YAML Validation
+    import yaml
+    dashboard_files = list(state.lookml_output_dir.glob("**/*.dashboard.lookml"))
+    yaml_errors = []
+    for df in dashboard_files:
+        try:
+            yaml.safe_load(df.read_text(encoding="utf-8"))
+        except yaml.YAMLError as y_err:
+            yaml_errors.append(f"Dashboard YAML syntax error in `{df.name}`: {y_err}")
+
+    if yaml_errors:
+        print_error(f"Local pre-push validation detected {len(yaml_errors)} YAML syntax error(s):")
+        for ye in yaml_errors:
+            print_error(f"  • {ye}")
+        state.status = "failed"
+        state.error_message = f"Pre-push dashboard YAML syntax error: {yaml_errors[0]}"
+        return state
+
     # 2. Synchronize LookML to Dev Branch via lkr CLI
     lkr_bin = shutil.which("lkr") or str(Path(sys.executable).parent / "lkr")
     print_info(f"Using `lkr-dev-cli` binary: `{lkr_bin}`")

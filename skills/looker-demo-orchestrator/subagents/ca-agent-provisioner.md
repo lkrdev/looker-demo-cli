@@ -46,18 +46,27 @@ The CA Agent provisioner can execute the entire flow via `demo-create agent` and
      --model <model_name> \
      --explore <primary_explore> \
      --name "<project_name> Assistant" \
-     --dashboard-id <dashboard_id> \
-     --publish-ge
+     --dashboard-file <dashboard_file_path> \
+     --publish-ge \
+     --non-interactive
    ```
+
+> [!IMPORTANT]
+> **Batch Golden Query Latency & Background Task Handling:**
+> Extracting and registering 15–25 Golden Queries via the Looker REST API sequentially takes approximately 30–60 seconds.
+> When launching `demo-create agent create` via `run_command`:
+> - Always pass `--non-interactive` to avoid blocking on TTY prompts.
+> - If the tool notifies that the command has been sent to the background as a task, **DO NOT abort or start reverse-engineering scripts**. The system will automatically wake you when execution completes.
+
 2. **Link Golden Queries to an Existing Agent**:
    ```bash
-   demo-create agent golden-queries --agent-id <agent_id> --dashboard-id <dashboard_id>
+   demo-create agent golden-queries --agent-id <agent_id> --dashboard-file <dashboard_file_path>
    ```
 3. **Inspect or Configure Gemini Enterprise**:
    ```bash
    demo-create ge status
    demo-create ge configure --instance-id <ge_instance_id> --location <location>
-   demo-create agent publish --agent-id <agent_id>
+   demo-create agent publish --agent-id <agent_id> --non-interactive
    ```
 
 ---
@@ -93,24 +102,25 @@ If `publish_ge` is `True`:
 
 > [!IMPORTANT]
 > **Gemini Enterprise (GE) Automated Verification & Configuration:**
-> Before invoking publish, the agent/CLI verifies GE enablement via `GET /api/4.0/gemini_enablement`:
+> Before invoking publish, verify GE enablement via `GET /api/4.0/gemini_enablement`:
 > - If unconfigured: Scans GCP project for GE apps across `global`/`us`/`eu`, updates Looker via `PATCH /api/4.0/gemini_enablement` (sending full payload with `ai_ge_publish_enabled: true`), and grants `roles/discoveryengine.admin` to the Looker Service Account.
 > - Confirms the Looker Service Account has an active **Gemini Enterprise license**.
+> - **API Endpoints**: Looker public API exposes agents at `GET/POST/PATCH /api/4.0/agents`. Do not call deprecated `/api/4.0/internal/agents` (which returns 404).
 
-Execute via `lkr code-mode sandbox` with retry logic (up to 3 attempts) and state verification:
+Execute publish via REST or CLI `demo-create agent publish --agent-id <agent_id> --non-interactive`. If executing in Code Mode:
 ```python
 max_attempts = 3
 published = False
 
 for attempt in range(1, max_attempts + 1):
     try:
-        # Publish call
+        # Publish endpoint
         res = post(
             path=f"/api/4.0/internal/agents/{agent_id}/publish",
             structure=None,
             body={},
         )
-        # Verify publication status
+        # Verify publication status via public endpoint
         status_check = get(
             path=f"/api/4.0/agents/{agent_id}",
             structure=None,
@@ -119,9 +129,6 @@ for attempt in range(1, max_attempts + 1):
         break
     except Exception as e:
         print(f"GE publish attempt {attempt} failed: {e}")
-        if attempt < max_attempts:
-            import time
-            time.sleep(2)
 
 if not published:
     print(f"Failed to publish agent {agent_id} after {max_attempts} attempts. Check Admin > Gemini and Looker SA roles/licenses.")

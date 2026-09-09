@@ -68,8 +68,21 @@ Evaluate the `table_specs` relational graph:
 
 ### Step 2: Direct Modeling (Simple / Star Schemas)
 
-1. **Automated CLI Modeling (Recommended)**:
-   You can invoke the CLI to introspect BigQuery/Knowledge Catalog metadata and scaffold views and explores:
+> [!CAUTION]
+> **STRICT CLI MODELING MANDATE & NO SILENT MULTI-FILE MANUAL FALLBACK**
+> 1. Always execute `demo-create lookml model ...` to generate the views, explores, and model files.
+> 2. If executing Python helper scripts to introspect BigQuery or inspect schemas:
+>    - ALWAYS run via `demo-create python -c "..."` or `uv run` to guarantee all pinned packages (`google`, `lkml`, `typer`) are available.
+>    - Always disable mTLS client certificates:
+>      ```python
+>      import os
+>      os.environ["CLOUDSDK_CONTEXT_AWARE_USE_CLIENT_CERTIFICATE"] = "false"
+>      os.environ["GOOGLE_API_USE_CLIENT_CERTIFICATE"] = "false"
+>      ```
+> 3. If `demo-create lookml model` reports an issue, diagnose the specific table or argument. **DO NOT fall back to writing 10+ LookML files manually by hand** (which exhausts step limits). If unrecoverable, report the failure directly to the parent orchestrator.
+
+1. **Automated CLI Modeling (Mandatory)**:
+   Scaffold views, explores, and models from BigQuery/Knowledge Catalog metadata:
    ```bash
    demo-create lookml model --project <project_name> --dataset <dataset_id> --connection <connection_name> --output-dir lookml/
    ```
@@ -81,6 +94,7 @@ Evaluate the `table_specs` relational graph:
 2. **Generate View Files (`views/*.view.lkml`)**:
    - Explicit `primary_key: yes` on unique grain column for every view.
    - Explicit `label:` and `description:` on EVERY dimension, dimension group, and measure.
+   - Built-in Google Cloud performance: `suggestable: no` on PKs, FKs, UUIDs, and timestamps.
    - Formatted primary metrics (`type: sum`, `type: average`, `type: count_distinct`) with `value_format_name:` (e.g. `usd_0`, `percent_2`, `decimal_1`).
    - Drill fields (`drill_fields: [...]`) on primary measures.
    - Clean Title Case labels (e.g. `label: "Order Created Date"`).
@@ -93,15 +107,8 @@ Evaluate the `table_specs` relational graph:
 
 4. **Generate Model File (`models/*.model.lkml`)**:
    - Include all view, explore, and dashboard files (`include: "/views/**/*.view.lkml"`, `include: "/explores/**/*.explore.lkml"`, `include: "/dashboards/**/*.dashboard.lookml"`).
+   - Datagroup caching: `datagroup: default_caching_policy { max_cache_age: "4 hours" }` and `persist_with: default_caching_policy`.
    - Set connection: `connection: "{connection_name}"`.
-
-5. **BigQuery Python Script Standard**:
-   - When querying BigQuery directly via Python, always run via `uv run` or CLI Python, and set:
-     ```python
-     import os
-     os.environ["CLOUDSDK_CONTEXT_AWARE_USE_CLIENT_CERTIFICATE"] = "false"
-     os.environ["GOOGLE_API_USE_CLIENT_CERTIFICATE"] = "false"
-     ```
 
 ---
 

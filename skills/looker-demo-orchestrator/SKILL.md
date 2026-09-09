@@ -285,14 +285,23 @@ subagent:
 
 ---
 
-### C. LookML Server Performance Optimization Gate (Delegate to Optimizer Subagent)
+### C. LookML Server Performance Optimization Gate (Interactive Confirmation Gate)
 
-Before pushing to the dev branch, execute the **[`lookml-performance-optimizer`](subagents/lookml-performance-optimizer.md)** subagent to audit and patch staged LookML files in-place according to [Google Cloud Looker Server Optimization Best Practices](https://docs.cloud.google.com/looker/docs/best-practices/how-to-optimize-looker-server-performance):
+> [!IMPORTANT]
+> **Interactive Performance Optimization Gate (`ask_question`)**:
+> Before running the optimizer, the parent orchestrator **MUST prompt the user via `ask_question`**:
+> - **Question**: "Would you like to run the LookML Performance Optimizer to audit and apply Google Cloud Looker Server Optimization best practices?"
+> - **Options**:
+>   - `(Recommended) Yes: Apply Google Cloud performance optimizations (datagroup caching, partition pruning filters, static suggestions, foreign key hiding)`
+>   - `No: Skip performance optimization and proceed directly to QA validation`
+>
+> If the user selects **Yes**, delegate to the **[`lookml-performance-optimizer`](subagents/lookml-performance-optimizer.md)** subagent (or execute `demo-create lookml optimize --lookml-dir <dir>`).
+> If the user selects **No**, skip directly to Phase D (Pre-Deployment QA Validator).
 
 ```yaml
 subagent:
   type: "skills/looker-demo-orchestrator/subagents/lookml-performance-optimizer.md"
-  prompt: "Audit staged LookML files for performance bottlenecks. Apply static suggestions on low-cardinality dims (<=15 values), set suggestable: no on IDs/text, configure datagroup caching in model, enforce partition pruning in explores, and hide raw foreign keys. Strictly static file edits only — do not push to Looker or run validation/queries."
+  prompt: "Audit and optimize staged LookML files in-place using `demo-create lookml optimize --lookml-dir <lookml_dir>`. Enforce datagroup caching, partition pruning filters, disable suggestions on high-cardinality keys, and hide raw foreign keys."
   inputs:
     project_name: "{looker_project_name}"
     model_name: "{looker_model_name}"
@@ -300,7 +309,7 @@ subagent:
     table_specs: "{extracted_table_specs}"
 ```
 
-- **Static Transformation Boundary**: The `lookml-performance-optimizer` is strictly an isolated static code transformer operating exclusively on local files in `lookml_dir` (`view_file`, `replace_file_content`, `grep_search`). Shell execution (`run_command`), remote pushes, test file authoring, and live query/validation testing are strictly forbidden (dev push and validation are handled exclusively by `lookml-qa-validator`).
+- **Fast-Path Automated Optimization**: The subagent executes `demo-create lookml optimize --lookml-dir <lookml_dir>` to audit and patch files in a single pass without manual turn exhaustion.
 - **Static Suggestions on Low-Cardinality Dims**: Injects `suggestions: ["val1", "val2", ...]` on categorical fields with $\le 15$ distinct values to eliminate database roundtrips when filters open.
 - **Disable Suggestions on Unique Keys**: Injects `suggestable: no` on primary keys, foreign key UUIDs, timestamps, and free text.
 - **Model Datagroup Caching**: Configures production datagroups (`max_cache_age: "4 hours"`) and applies `persist_with: default_caching_policy`.

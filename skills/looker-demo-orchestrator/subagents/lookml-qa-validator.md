@@ -35,13 +35,34 @@ The parent orchestrator invokes you with:
 
 ## 2. 4-Phase Validation Protocol
 
-### Phase 1: Push to Dev Branch
-Push all local LookML files to the target Looker dev branch using reliable single-file push (`-f`):
-```bash
-for file in $(find views models dashboards -type f -name "*.lkml" -o -name "*.lookml"); do
-  lkr --oauth-account=<oauth_account> tools lookml push <lookml_dir> --project=<project_name> -f "$file"
-done
-```
+### Phase 1: Local YAML Audit & Push to Dev Branch
+
+1. **Pre-Push Dashboard YAML Check**:
+   Validate that all dashboard files parse cleanly with PyYAML before uploading:
+   ```bash
+   python3 -c "
+   import glob, yaml, sys
+   errs = []
+   for f in glob.glob('dashboards/*.lookml') + glob.glob('dashboards/*.dashboard.lookml'):
+       try:
+           yaml.safe_load(open(f))
+       except Exception as e:
+           errs.append(f'{f}: {e}')
+   if errs:
+       print('Dashboard YAML Syntax Errors:\n' + '\n'.join(errs))
+       sys.exit(1)
+   print('All dashboard YAML files parsed successfully.')
+   "
+   ```
+   If any syntax errors occur (such as unquoted colons in titles), patch them locally with quotes (`title: "..."`) before pushing.
+
+2. **Push to Dev Workspace**:
+   Push all local LookML files to the target Looker dev branch using reliable single-file push (`-f`):
+   ```bash
+   for file in $(find views models dashboards -type f -name "*.lkml" -o -name "*.lookml"); do
+     lkr --oauth-account=<oauth_account> tools lookml push <lookml_dir> --project=<project_name> -f "$file"
+   done
+   ```
 
 ### Phase 2: Run LookML Validator
 Execute the LookML Validator via Code Mode:
@@ -62,6 +83,10 @@ for err in errors:
 > **Monty Sandbox Execution Rules & Function Cheat-Sheet**:
 > - Looker SDK methods are exposed directly as **bare top-level functions** in the sandbox.
 > - **DO NOT USE**: `globals()`, `sdk()`, `client = sdk()`, or `import looker_sdk` (these will raise `NameError` or `TypeError`).
+> - **RESTRICTED ENVIRONMENT - NO SYSTEM IMPORTS**:
+>   - **NEVER IMPORT**: `import time`, `import os`, `import sys`, `import requests`, or external standard library modules (raises `ModuleNotFoundError: No module named 'time'`).
+>   - Standard builtins (`len`, `range`, `print`, `dict`, `list`, `str`, `int`) are natively available.
+>   - Do not call `time.sleep()`.
 > - **Available Top-Level Functions**:
 >   - `validate_project(project_id="<project>")`: Validates project and returns `{"errors": [...], "project_digest": "..."}`.
 >   - `run_inline_query(result_format="json", body={...})`: Executes query directly against the dev workspace.

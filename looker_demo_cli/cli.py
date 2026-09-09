@@ -1,5 +1,4 @@
 from __future__ import annotations
-
 import json
 import shutil
 import subprocess
@@ -70,6 +69,10 @@ from looker_demo_cli.workflow.steps.step_ca_agent import (
     extract_golden_queries_from_dashboards,
     publish_agent_to_ge,
 )
+from looker_demo_cli.services.optimizer_service import (
+    optimize_lookml_project,
+    render_optimization_report,
+)
 from looker_demo_cli.workflow.steps.step_looker_deploy import run_looker_deploy_step
 
 app = typer.Typer(
@@ -77,6 +80,32 @@ app = typer.Typer(
     help="End-to-end Looker demo creation orchestrator CLI for AI agents and developers.",
     no_args_is_help=True,
 )
+
+
+def version_callback(value: bool):
+    if value:
+        from looker_demo_cli import __version__
+
+        console.print(f"[bold cyan]looker-demo-cli[/bold cyan] version [bold green]{__version__}[/bold green]")
+        raise typer.Exit()
+
+
+@app.callback()
+def main(
+    version: Annotated[
+        bool | None,
+        typer.Option(
+            "--version",
+            "-v",
+            help="Show CLI version and exit.",
+            callback=version_callback,
+            is_eager=True,
+        ),
+    ] = None,
+):
+    """End-to-end Looker demo creation orchestrator CLI for AI agents and developers."""
+
+
 
 
 def _render_env_tables(env_status: RuntimeEnvironmentStatus):
@@ -746,6 +775,35 @@ def lookml_deploy(
     print_info(f"Updated state saved to `{saved_path}`")
 
 
+@lookml_app.command(name="optimize")
+def lookml_optimize(
+    lookml_dir: Annotated[
+        Optional[Path],
+        typer.Option("--lookml-dir", help="Directory containing LookML files"),
+    ] = None,
+    json_output: Annotated[
+        bool, typer.Option("--json", help="Output machine-readable JSON report")
+    ] = False,
+):
+    """Scan and patch staged LookML files in-place with Google Cloud Server Performance Best Practices."""
+    state = load_flow_state()
+    target_dir = lookml_dir or state.lookml_output_dir or Path("lookml")
+    if not target_dir.exists():
+        print_error(
+            f"LookML directory `{target_dir}` does not exist. Provide --lookml-dir or model first."
+        )
+        raise typer.Exit(code=1)
+
+    print_info(f"Auditing and optimizing LookML files in `{target_dir}`...")
+    res = optimize_lookml_project(target_dir)
+    if json_output:
+        import json
+
+        print(json.dumps(res, indent=2))
+    else:
+        render_optimization_report(res)
+
+
 # -------------------------------------------------------------------------
 # AGENT GROUP: demo-create agent [create | golden-queries | publish]
 # -------------------------------------------------------------------------
@@ -759,16 +817,56 @@ app.add_typer(agent_app, name="agent")
 
 @agent_app.command(name="create")
 def agent_create(
-    model: Annotated[Optional[str], typer.Option("--model", help="LookML model name")] = None,
-    explore: Annotated[Optional[str], typer.Option("--explore", help="Primary explore name")] = None,
-    dashboards_dir: Annotated[Optional[Path], typer.Option("--dashboards-dir", help="Directory with *.dashboard.lookml files")] = None,
-    dashboard_file: Annotated[Optional[Path], typer.Option("--dashboard-file", help="Specific *.dashboard.lookml file")] = None,
-    dashboard_id: Annotated[Optional[str], typer.Option("--dashboard-id", help="Deployed Looker dashboard ID for query extraction")] = None,
-    name: Annotated[Optional[str], typer.Option("--name", help="Custom Assistant name")] = None,
-    instructions: Annotated[Optional[str], typer.Option("--instructions", help="Custom system prompt instructions")] = None,
-    publish_ge: Annotated[bool, typer.Option("--publish-ge", help="Automatically configure and publish to Gemini Enterprise")] = False,
-    account: Annotated[Optional[str], typer.Option("--looker-account", help="Saved Looker OAuth account alias")] = None,
-    instance_url: Annotated[Optional[str], typer.Option("--instance", help="Looker instance base URL")] = None,
+    model: Annotated[
+        Optional[str], typer.Option("--model", help="LookML model name")
+    ] = None,
+    explore: Annotated[
+        Optional[str], typer.Option("--explore", help="Primary explore name")
+    ] = None,
+    dashboards_dir: Annotated[
+        Optional[Path],
+        typer.Option(
+            "--dashboards-dir", help="Directory with *.dashboard.lookml files"
+        ),
+    ] = None,
+    dashboard_file: Annotated[
+        Optional[Path],
+        typer.Option("--dashboard-file", help="Specific *.dashboard.lookml file"),
+    ] = None,
+    dashboard_id: Annotated[
+        Optional[str],
+        typer.Option(
+            "--dashboard-id", help="Deployed Looker dashboard ID for query extraction"
+        ),
+    ] = None,
+    name: Annotated[
+        Optional[str], typer.Option("--name", help="Custom Assistant name")
+    ] = None,
+    instructions: Annotated[
+        Optional[str],
+        typer.Option("--instructions", help="Custom system prompt instructions"),
+    ] = None,
+    publish_ge: Annotated[
+        bool,
+        typer.Option(
+            "--publish-ge",
+            help="Automatically configure and publish to Gemini Enterprise",
+        ),
+    ] = False,
+    non_interactive: Annotated[
+        bool,
+        typer.Option(
+            "--non-interactive",
+            help="Run non-interactively without prompting for GE reconfigurations",
+        ),
+    ] = False,
+    account: Annotated[
+        Optional[str],
+        typer.Option("--looker-account", help="Saved Looker OAuth account alias"),
+    ] = None,
+    instance_url: Annotated[
+        Optional[str], typer.Option("--instance", help="Looker instance base URL")
+    ] = None,
 ):
     """Create a Conversational Analytics agent, ground with dashboard golden queries, and optionally publish to GE."""
     state = load_flow_state()
@@ -827,7 +925,9 @@ def agent_create(
 
     # Optional: Gemini Enterprise Enablement & Publish
     if publish_ge:
-        state = ensure_gemini_enterprise_configured(state, headers, interactive=True)
+        state = ensure_gemini_enterprise_configured(
+            state, headers, interactive=not non_interactive
+        )
         state.published_to_ge = publish_agent_to_ge(base_url, agent_id, headers)
 
     saved_path = save_flow_state(state)
@@ -883,9 +983,23 @@ def agent_golden_queries(
 
 @agent_app.command(name="publish")
 def agent_publish(
-    agent_id: Annotated[Optional[str], typer.Option("--agent-id", help="Target CA Agent ID to publish")] = None,
-    account: Annotated[Optional[str], typer.Option("--looker-account", help="Saved Looker OAuth account alias")] = None,
-    instance_url: Annotated[Optional[str], typer.Option("--instance", help="Looker instance base URL")] = None,
+    agent_id: Annotated[
+        Optional[str], typer.Option("--agent-id", help="Target CA Agent ID to publish")
+    ] = None,
+    non_interactive: Annotated[
+        bool,
+        typer.Option(
+            "--non-interactive",
+            help="Run non-interactively without prompting for GE reconfigurations",
+        ),
+    ] = False,
+    account: Annotated[
+        Optional[str],
+        typer.Option("--looker-account", help="Saved Looker OAuth account alias"),
+    ] = None,
+    instance_url: Annotated[
+        Optional[str], typer.Option("--instance", help="Looker instance base URL")
+    ] = None,
 ):
     """Verify Gemini Enterprise configuration and publish CA Agent to connected GE apps."""
     state = load_flow_state()
@@ -899,7 +1013,9 @@ def agent_publish(
         print_error("Looker instance URL not configured.")
         raise typer.Exit(code=1)
 
-    state = ensure_gemini_enterprise_configured(state, headers, interactive=True)
+    state = ensure_gemini_enterprise_configured(
+        state, headers, interactive=not non_interactive
+    )
     published = publish_agent_to_ge(base_url, target_id, headers)
     state.published_to_ge = published
     save_flow_state(state)

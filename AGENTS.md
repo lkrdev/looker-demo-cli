@@ -84,12 +84,17 @@ When creating demo datasets, the agent **MUST co-iterate with the user** across 
   - Resolve diamond joins with role-playing aliases (`from: users`) and explicit `view_label:` headers.
 - **Mandatory Labels & Descriptions**: All LookML view files (`.view.lkml`) **MUST include explicit `label:` and `description:` parameters** on every dimension, dimension group, and measure to ensure self-documenting Explores for business users.
 - **Measures & Drill Fields**: Include formatted primary metrics (sum, average, count distinct) with `value_format_name` (e.g. `usd_0`, `percent_2`, `decimal_1`) and drill-down fields.
-- **Executive Polish & Tabbed Dashboard Architecture (`skills/lookml-dashboard`)**: LookML dashboards (`*.dashboard.lookml`) must follow modern, executive-grade design patterns (tabbed report consolidation, single-value KPI banners, dual Y-axis charts, `advanced_vis_config` rounded geometry, cross-filtering, and popover filters) tailored to domain specs (e.g. Linear Insights, Stripe Financials, Salesforce CRM).
+- **Executive Polish & Tabbed Dashboard Architecture (`skills/lookml-dashboard`)**: LookML dashboards (`*.dashboard.lookml`) must follow modern, executive-grade design patterns (tabbed report consolidation, single-value KPI banners, dual Y-axis charts, `advanced_vis_config` rounded geometry, cross-filtering, and popover filters) tailored to domain specs (e.g. Linear Insights, Stripe Financials, Salesforce CRM). All titles and labels in dashboard YAML definitions **MUST be enclosed in double quotes** (`title: "..."`) to prevent unquoted colons from breaking YAML parsers.
+- **Interactive Performance Optimization Gate (`ask_question`)**:
+  Prior to dev branch push, the agent **MUST prompt the user via `ask_question`** to confirm whether to run performance optimization:
+  - Option 1: `(Recommended) Yes: Apply Google Cloud performance optimizations (datagroup caching, partition pruning filters, static suggestions, foreign key hiding)`
+  - Option 2: `No: Skip performance optimization and proceed directly to QA validation`
+  If confirmed, invoke `lookml-performance-optimizer` (which executes `demo-create lookml optimize --lookml-dir <dir>` in a single pass). If declined, proceed directly to Step 4.
 
 ### 4. Mandatory Pre-Deployment Validation Gate (`lkr-dev-cli`)
 The agent **MUST follow this 4-step sequence** without skipping:
-1. **Push to Dev Branch**: Push local LookML files to the Looker dev branch using single-file push (`-f`) for reliability.
-2. **Run LookML Validator**: Execute LookML validation (via `lkr` CLI or `validate_project`) and assert `0` errors before proceeding. If errors exist, fix them locally, re-push, and re-validate.
+1. **Push to Dev Branch**: Run local dashboard `yaml.safe_load` validation first, then push local LookML files to the Looker dev branch using single-file push (`-f`) for reliability.
+2. **Run LookML Validator**: Execute LookML validation (via `lkr` CLI or `validate_project`) and assert `0` errors before proceeding. If errors exist, fix them locally, re-push, and re-validate. (Note: Inside Monty sandbox, do NOT import system modules like `time` or `os`).
 3. **Exhaustive Dashboard Query Verification**: Test-execute all query elements inside every `*.dashboard.lookml` file (via `/api/4.0/queries/run/json` or `run_inline_query`) on the dev workspace to ensure 100% execute with HTTP 200 OK.
 4. **Deploy to Production**: Only proceed to production deployment (`lkr tools lookml deploy`) **after both LookML Validator and Query Tests return 0 errors**.
 
@@ -113,8 +118,8 @@ After deploying the LookML model and dashboards in Step 4, the agent **MUST orch
      4. Automatically grant the Looker Service Account (`ai_ge_service_account_email`) the **Discovery Engine Admin** (`roles/discoveryengine.admin`) role on the target GCP project via `gcloud projects add-iam-policy-binding`. If IAM permissions fail, display the exact command and Google Cloud Console IAM link with retry/continue options.
      5. Verify that the Looker Service Account has been assigned a **Gemini Enterprise license** before executing publish.
 5. **GE Publishing Execution & Error Recovery**:
-   - Execute `POST /api/4.0/internal/agents/{agent_id}/publish` (with empty body `{}`) via OAuth token or `lkr-dev-cli` Code Mode.
-   - Verify publication state via `GET /api/4.0/internal/agents/{agent_id}`.
+   - Execute publish via REST / CLI (`demo-create agent publish --agent-id <agent_id> --non-interactive`) or Code Mode.
+   - Verify publication state via public endpoint `GET /api/4.0/agents/{agent_id}`.
    - If publish fails or returns non-200 status, retry up to 3 times with error reporting.
    - **Re-Publishing Guarantee**: If any LookML self-healing or dashboard changes occurred during QA, the agent **MUST re-extract golden queries, update the agent, and re-publish to GE** to ensure the published agent is never left in an outdated or unpublished state.
 
@@ -126,11 +131,12 @@ For targeted operations or granular subagent execution, `demo-create` provides i
   - `inspect`: Inspect existing BigQuery tables, column types, and record counts.
 - **`demo-create lookml`**:
   - `model`: Generate LookML views, explores, and models from Parquet files or an existing BigQuery dataset (`--dataset <dataset_id>`). When `--dataset` is specified, the CLI automatically queries BigQuery PK/FK constraints and Google Cloud Data Catalog / Dataplex `@bigquery` entry group tags. Agents can also invoke the `knowledge-catalog` MCP server directly to extract business glossaries and column descriptions.
+  - `optimize`: Scan and patch staged LookML files in-place with Google Cloud Server Performance Best Practices (`--lookml-dir <dir>`).
   - `deploy`: Push staged LookML to Looker dev workspace, validate project, run query tests, and deploy to production.
 - **`demo-create agent`**:
-  - `create`: Provision Looker Conversational Analytics agent, ground with golden queries, and optionally publish to GE (`--model <name> --explore <name> --dashboard-id <id> --publish-ge`).
+  - `create`: Provision Looker Conversational Analytics agent, ground with golden queries, and optionally publish to GE (`--model <name> --explore <name> --dashboard-file <file> --publish-ge --non-interactive`).
   - `golden-queries`: Extract queries from dashboard files or IDs and link as Golden Queries to an existing agent.
-  - `publish`: Verify GE configuration and publish agent to connected Gemini Enterprise apps.
+  - `publish`: Verify GE configuration and publish agent to connected Gemini Enterprise apps (`--agent-id <id> --non-interactive`).
 - **`demo-create embed`**:
   - `scaffold`: Scaffold a standalone full-stack React/Vite analytics embed portal with configured `.env` and theme styling.
 - **`demo-create ge`**:

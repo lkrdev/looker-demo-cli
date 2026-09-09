@@ -66,35 +66,44 @@ class LookMLGenerator:
         self.dataset_id = dataset_id
         self.connection_name = connection_name
 
-    def _format_label(self, raw_name: str) -> str:
+    def _format_label(self, raw_name: Optional[str]) -> str:
         """Convert snake_case or raw identifier to human-friendly Title Case."""
-        clean = raw_name.replace("dim_", "").replace("fct_", "").replace("_usd", " (USD)").replace("_pct", " (%)")
+        if not raw_name or not isinstance(raw_name, str):
+            return "Field" if not raw_name else str(raw_name)
+        clean = str(raw_name).replace("dim_", "").replace("fct_", "").replace("_usd", " (USD)").replace("_pct", " (%)")
         words = clean.split("_")
-        acronyms = {"id": "ID", "usd": "USD", "url": "URL", "api": "API", "kpi": "KPI", "nps": "NPS", "ltv": "LTV", "fk": "FK", "pk": "PK"}
+        acronyms = {
+            "id": "ID", "usd": "USD", "url": "URL", "api": "API", "kpi": "KPI",
+            "nps": "NPS", "ltv": "LTV", "fk": "FK", "pk": "PK", "uuid": "UUID",
+            "dtc": "DTC", "llm": "LLM", "ai": "AI", "saas": "SaaS", "arr": "ARR",
+        }
         formatted = [acronyms.get(w.lower(), w.capitalize()) for w in words if w]
-        return " ".join(formatted)
+        return " ".join(formatted) if formatted else str(raw_name)
 
-    def _format_description(self, field_name: str, field_type: str, is_pk: bool = False, is_fk: bool = False, table_name: str = "") -> str:
+    def _format_description(self, field_name: Optional[str], field_type: Optional[str], is_pk: bool = False, is_fk: bool = False, table_name: Optional[str] = "") -> str:
         """Generate descriptive documentation for LookML fields."""
-        table_label = self._format_label(table_name)
+        f_name = str(field_name or "field")
+        f_type = str(field_type or "STRING").upper()
+        tbl_name = str(table_name or "table")
+        table_label = self._format_label(tbl_name)
         if is_pk:
             return f"Unique primary key identifier for {table_label} records."
-        if is_fk or field_name.endswith("_id"):
-            ref_name = self._format_label(field_name.replace("_id", ""))
+        if is_fk or f_name.endswith("_id"):
+            ref_name = self._format_label(f_name.replace("_id", ""))
             return f"Foreign key reference linking to {ref_name}."
-        if field_type in ("DATE", "TIMESTAMP", "DATETIME") or field_name.endswith(("_date", "_time", "_at")):
-            action = field_name.replace("_date", "").replace("_time", "").replace("_at", "").replace("_", " ")
+        if f_type in ("DATE", "TIMESTAMP", "DATETIME") or f_name.endswith(("_date", "_time", "_at")):
+            action = f_name.replace("_date", "").replace("_time", "").replace("_at", "").replace("_", " ")
             return f"Date/timestamp recording when the {action} occurred."
-        if "usd" in field_name.lower() or "amount" in field_name.lower() or "price" in field_name.lower() or "revenue" in field_name.lower() or "cost" in field_name.lower():
-            return f"Monetary amount for {field_name.replace('_', ' ')} in USD."
-        if "pct" in field_name.lower() or "rate" in field_name.lower() or "score" in field_name.lower():
-            return f"Calculated metric or score for {field_name.replace('_', ' ')}."
-        if field_type in ("BOOL", "BOOLEAN"):
-            return f"Boolean indicator flag determining whether {field_name.replace('_', ' ')} is true."
-        return f"Attribute representing {field_name.replace('_', ' ')}."
+        if any(k in f_name.lower() for k in ["usd", "amount", "price", "revenue", "cost", "spend", "budget", "fee", "loss"]):
+            return f"Monetary amount for {f_name.replace('_', ' ')} in USD."
+        if any(k in f_name.lower() for k in ["pct", "rate", "score", "ratio", "percentage"]):
+            return f"Calculated metric or score for {f_name.replace('_', ' ')}."
+        if f_type in ("BOOL", "BOOLEAN"):
+            return f"Boolean indicator flag determining whether {f_name.replace('_', ' ')} is true."
+        return f"Attribute representing {f_name.replace('_', ' ')}."
 
     def generate_view_lkml(self, spec: LookMLTableSpec) -> str:
-        """Generate a self-documenting LookML view file."""
+        """Generate a self-documenting LookML view file with built-in performance best practices."""
         lines = [
             f"view: {spec.table_name} {{",
             f"  sql_table_name: `{self.project_id}.{self.dataset_id}.{spec.table_name}` ;;",
@@ -140,6 +149,10 @@ class LookMLGenerator:
                 ]
                 if is_pk:
                     dim_lines.append("    primary_key: yes")
+                    dim_lines.append("    suggestable: no")
+                elif is_fk:
+                    dim_lines.append("    hidden: yes")
+                    dim_lines.append("    suggestable: no")
                 dim_lines.extend([
                     "    type: number",
                     f"    sql: ${{TABLE}}.{field_name} ;;",
@@ -165,6 +178,14 @@ class LookMLGenerator:
                 ]
                 if is_pk:
                     dim_lines.append("    primary_key: yes")
+                    dim_lines.append("    suggestable: no")
+                elif is_fk:
+                    dim_lines.append("    hidden: yes")
+                    dim_lines.append("    suggestable: no")
+                elif any(sfx in field_name.lower() for sfx in ["uuid", "hash", "token", "payload", "raw", "description", "content"]):
+                    dim_lines.append("    suggestable: no")
+                elif any(kw in field_name.lower() for kw in ["status", "type", "state", "priority", "tier", "category", "channel"]):
+                    dim_lines.append('    suggest_persist_for: "24 hours"')
                 dim_lines.extend([
                     "    type: string",
                     f"    sql: ${{TABLE}}.{field_name} ;;",
@@ -202,7 +223,7 @@ class LookMLGenerator:
         for field_name, field_type in spec.schema_fields.items():
             if field_name != spec.primary_key and not field_name.endswith("_id"):
                 if field_type in ("FLOAT64", "NUMERIC", "INT64", "DOUBLE"):
-                    val_format = "usd_0" if any(k in field_name.lower() for k in ["usd", "cost", "rev", "price", "loss", "fee", "val", "amount", "payout", "premium"]) else "decimal_1"
+                    val_format = "usd_0" if any(k in field_name.lower() for k in ["usd", "cost", "rev", "price", "loss", "fee", "val", "amount", "payout", "premium", "spend"]) else "decimal_1"
                     field_label = self._format_label(field_name)
                     lines.extend([
                         f"  measure: total_{field_name} {{",
@@ -227,18 +248,20 @@ class LookMLGenerator:
         return "\n".join(lines)
 
     def generate_model_lkml(self, model_name: str, tables: list[LookMLTableSpec]) -> str:
-        """Generate LookML model string with explores and joins."""
+        """Generate LookML model string with explores, joins, and Google Cloud performance caching."""
         lines = [
             f'connection: "{self.connection_name}"',
             "",
             'include: "/views/**/*.view.lkml"',
             'include: "/dashboards/**/*.dashboard.lookml"',
             "",
-            "datagroup: default_datagroup {",
+            "# Google Cloud Looker Server Performance Best Practice: Model Datagroup Caching",
+            "datagroup: default_caching_policy {",
             '  max_cache_age: "4 hours"',
+            '  description: "Default caching policy for operational dashboard and explore queries"',
             "}",
             "",
-            "persist_with: default_datagroup",
+            "persist_with: default_caching_policy",
             "",
         ]
 
@@ -250,6 +273,31 @@ class LookMLGenerator:
                 f'  label: "{label}"',
                 f'  description: "Explore for analyzing {label.lower()} data with relational dimensions."',
             ])
+
+            # Partition pruning filter check (Performance Best Practice Rule 4)
+            date_col = None
+            for col, col_type in ft.schema_fields.items():
+                if col_type == "DATE" or col.endswith(("_date", "_day")):
+                    date_col = f"{ft.table_name}.{col}"
+                    break
+            if not date_col:
+                for col, col_type in ft.schema_fields.items():
+                    if col_type in ("TIMESTAMP", "DATETIME") or col.endswith(("_time", "_at")):
+                        for sfx in ["_time", "_at", "_date"]:
+                            if col.endswith(sfx):
+                                date_col = f"{ft.table_name}.{col[:-len(sfx)]}_date"
+                                break
+                        if not date_col:
+                            date_col = f"{ft.table_name}.{col}_date"
+                        break
+
+            if date_col:
+                lines.extend([
+                    "  always_filter: {",
+                    f'    filters: [{date_col}: "365 days"]',
+                    "  }",
+                ])
+
             # Add joins
             for fk_col, parent_ref in ft.foreign_keys.items():
                 parent_table = parent_ref.split(".")[0]
@@ -266,7 +314,7 @@ class LookMLGenerator:
         return "\n".join(lines)
 
     def generate_dashboard_from_spec(self, spec: DashboardSpec) -> str:
-        """Generate LookML dashboard YAML string from a flexible DashboardSpec."""
+        """Generate LookML dashboard YAML string from a flexible DashboardSpec with safe quoting."""
         lines = [
             f"- dashboard: {spec.dashboard_name}",
             f'  title: "{spec.title}"',
@@ -279,18 +327,18 @@ class LookMLGenerator:
             lines.append("  tabs:")
             for t in spec.tabs:
                 lines.extend([
-                    f"  - name: {t.name}",
-                    f"    label: {t.label}",
+                    f'  - name: "{t.name}"',
+                    f'    label: "{t.label}"',
                 ])
 
         if spec.filters:
             lines.append("  filters:")
             for f in spec.filters:
                 lines.extend([
-                    f"  - name: {f.name}",
+                    f'  - name: "{f.name}"',
                     f'    title: "{f.title}"',
                     f"    type: {f.type}",
-                    f"    default_value: {f.default_value}",
+                    f'    default_value: "{f.default_value}"',
                     f"    allow_multiple_values: {'true' if f.allow_multiple_values else 'false'}",
                     f"    required: {'true' if f.required else 'false'}",
                     "    ui_config:",
@@ -302,8 +350,8 @@ class LookMLGenerator:
         for el in spec.elements:
             tile_name = el.name or el.title
             lines.extend([
-                f"  - title: {el.title}",
-                f"    name: {tile_name}",
+                f'  - title: "{el.title}"',
+                f'    name: "{tile_name}"',
                 f"    model: {el.model}",
                 f"    explore: {el.explore}",
                 f"    type: {el.type}",
@@ -316,7 +364,7 @@ class LookMLGenerator:
             if el.limit:
                 lines.append(f"    limit: {el.limit}")
             if el.tab_name:
-                lines.append(f"    tab_name: {el.tab_name}")
+                lines.append(f'    tab_name: "{el.tab_name}"')
             lines.extend([
                 f"    row: {el.row}",
                 f"    col: {el.col}",
@@ -326,7 +374,7 @@ class LookMLGenerator:
             if el.listen:
                 lines.append("    listen:")
                 for filter_k, target_col in el.listen.items():
-                    lines.append(f"      {filter_k}: {target_col}")
+                    lines.append(f'      "{filter_k}": {target_col}')
             lines.append("")
 
         return "\n".join(lines)
@@ -363,8 +411,8 @@ class LookMLGenerator:
             f for f, t in primary_fact.schema_fields.items()
             if t == "STRING" and f != primary_fact.primary_key and not f.endswith("_id")
         ]
-        cat_1 = cat_dims[0] if cat_dims else (dim_tables[0].primary_key if dim_tables and dim_tables[0].primary_key else primary_fact.primary_key)
-        cat_2 = cat_dims[1] if len(cat_dims) > 1 else cat_1
+        cat_1 = cat_dims[0] if cat_dims else (dim_tables[0].primary_key if dim_tables and dim_tables[0].primary_key else (primary_fact.primary_key or "category"))
+        cat_2 = cat_dims[1] if len(cat_dims) > 1 else (cat_1 or "category")
 
         title_display = self._format_label(model_name)
 

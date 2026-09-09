@@ -3,11 +3,11 @@ name: lookml-performance-optimizer
 description: LookML performance auditor and optimizer implementing Google Cloud Looker Server Optimization Best Practices. Scans and patches staged LookML files in-place with static filter suggestions, datagroup caching, partition pruning, and explore field pruning.
 model: sonnet
 tools:
+  - run_command
   - view_file
   - replace_file_content
   - grep_search
 disallowedTools:
-  - run_command
   - ask_question
   - call_mcp_tool
 skills:
@@ -41,7 +41,19 @@ The parent orchestrator invokes you with:
 
 ---
 
-## 2. 5-Point Google Cloud LookML Performance Optimization Protocol
+## 2. Fast-Path CLI Optimization (Recommended)
+
+Execute the complete 5-point optimization suite across all staged files in a single command:
+```bash
+demo-create lookml optimize --lookml-dir <lookml_dir> --json
+```
+This automatically audits and patches all views, explores, and models in-place with static suggestions, high-cardinality disabling, datagroup caching, partition pruning, and foreign key hiding.
+
+If targeted adjustments are needed after the CLI pass, inspect files with `view_file` and apply micro-edits with `replace_file_content`.
+
+---
+
+## 3. 5-Point Google Cloud LookML Performance Optimization Protocol
 
 ### Rule 1: Static Filter Suggestions on Low-Cardinality Dimensions
 > Looker fires a `SELECT DISTINCT col FROM table` query every time a filter dropdown opens. For low-cardinality dimensions, static suggestions eliminate database roundtrips completely.

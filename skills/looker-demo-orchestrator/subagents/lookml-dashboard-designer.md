@@ -40,6 +40,17 @@ The parent orchestrator invokes you with:
 > - **DO NOT include `crossfilter: true` at the dashboard root level.** In LookML dashboard definitions, root-level `crossfilter: true` is deprecated/invalid syntax and triggers LookML validator errors.
 > - If enabling dashboard-level cross-filtering, use `crossfilter_enabled: true` at the dashboard root.
 
+> [!CAUTION]
+> **MANDATORY DOUBLE-QUOTED STRINGS FOR TITLES & LABELS (YAML SAFETY RULE)**
+> In LookML dashboard YAML definitions, unquoted colons followed by a space (e.g. `title: Daily Spend: Cost vs Tokens`) break YAML parsing with `yaml.scanner.ScannerError: mapping values are not allowed here`.
+> **ALL string attributes MUST be explicitly enclosed in double quotes**:
+> - `title: "Daily Spend: Cost vs Tokens"`
+> - `name: "daily_spend_overview"`
+> - `tab_name: "Executive Pulse"`
+> - `label: "Executive Overview"`
+> - `subtitle: "Comparing prompt vs output token volumes"`
+> Never output unquoted titles or labels containing punctuation, colons, dashes, or special characters.
+
 ### A. Strict Explore-Grounded Field Discovery
 1. Inspect the staged `explores/*.explore.lkml` and `views/*.view.lkml` files in `lookml_dir`.
 2. Discover all defined dimensions, dimension groups, and measures.
