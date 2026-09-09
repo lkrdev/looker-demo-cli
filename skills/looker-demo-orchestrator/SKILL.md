@@ -281,7 +281,7 @@ subagent:
 
 - **Strict Explore-Grounded Authoring**: Inspects staged `explores/*.explore.lkml` and `views/*.view.lkml` files to discover available dimensions and measures (NEVER invents fields).
 - **Tabbed Architecture**: Modern 2–4 tab operational command center (e.g. *Executive Overview*, *Operations Deep Dive*, *Alerts & Exceptions*).
-- **Visual Standards**: Single-value KPI cards, dual-axis timelines, donut breakdowns, clustered bar charts, `advanced_vis_config` rounded geometry (`borderRadius: 8`), and universal cross-filtering.
+- **Visual Standards**: Single-value KPI cards, dual-axis timelines, donut breakdowns, clustered bar charts, `advanced_vis_config` rounded geometry (`borderRadius: 8`), and universal cross-filtering (use `crossfilter_enabled: true` at dashboard root; NEVER use deprecated root `crossfilter: true`).
 
 ---
 
@@ -292,7 +292,7 @@ Before pushing to the dev branch, execute the **[`lookml-performance-optimizer`]
 ```yaml
 subagent:
   type: "skills/looker-demo-orchestrator/subagents/lookml-performance-optimizer.md"
-  prompt: "Audit staged LookML files for performance bottlenecks. Apply static suggestions on low-cardinality dims (<=15 values), set suggestable: no on IDs/text, configure datagroup caching in model, enforce partition pruning in explores, and hide raw foreign keys."
+  prompt: "Audit staged LookML files for performance bottlenecks. Apply static suggestions on low-cardinality dims (<=15 values), set suggestable: no on IDs/text, configure datagroup caching in model, enforce partition pruning in explores, and hide raw foreign keys. Strictly static file edits only — do not push to Looker or run validation/queries."
   inputs:
     project_name: "{looker_project_name}"
     model_name: "{looker_model_name}"
@@ -300,6 +300,7 @@ subagent:
     table_specs: "{extracted_table_specs}"
 ```
 
+- **Static Transformation Boundary**: The `lookml-performance-optimizer` is strictly an isolated static code transformer operating exclusively on local files in `lookml_dir` (`view_file`, `replace_file_content`, `grep_search`). Shell execution (`run_command`), remote pushes, test file authoring, and live query/validation testing are strictly forbidden (dev push and validation are handled exclusively by `lookml-qa-validator`).
 - **Static Suggestions on Low-Cardinality Dims**: Injects `suggestions: ["val1", "val2", ...]` on categorical fields with $\le 15$ distinct values to eliminate database roundtrips when filters open.
 - **Disable Suggestions on Unique Keys**: Injects `suggestable: no` on primary keys, foreign key UUIDs, timestamps, and free text.
 - **Model Datagroup Caching**: Configures production datagroups (`max_cache_age: "4 hours"`) and applies `persist_with: default_caching_policy`.

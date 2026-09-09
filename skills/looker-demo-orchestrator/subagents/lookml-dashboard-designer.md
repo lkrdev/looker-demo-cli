@@ -35,6 +35,11 @@ The parent orchestrator invokes you with:
 
 ## 2. Execution Responsibilities & Visual Standards
 
+> [!CAUTION]
+> **STRICT DASHBOARD ROOT CROSSFILTER RULE**
+> - **DO NOT include `crossfilter: true` at the dashboard root level.** In LookML dashboard definitions, root-level `crossfilter: true` is deprecated/invalid syntax and triggers LookML validator errors.
+> - If enabling dashboard-level cross-filtering, use `crossfilter_enabled: true` at the dashboard root.
+
 ### A. Strict Explore-Grounded Field Discovery
 1. Inspect the staged `explores/*.explore.lkml` and `views/*.view.lkml` files in `lookml_dir`.
 2. Discover all defined dimensions, dimension groups, and measures.
@@ -43,7 +48,7 @@ The parent orchestrator invokes you with:
 ### B. Modern Executive Tabbed Architecture
 Structure dashboards into 2 to 4 functional operational tabs (e.g., *Executive Overview*, *Deep Dive Operations*, *Diagnostics & Alerts*):
 - **Tabbed Layout**: Clean section separation avoiding vertical scroll fatigue.
-- **Universal Cross-Filtering**: Enable `crossfilter: true` across all analytical tiles.
+- **Universal Cross-Filtering**: Set `crossfilter_enabled: true` at the dashboard root level if cross-filtering is desired. NEVER use `crossfilter: true` at the dashboard root level.
 - **Global Popover Filters**: Add top-level interactive filters for **Date Range** (with sensible defaults like `30 days` or `365 days`), categorical types, and status.
 
 ### C. Visual Hierarchy & Chart Archetypes
