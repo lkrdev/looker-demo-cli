@@ -75,6 +75,7 @@ from looker_demo_cli.services.optimizer_service import (
     restore_lookml_backup,
 )
 from looker_demo_cli.workflow.steps.step_looker_deploy import run_looker_deploy_step
+from looker_demo_cli.services.lookml_cleaner import clean_root_duplicate_files
 
 app = typer.Typer(
     name="demo-create",
@@ -400,6 +401,16 @@ def run_flow(
     agent_mode: Annotated[bool, typer.Option("--agent-mode", help="Non-interactive execution mode for AI agents")] = False,
 ):
     """Execute the full deterministic demo creation workflow."""
+    print_warning(
+        "DEPRECATION NOTICE: Monolithic `demo-create run` bypasses iterative schema co-design and volume validation.\n"
+        "The recommended workflow uses the 6-Gate discrete subcommands:\n"
+        "  Gate 0: demo-create pre-check --json\n"
+        "  Gate 1: demo-create data generate && demo-create data upload\n"
+        "  Gate 2: demo-create lookml model\n"
+        "  Gate 3: demo-create lookml clean-root, demo-create lookml optimize, demo-create lookml deploy\n"
+        "  Gate 4: demo-create agent create\n"
+        "  Gate 5: demo-create agent publish (or demo-create ge publish)\n"
+    )
     ds_name = dataset_name or project_name
     demo_scope_val = "external_embed" if "ext" in scope.lower() else "internal_looker"
 
@@ -547,6 +558,41 @@ def ge_configure(
     else:
         print_error("Failed to complete Gemini Enterprise configuration.")
         raise typer.Exit(code=1)
+
+
+@ge_app.command(name="publish")
+def ge_publish(
+    agent_id: Annotated[
+        Optional[str], typer.Option("--agent-id", help="Target CA Agent ID to publish")
+    ] = None,
+    non_interactive: Annotated[
+        bool,
+        typer.Option(
+            "--non-interactive",
+            help="Run non-interactively without prompting for GE reconfigurations",
+        ),
+    ] = False,
+    account: Annotated[
+        Optional[str],
+        typer.Option("--looker-account", help="Saved Looker OAuth account alias"),
+    ] = None,
+    instance_url: Annotated[
+        Optional[str], typer.Option("--instance", help="Looker instance base URL")
+    ] = None,
+    output_json: Annotated[
+        bool,
+        typer.Option("--json", help="Emit raw JSON report for agent programmatic consumption"),
+    ] = False,
+):
+    """Verify Gemini Enterprise configuration and publish CA Agent to connected GE apps (Gate 5)."""
+    return agent_publish(
+        agent_id=agent_id,
+        non_interactive=non_interactive,
+        account=account,
+        instance_url=instance_url,
+        output_json=output_json,
+    )
+
 
 
 # -------------------------------------------------------------------------
@@ -890,6 +936,84 @@ def lookml_restore(
             raise typer.Exit(code=1)
 
 
+@lookml_app.command(name="clean-root")
+def lookml_clean_root(
+    project: Annotated[
+        Optional[str],
+        typer.Option("--project", help="Looker project name to audit and clean"),
+    ] = None,
+    account: Annotated[
+        Optional[str],
+        typer.Option("--looker-account", help="Saved Looker OAuth account alias"),
+    ] = None,
+    instance_url: Annotated[
+        Optional[str],
+        typer.Option("--instance", help="Looker instance base URL"),
+    ] = None,
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run", help="Report root duplicates without deleting them"),
+    ] = False,
+    output_json: Annotated[
+        bool,
+        typer.Option("--json", help="Emit raw JSON report for agent programmatic consumption"),
+    ] = False,
+):
+    """Audit Looker project and delete duplicate root-level LookML files (e.g. users.view.lkml vs views/users.view.lkml)."""
+    state = load_flow_state()
+    proj_name = project or state.looker_project_name
+    if not proj_name:
+        if output_json:
+            import json
+            print(json.dumps({"status": "FAILED", "error": "No Looker project specified. Provide --project or model first."}, indent=2))
+            raise typer.Exit(code=1)
+        print_error("No Looker project specified. Provide --project or run `demo-create lookml model`.")
+        raise typer.Exit(code=1)
+
+    headers, base_url = get_looker_auth_context(
+        instance_url=instance_url or state.looker_instance_url,
+        preferred_account=account or state.looker_account,
+    )
+    if not base_url or not headers:
+        if output_json:
+            import json
+            print(json.dumps({"status": "FAILED", "error": "Looker authentication required. Authenticate with `lkr auth login`."}, indent=2))
+            raise typer.Exit(code=1)
+        print_error("Looker authentication required. Authenticate with `lkr auth login` or provide credentials.")
+        raise typer.Exit(code=1)
+
+    print_info(f"Auditing Looker project `{proj_name}` for orphaned root duplicate files...")
+    res = clean_root_duplicate_files(
+        project_id=proj_name,
+        headers=headers,
+        base_url=base_url,
+        dry_run=dry_run,
+    )
+
+    if output_json:
+        import json
+        print(json.dumps(res, indent=2))
+        if res.get("status") == "FAILED":
+            raise typer.Exit(code=1)
+        return
+
+    if res.get("status") == "FAILED":
+        print_error(res.get("error", "Failed to clean root duplicates."))
+        raise typer.Exit(code=1)
+
+    if res.get("status") == "DRY_RUN":
+        print_warning(f"Dry run: {len(res.get('cleaned_files', []))} duplicate root file(s) identified.")
+        for f in res.get("cleaned_files", []):
+            console.print(f"  • {f}")
+    elif res.get("cleaned_files"):
+        print_success(f"Cleaned {len(res.get('cleaned_files', []))} duplicate root file(s) from `{proj_name}`.")
+        for f in res.get("cleaned_files", []):
+            console.print(f"  • {f}")
+    else:
+        print_success(f"Project `{proj_name}` has a clean root directory structure. No duplicates found.")
+
+
+
 # -------------------------------------------------------------------------
 # AGENT GROUP: demo-create agent [create | golden-queries | publish]
 # -------------------------------------------------------------------------
@@ -1086,16 +1210,28 @@ def agent_publish(
     instance_url: Annotated[
         Optional[str], typer.Option("--instance", help="Looker instance base URL")
     ] = None,
+    output_json: Annotated[
+        bool,
+        typer.Option("--json", help="Emit raw JSON report for agent programmatic consumption"),
+    ] = False,
 ):
-    """Verify Gemini Enterprise configuration and publish CA Agent to connected GE apps."""
+    """Verify Gemini Enterprise configuration and publish CA Agent to connected GE apps (Gate 5)."""
     state = load_flow_state()
     target_id = agent_id or state.ca_agent_id
     if not target_id:
+        if output_json:
+            import json
+            print(json.dumps({"status": "FAILED", "error": "No CA agent ID found. Provide --agent-id or run `demo-create agent create` first."}, indent=2))
+            raise typer.Exit(code=1)
         print_error("No CA agent ID found. Provide --agent-id or run `demo-create agent create` first.")
         raise typer.Exit(code=1)
 
     headers, base_url = get_looker_auth_context(instance_url=instance_url or state.looker_instance_url, preferred_account=account or state.looker_account)
     if not base_url:
+        if output_json:
+            import json
+            print(json.dumps({"status": "FAILED", "error": "Looker instance URL not configured."}, indent=2))
+            raise typer.Exit(code=1)
         print_error("Looker instance URL not configured.")
         raise typer.Exit(code=1)
 
@@ -1104,7 +1240,27 @@ def agent_publish(
     )
     published = publish_agent_to_ge(base_url, target_id, headers)
     state.published_to_ge = published
-    save_flow_state(state)
+    saved_path = save_flow_state(state)
+
+    if output_json:
+        import json
+        print(json.dumps({
+            "status": "SUCCESS" if published else "FAILED",
+            "agent_id": target_id,
+            "ge_configured": state.ge_configured,
+            "ge_instance_id": state.ge_instance_id,
+            "published_to_ge": published,
+        }, indent=2))
+        if not published:
+            raise typer.Exit(code=1)
+        return
+
+    if published:
+        print_success(f"Agent `{target_id}` published to Gemini Enterprise app `{state.ge_instance_id}`.")
+    else:
+        print_error(f"Failed to publish CA Agent `{target_id}` to Gemini Enterprise.")
+        raise typer.Exit(code=1)
+    print_info(f"Updated state saved to `{saved_path}`")
 
 
 # -------------------------------------------------------------------------

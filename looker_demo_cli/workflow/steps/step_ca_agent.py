@@ -161,8 +161,8 @@ def publish_agent_to_ge(instance_url: str, agent_id: str, headers: Dict[str, str
     return False
 
 
-def run_ca_agent_step(state: FlowState, custom_instructions: Optional[str] = None, publish_to_ge: bool = True) -> FlowState:
-    """Step 6: Provision Conversational Analytics Agent, register dashboard golden queries, and publish to GE."""
+def run_ca_agent_step(state: FlowState, custom_instructions: Optional[str] = None, publish_to_ge: bool = False) -> FlowState:
+    """Step 6: Provision Conversational Analytics Agent and register dashboard golden queries (Gate 4)."""
     print_step_header(6, state.total_steps, "Conversational Analytics Agent & Golden Queries Provisioning")
 
     oauth_instances = get_authenticated_oauth_instances()

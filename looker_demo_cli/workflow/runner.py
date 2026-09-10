@@ -132,8 +132,8 @@ class FlowRunner:
         # 5. Looker Deploy (delegates directly to lkr tools lookml push ... --deploy)
         self.state = run_looker_deploy_step(self.state)
 
-        # 6. Conversational Analytics Agent & Gemini Enterprise
-        self.state = run_ca_agent_step(self.state)
+        # 6. Conversational Analytics Agent (Gate 4 - decoupled from GE)
+        self.state = run_ca_agent_step(self.state, publish_to_ge=False)
 
         # 7. Embed Scaffold
         self.state = run_embed_scaffold_step(self.state, self.target_base_dir)

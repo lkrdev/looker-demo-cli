@@ -283,6 +283,11 @@ demo-create lookml model --project retail_analytics --dataset retail_analytics -
 # Generate LookML from local Parquet files
 demo-create lookml model --project retail_analytics --parquet-dir scratch/parquet --connection bigquery_connection
 
+# Audit and delete orphaned duplicate LookML files at project root (e.g. users.view.lkml vs views/users.view.lkml)
+demo-create lookml clean-root --project retail_analytics
+demo-create lookml clean-root --project retail_analytics --dry-run
+demo-create lookml clean-root --project retail_analytics --json
+
 # Audit and optimize staged LookML with Google Cloud server best practices (auto-snapshots to .backup_pre_opt)
 demo-create lookml optimize --lookml-dir lookml/
 
@@ -295,14 +300,15 @@ demo-create lookml deploy --project retail_analytics --lookml-dir lookml/
 
 #### Conversational Analytics & Golden Queries (`demo-create agent`)
 ```bash
-# Provision CA Agent, extract dashboard Golden Queries, and publish to Gemini Enterprise
-demo-create agent create --model retail_analytics --explore orders --dashboard-id retail_analytics::executive_overview --publish-ge
+# Provision CA Agent and extract dashboard Golden Queries (Gate 4 - decoupled from GE)
+demo-create agent create --model retail_analytics --explore orders --dashboard-file lookml/dashboards/overview.dashboard.lookml
 
-# Extract and link Golden Queries from dashboard files to an existing agent
+# Extract and link Golden Queries from dashboard files or deployed dashboard to an existing agent
 demo-create agent golden-queries --agent-id 1042 --dashboard-id retail_analytics::executive_overview
 
-# Publish agent to Gemini Enterprise
+# Publish agent to connected Gemini Enterprise apps (Gate 5)
 demo-create agent publish --agent-id 1042
+demo-create agent publish --agent-id 1042 --json
 ```
 
 #### Standalone Embed Portal Scaffolding (`demo-create embed`)
@@ -319,6 +325,9 @@ demo-create ge status --json
 
 # Discover GCP GE instances, configure Looker, and grant IAM roles
 demo-create ge configure --instance-id my-ge-app --location us
+
+# Publish CA Agent to connected Gemini Enterprise apps (Gate 5)
+demo-create ge publish --agent-id 1042
 ```
 
 ---

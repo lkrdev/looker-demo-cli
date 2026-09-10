@@ -20,27 +20,31 @@ To eliminate subagent initialization drag, serialization latency, and background
 ```mermaid
 graph TD
     Start([User Request]) --> PreCheck["Orchestrator: Turn-1 Pre-Check<br/>(demo-create pre-check --json)"]
-    PreCheck --> Gate0{"Human Gate 0: Instant 4-Target Alignment<br/>(ask_question)"}
+    PreCheck --> Gate0{"Human Gate 0: Instant 4-Target Alignment<br/>(ask_question - NO plan before this!)"}
     Gate0 -->|Co-Design Phase 1| Phase1["Orchestrator: Schema & ERD Proposal<br/>(Mermaid ERD in Chat)"]
     Phase1 -->|Co-Design Phase 2| Phase2["Orchestrator: Micro-Sample Preview<br/>(5-10 Sample Rows in Chat)"]
     Phase2 --> Gate1{"Human Gate 1: Scale & Volume Confirmation<br/>(ask_question)"}
     Gate1 -->|Fast-Path CLI| GenBQ["Orchestrator: Batch Synthesis & BQ Upload<br/>(demo-create data generate + upload)"]
-    GenBQ --> ModelCLI["Orchestrator: Semantic Modeling<br/>(demo-create lookml model)"]
+    GenBQ --> ModelCLI["Gate 2: Semantic Modeling<br/>(demo-create lookml model)"]
     ModelCLI --> SnowflakeBranch{"Is Schema 3NF Snowflake<br/>with Chasm Traps?"}
     SnowflakeBranch -->|Yes: Spawn On-Demand Subagent| S_Snowflake["On-Demand Subagent: lookml-snowflake-modeler<br/>(NDT Rollups & Chasm Trap Elimination)"]
-    SnowflakeBranch -->|No: Standard Star Schema| GateOpt{"Human Gate 2: Run Performance Optimizer?<br/>(Guarded ask_question)"}
-    S_Snowflake --> GateOpt
+    SnowflakeBranch -->|No: Standard Star Schema| CleanRoot["Gate 3A: Clean Root Orphan Duplicates<br/>(demo-create lookml clean-root)"]
+    S_Snowflake --> CleanRoot
+    CleanRoot --> GateOpt{"Gate 3B: Run Performance Optimizer?<br/>(Guarded ask_question)"}
     GateOpt -->|Yes: Confirmed| OptCLI["Orchestrator: Performance Optimizer<br/>(demo-create lookml optimize --backup)"]
-    GateOpt -->|No: Skipped| DeployCLI["Orchestrator: Pre-Deployment QA & Release<br/>(demo-create lookml deploy)"]
+    GateOpt -->|No: Skipped| DeployCLI["Gate 3C: Pre-Deployment QA & Release<br/>(demo-create lookml deploy)"]
     OptCLI --> DeployCLI
     DeployCLI --> QAStatus{"LookML & Query Validation<br/>Passed 100%?"}
     QAStatus -->|Fail: Spawn On-Demand Subagent| S_QA["On-Demand Subagent: lookml-qa-validator<br/>(Max 3 Self-Healing Loops)"]
     S_QA -->|Certified Ready| DeployProd["Orchestrator: Production Release<br/>(lkr tools lookml deploy)"]
     QAStatus -->|Pass 100%| DeployProd
-    DeployProd --> GateCA{"Human Gate 3: Provision CA Agent?<br/>(ask_question)"}
-    GateCA -->|Yes| CA_CLI["Orchestrator: CA Agent & GE Grounding<br/>(demo-create agent create --publish-ge)"]
+    DeployProd --> GateCA{"Human Gate 4: Provision CA Agent?<br/>(ask_question)"}
+    GateCA -->|Yes| CA_CLI["Orchestrator: CA Agent & Golden Queries<br/>(demo-create agent create)"]
     GateCA -->|No| DeliveryReport["Orchestrator: Final Delivery Report<br/>(DELIVERY_REPORT.md)"]
-    CA_CLI --> DeliveryReport
+    CA_CLI --> GateGE{"Human Gate 5: Publish to Gemini Enterprise?<br/>(ask_question)"}
+    GateGE -->|Yes| GE_CLI["Orchestrator: Publish to GE<br/>(demo-create agent publish)"]
+    GateGE -->|No| DeliveryReport
+    GE_CLI --> DeliveryReport
 ```
 
 | Component | Execution Mode | Responsibility & Scope |
@@ -128,6 +132,9 @@ Before designing schemas, creating BigQuery datasets, or touching Looker, the ag
 
 > [!IMPORTANT]
 > **NEVER assume or default the Looker instance or GCP project** without explicit user confirmation, even if an active session exists in `pre-check`.
+>
+> ### 🛑 Strict Anti-Planning Rule (NO `implementation_plan.md` Before Gate 0)
+> The agent **MUST NEVER** generate an `implementation_plan.md` artifact or start drafting detailed plans before Gate 0 has completed and the user has confirmed all 4 environment targets via `ask_question`. Writing a planning artifact at Turn 1 buries the mandatory Gate 0 questions and forces premature assumptions about GCP projects and Looker instances.
 >
 > ### 🛑 Strict Pre-Flight GCP Account Activation & Validation
 > Immediately upon user selection of the GCP User Account in Step 1:

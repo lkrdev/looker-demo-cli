@@ -48,7 +48,7 @@ demo-create pre-check --fix
 ```
 This guarantees all pinned dependencies, MCP servers (`data-designer`, `bigquery`, `knowledge-catalog`), and global agent skills (`~/.gemini/config/skills/`) are synchronized before executing any other commands.
 
-### 1. Instant Turn-1 Pre-Flight Inspection & 4-Target Confirmation Gate
+### Gate 0: Instant Turn-1 Pre-Flight Inspection & 4-Target Confirmation Gate
 1. **Zero-Delay Pre-Flight**: Run `demo-create pre-check --json` at Turn 1.
    - **Fail Immediately on Auth Block**: If `pre-check` exits with code 1 or reports `is_blocked: true`:
      - **GCP Missing**: Prompt the user to run:
@@ -82,7 +82,11 @@ This guarantees all pinned dependencies, MCP servers (`data-designer`, `bigquery
    
    *NEVER assume or default the Looker instance or GCP project without explicit user confirmation.*
 
-### 2. Iterative Schema Co-Design & Micro-Sample Validation Gate
+> [!CAUTION]
+> **STRICT ANTI-PLANNING RULE (NO `implementation_plan.md` BEFORE GATE 0):**
+> The agent **MUST NEVER** generate an `implementation_plan.md` artifact or start drafting detailed plans before Gate 0 has completed and the user has confirmed all 4 environment targets via `ask_question`. Writing a planning artifact at Turn 1 buries the mandatory Gate 0 questions and forces premature assumptions about GCP projects and Looker instances.
+
+### Gate 1: Iterative Schema Co-Design & Scale Validation Gate
 When creating demo datasets, the agent **MUST co-iterate with the user** across four deterministic phases:
 
 - **Phase 1 — Schema Proposal & Review (Human-in-the-Loop)**:
@@ -105,7 +109,7 @@ When creating demo datasets, the agent **MUST co-iterate with the user** across 
   > - **NEVER silently fall back or divert to a different GCP Project or dataset** if permissions errors (such as `403 Access Denied`, `bigquery.datasets.create`, or expired token) occur.
   > - If credentials lack permissions or fail on the confirmed project, **the pipeline MUST BLOCK IMMEDIATELY and prompt the user** to refresh their ADC credentials (`gcloud auth application-default login`) or grant required BigQuery roles (`roles/bigquery.dataEditor`, `roles/bigquery.admin`) on the confirmed project. Never proceed with a fallback project.
 
-### 3. LookML Quality, Snowflake 3NF Architecture & Guarded Optimization Gate
+### Gate 2: Semantic Modeling & Dashboard Review Gate
 1. **Semantic Modeling (CLI Fast-Path)**:
    Generate views, explores, and executive dashboards directly using:
    ```bash
@@ -120,7 +124,15 @@ When creating demo datasets, the agent **MUST co-iterate with the user** across 
    - Resolve diamond joins with role-playing aliases (`from: users`) and explicit `view_label:` headers.
 3. **Mandatory Field Standards**: All LookML view files (`.view.lkml`) **MUST include explicit `label:` and `description:` parameters** on every dimension, dimension group, and measure. Measures must include formatted primary metrics (`value_format_name: usd_0`, `percent_2`, `decimal_1`) and drill-down fields.
 4. **Executive Dashboard Polish (`skills/lookml-dashboard`)**: Dashboards must include single-value KPI banners, dual Y-axis timelines, `advanced_vis_config` rounded geometry (`borderRadius: 8`), and universal cross-filtering (`crossfilter_enabled: true`). All titles and labels in YAML **MUST be enclosed in double quotes** (`title: "..."`).
-5. **Strictly Guarded Performance Optimization Gate (`ask_question`)**:
+
+### Gate 3: Pre-Deploy Audit, Optimization & Production Release Gate
+1. **Root Orphan File Audit & Cleanup (`demo-create lookml clean-root`)**:
+   Before deploying, ensure no orphaned duplicate files exist at the project root (e.g., `users.view.lkml` vs `views/users.view.lkml`):
+   ```bash
+   demo-create lookml clean-root --project <project_name>
+   ```
+   *(The pre-deploy step automatically runs this audit to ensure remote master branch integrity).*
+2. **Strictly Guarded Performance Optimization Gate (`ask_question`)**:
    > [!IMPORTANT]
    > **DO NOT automatically run the performance optimizer or spawn an optimizer subagent.**
    > The orchestrator **MUST pause and prompt the user via `ask_question`**:
@@ -130,48 +142,46 @@ When creating demo datasets, the agent **MUST co-iterate with the user** across 
    >   - `No: Skip performance optimization and proceed directly to QA validation`
    >
    > - **If user selects "Yes"**: Run `demo-create lookml optimize --lookml-dir <dir>` directly. The CLI automatically snapshots existing files to `<dir>/.backup_pre_opt`.
-   > - **If user selects "No"**: Skip directly to Step 4 (Validation).
+   > - **If user selects "No"**: Skip directly to Pre-Deployment Validation.
    > - **If user requests a rollback**: First kill all subagents via `manage_subagents(Action='kill_all')`, then restore immediately via `demo-create lookml restore --lookml-dir <dir>`.
-
-### 4. Mandatory Pre-Deployment Validation Gate (CLI-First with On-Demand QA Healing)
-1. **Direct Validation & Production Deploy**:
+3. **Pre-Deployment Validation & Release (CLI Fast-Path with On-Demand QA Healing)**:
    Execute validation and deployment via CLI fast-path:
    ```bash
    demo-create lookml deploy --project <project_name> --lookml-dir <lookml_dir> --looker-account <account>
    ```
-   This pushes files to the dev workspace, verifies LookML syntax, and runs all dashboard queries via Looker API.
-2. **On-Demand QA Validator Subagent (Only upon Failure)**:
-   If `demo-create lookml deploy` encounters LookML validator errors or query failures:
-   - Spawn the **[`lookml-qa-validator`](skills/looker-demo-orchestrator/subagents/lookml-qa-validator.md)** subagent.
-   - The subagent is permitted up to **maximum 3 self-healing iterations** (using `lookml-dashboard-to-query`) to patch missing fields or syntax.
-   - Once certified (`ready_to_deploy: true`), the parent orchestrator releases to production:
+   If validator errors or query failures occur:
+   - Spawn the **[`lookml-qa-validator`](skills/looker-demo-orchestrator/subagents/lookml-qa-validator.md)** subagent (max 3 self-healing iterations).
+   - Once certified (`ready_to_deploy: true`), release to production:
      ```bash
      lkr --oauth-account=<oauth_account> tools lookml deploy --project=<project_name>
      ```
 
-### 5. Conversational Analytics (CA) Agent & Gemini Enterprise (GE) Publishing Gate
-After deploying the LookML model and dashboards in Step 4, orchestrate Conversational Analytics agent creation:
+### Gate 4: Conversational Analytics (CA) Agent Grounding Gate (Decoupled from GE)
+After deploying the LookML model and dashboards in Gate 3, orchestrate Conversational Analytics agent creation:
 1. **Interactive CA Agent Gate (`ask_question`)**: Prompt the user to confirm CA Agent creation for the deployed LookML model.
 2. **Direct CLI Fast-Path Provisioning**:
    ```bash
    demo-create agent create \
      --model <model_name> \
      --explore <primary_explore> \
-     --dashboard-file lookml/dashboards/<dashboard>.dashboard.lookml \
-     --publish-ge \
-     --non-interactive
+     --dashboard-file lookml/dashboards/<dashboard>.dashboard.lookml
    ```
    This automatically:
    - Provisions the Looker CA Agent.
    - Extracts all dashboard query tiles and creates 1:1 Golden Queries grounded by `expanded_share_url`.
    - Links Golden Queries to the Agent (`PATCH /api/4.0/agents/{id}`).
-3. **Automated Gemini Enterprise (GE) Verification & Configuration**:
-   Before triggering publication to GE, inspect settings via `demo-create ge status --json`:
-   - **If configured**: Prompt user to publish to the existing GE app.
-   - **If not configured**: Run `demo-create ge configure --gcp-project <project_id>` to discover Discovery Engine apps, patch Looker settings (`PATCH /api/4.0/gemini_enablement`), and grant the Looker Service Account the **Discovery Engine Admin** (`roles/discoveryengine.admin`) IAM role.
-4. **GE Publishing Execution & Error Recovery**:
-   - Verify publication state via `demo-create ge status --json`.
-   - **Re-Publishing Guarantee**: If any LookML self-healing or dashboard changes occurred during QA, the agent **MUST re-extract golden queries, update the agent, and re-publish to GE** to ensure the agent is synchronized.
+   - *Note: GE publishing is strictly decoupled to Gate 5.*
+
+### Gate 5: Gemini Enterprise (GE) Publishing Gate
+Once the CA Agent is created in Gate 4:
+1. **Interactive GE Publishing Gate (`ask_question`)**: Prompt the user to confirm publishing the agent to Gemini Enterprise.
+2. **Automated GE Verification & Configuration**:
+   Inspect settings via `demo-create ge status --json`:
+   - **If configured**: Publish directly:
+     ```bash
+     demo-create agent publish --agent-id <agent_id>
+     ```
+   - **If not configured**: Run `demo-create ge configure --gcp-project <project_id>` to discover Discovery Engine apps, patch Looker settings (`PATCH /api/4.0/gemini_enablement`), and grant the Looker Service Account the **Discovery Engine Admin** (`roles/discoveryengine.admin`) IAM role, then publish.
 
 ### 6. Modular CLI Subcommands Reference
 All subcommands persist execution state to `.demo-state.json`:
@@ -181,16 +191,18 @@ All subcommands persist execution state to `.demo-state.json`:
   - `inspect`: Inspect existing BigQuery tables, schema, and row counts (`--dataset <id> --json`).
 - **`demo-create lookml`**:
   - `model`: Generate LookML views, explores, and dashboards from BigQuery or Parquet (`--project <name> --dataset <id> --connection <conn>`).
+  - `clean-root`: Audit and delete duplicate root-level LookML files (`--project <name> [--dry-run] [--json]`).
   - `optimize`: Scan and patch staged LookML files with Google Cloud performance best practices (`--lookml-dir <dir> [--backup/--no-backup] [--json]`).
   - `restore`: Atomically restore pre-optimization files from `.backup_pre_opt` snapshot (`--lookml-dir <dir> [--json]`).
   - `deploy`: Push staged LookML to dev workspace, validate, test queries, and deploy to production.
 - **`demo-create agent`**:
-  - `create`: Provision Looker CA agent, ground with golden queries, and publish to GE (`--model <name> --explore <name> --dashboard-file <file> --publish-ge`).
+  - `create`: Provision Looker CA agent and ground with dashboard golden queries (`--model <name> --explore <name> --dashboard-file <file>`).
   - `golden-queries`: Extract queries from dashboard files or IDs and link to an existing agent.
-  - `publish`: Publish agent to connected Gemini Enterprise apps (`--agent-id <id>`).
+  - `publish`: Publish agent to connected Gemini Enterprise apps (`--agent-id <id> [--json]`).
 - **`demo-create ge`**:
   - `status`: Inspect Looker's active Gemini Enterprise configuration (`[--json]`).
   - `configure`: Discover GCP Discovery Engine apps, patch Looker GE settings, and grant IAM roles.
+  - `publish`: Publish agent to connected Gemini Enterprise apps (`--agent-id <id> [--json]`).
 - **`demo-create embed`**:
   - `scaffold`: Scaffold standalone full-stack React/Vite analytics embed portal with configured `.env` and theme styling.
 
@@ -203,3 +215,4 @@ Upon completing deployment (and optional CA Agent / Embed Portal steps), the age
 5. **Dashboard Tabbed Architecture Breakdown**: KPI banners, chart titles, and visual types per tab.
 6. **Pre-Deployment Validation Audit Record**: Log showing 100% query execution passes (HTTP 200 OK) across all dashboard tiles.
 7. **CA Agent & Gemini Enterprise / Embed Status**: Golden queries list, agent ID, and GE publish status.
+

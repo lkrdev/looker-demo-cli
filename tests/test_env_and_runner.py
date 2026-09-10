@@ -126,6 +126,59 @@ view: users {
             reverted_content = view_file.read_text(encoding="utf-8")
             self.assertEqual(original_content, reverted_content)
 
+    def test_find_and_clean_root_duplicates(self):
+        from unittest.mock import MagicMock, patch
+        from looker_demo_cli.services.lookml_cleaner import (
+            clean_root_duplicate_files,
+            find_root_duplicate_files,
+        )
+
+        mock_files = [
+            {"path": "views/users.view.lkml"},
+            {"path": "models/ecommerce.model.lkml"},
+            {"path": "dashboards/overview.dashboard.lookml"},
+            {"path": "users.view.lkml"},  # Duplicate root orphan!
+            {"path": "ecommerce.model.lkml"},  # Duplicate root orphan!
+            {"path": "manifest.lkml"},  # Allowed root file
+        ]
+
+        # 1. Test detection
+        with patch("requests.get") as mock_get:
+            mock_get.return_value = MagicMock(status_code=200, json=lambda: mock_files)
+            duplicates = find_root_duplicate_files(
+                project_id="ecommerce",
+                headers={"Authorization": "Bearer fake"},
+                base_url="https://demo.looker.com",
+            )
+            self.assertEqual(sorted(duplicates), ["ecommerce.model.lkml", "users.view.lkml"])
+
+        # 2. Test dry-run
+        with patch("requests.get") as mock_get:
+            mock_get.return_value = MagicMock(status_code=200, json=lambda: mock_files)
+            res_dry = clean_root_duplicate_files(
+                project_id="ecommerce",
+                headers={"Authorization": "Bearer fake"},
+                base_url="https://demo.looker.com",
+                dry_run=True,
+            )
+            self.assertEqual(res_dry["status"], "DRY_RUN")
+            self.assertEqual(len(res_dry["cleaned_files"]), 2)
+
+        # 3. Test deletion
+        with patch("requests.get") as mock_get, patch("requests.delete") as mock_del:
+            mock_get.return_value = MagicMock(status_code=200, json=lambda: mock_files)
+            mock_del.return_value = MagicMock(status_code=204)
+            res_clean = clean_root_duplicate_files(
+                project_id="ecommerce",
+                headers={"Authorization": "Bearer fake"},
+                base_url="https://demo.looker.com",
+                dry_run=False,
+            )
+            self.assertEqual(res_clean["status"], "SUCCESS")
+            self.assertEqual(len(res_clean["cleaned_files"]), 2)
+            self.assertEqual(mock_del.call_count, 2)
+
 
 if __name__ == "__main__":
     unittest.main()
+
