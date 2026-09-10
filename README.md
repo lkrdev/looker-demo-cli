@@ -144,14 +144,10 @@ Once authenticated, instruct your AI assistant in chat:
 
 The AI agent orchestrates the entire workflow interactively:
 - **Interactive Schema Co-Design**: Collaborate with the agent on ERD diagrams, field definitions, and micro-sample data previews before generating full scale.
-- **Subagent Hub-and-Spoke Execution**: The parent orchestrator delegates execution to specialized subagents:
-  - [`data-engineer`](skills/looker-demo-orchestrator/subagents/data-engineer.md) (Batch synthesis & BQ load)
-  - [`lookml-modeler`](skills/looker-demo-orchestrator/subagents/lookml-modeler.md) (Front-door semantic modeling & 3NF triage)
-  - [`lookml-snowflake-modeler`](skills/looker-demo-orchestrator/subagents/lookml-snowflake-modeler.md) (3NF modeling, NDT rollups & diamond joins)
-  - [`lookml-dashboard-designer`](skills/looker-demo-orchestrator/subagents/lookml-dashboard-designer.md) (Pixel-perfect executive tabbed dashboards)
-  - [`lookml-performance-optimizer`](skills/looker-demo-orchestrator/subagents/lookml-performance-optimizer.md) (Google Cloud Looker performance best practices)
-  - [`lookml-qa-validator`](skills/looker-demo-orchestrator/subagents/lookml-qa-validator.md) (Dev push, validation & max 3 query self-healing)
-  - [`ca-agent-provisioner`](skills/looker-demo-orchestrator/subagents/ca-agent-provisioner.md) (CA agent & golden queries; conditional on user confirmation)
+- **Fast-Path Deterministic CLI Execution**: The parent agent runs compiled CLI subcommands directly (`demo-create data`, `demo-create lookml model`, `demo-create lookml optimize`, `demo-create lookml deploy`, `demo-create agent create`), eliminating subagent initialization drag and serialization latency.
+- **On-Demand Specialized Subagents**: Spawned strictly for complex or non-deterministic recovery paths:
+  - [`lookml-snowflake-modeler`](skills/looker-demo-orchestrator/subagents/lookml-snowflake-modeler.md) (3NF semantic modeling, NDT rollups & diamond joins when normalized schemas are detected)
+  - [`lookml-qa-validator`](skills/looker-demo-orchestrator/subagents/lookml-qa-validator.md) (Dev push, validator & max 3 query self-healing when deployment tests fail)
   - [`embed-portal-engineer`](skills/looker-demo-orchestrator/subagents/embed-portal-engineer.md) (Vite embed portal; conditional on user confirmation)
 
 ---
@@ -274,17 +270,24 @@ demo-create data generate --domain retail --scale medium --output-dir scratch/pa
 # Upload Parquet tables to BigQuery
 demo-create data upload --parquet-dir scratch/parquet --project my-gcp-project --dataset retail_analytics
 
-# Inspect existing BigQuery tables and schema
-demo-create data inspect --project my-gcp-project --dataset retail_analytics
+# Inspect existing BigQuery tables and schema (table view or raw JSON)
+demo-create data inspect --gcp-project my-gcp-project --dataset retail_analytics
+demo-create data inspect --gcp-project my-gcp-project --dataset retail_analytics --json
 ```
 
-#### Semantic Modeling & Deployment (`demo-create lookml`)
+#### Semantic Modeling, Optimization & Deployment (`demo-create lookml`)
 ```bash
 # Generate LookML from an existing BigQuery dataset with Knowledge Catalog / Dataplex introspection
 demo-create lookml model --project retail_analytics --dataset retail_analytics --connection bigquery_connection
 
 # Generate LookML from local Parquet files
 demo-create lookml model --project retail_analytics --parquet-dir scratch/parquet --connection bigquery_connection
+
+# Audit and optimize staged LookML with Google Cloud server best practices (auto-snapshots to .backup_pre_opt)
+demo-create lookml optimize --lookml-dir lookml/
+
+# Atomically restore LookML files from snapshot (headless 1-command rollback, no Git required)
+demo-create lookml restore --lookml-dir lookml/
 
 # Deploy staged LookML files to dev workspace, run query tests, and release to production
 demo-create lookml deploy --project retail_analytics --lookml-dir lookml/
@@ -310,8 +313,9 @@ demo-create embed scaffold --project retail_analytics --dashboard-id 1042 --agen
 
 #### Gemini Enterprise Management (`demo-create ge`)
 ```bash
-# Check Looker Gemini enablement and GE status
+# Check Looker Gemini enablement and GE status (visual table or raw JSON)
 demo-create ge status
+demo-create ge status --json
 
 # Discover GCP GE instances, configure Looker, and grant IAM roles
 demo-create ge configure --instance-id my-ge-app --location us

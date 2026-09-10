@@ -13,50 +13,48 @@ This skill defines the mandatory operational procedure for an AI agent or engine
 
 ---
 
-## Multi-Agent Hub-and-Spoke Architecture
+## Core Execution Architecture: CLI-First with On-Demand Subagents
 
-To prevent context saturation, instruction drift, and self-confirmation bias across this multi-stage pipeline, the orchestrator utilizes a **Hub-and-Spoke Multi-Agent Model**:
+To eliminate subagent initialization drag, serialization latency, and background file-write race conditions, the workflow follows a **CLI-First Architecture with On-Demand Subagents**:
 
 ```mermaid
 graph TD
-    Start([User Request]) --> PreCheck[Orchestrator: Pre-Flight Pre-Check]
-    PreCheck --> Gate0{Human Gate: 4-Target Confirmation}
-    Gate0 -->|Interactive Co-Design| Phase12[Orchestrator: Schema ERD & Micro-Sample Preview]
-    Phase12 --> Gate1{Human Gate: Scale & Volume Confirmation}
-    Gate1 -->|Confirmed| S1["Subagent: data-engineer<br/>(Batch Parquet & BQ Upload)"]
-    S1 -->|BQ Table IDs & Counts| InitProj[Orchestrator: Looker Project Init]
-    InitProj --> S2["Subagent: lookml-modeler<br/>(Front-Door Triage & Semantic Modeling)"]
-    S2 -->|If Normalized 3NF| S3["Subagent: lookml-snowflake-modeler<br/>(NDT Rollups & Chasm Trap Resolution)"]
-    S2 -->|If Star / Simple| S4["Subagent: lookml-dashboard-designer<br/>(Executive Tabbed Dashboards)"]
-    S3 --> S4
-    S4 --> S5["Subagent: lookml-performance-optimizer<br/>(Static Suggestions, Caching, Partition Pruning)"]
-    S5 --> S6["Subagent: lookml-qa-validator<br/>(Dev Push, Validator, 100% Query Pass, Max 3 Healing)"]
-    S6 -->|Deploy Certificate| Deploy[Orchestrator: Deploy to Production]
-    Deploy --> GateCA{Human Gate: Provision CA Agent?}
-    Deploy --> GateEmbed{Human Gate: External Embed Portal?}
-    GateCA -->|If Confirmed| S7["Subagent: ca-agent-provisioner<br/>(Golden Queries & GE Publish)"]
-    GateEmbed -->|If Confirmed| S8["Subagent: embed-portal-engineer<br/>(Vite Scaffolding, .env, Theme Tokens)"]
+    Start([User Request]) --> PreCheck["Orchestrator: Turn-1 Pre-Check<br/>(demo-create pre-check --json)"]
+    PreCheck --> Gate0{"Human Gate 0: Instant 4-Target Alignment<br/>(ask_question)"}
+    Gate0 -->|Co-Design Phase 1| Phase1["Orchestrator: Schema & ERD Proposal<br/>(Mermaid ERD in Chat)"]
+    Phase1 -->|Co-Design Phase 2| Phase2["Orchestrator: Micro-Sample Preview<br/>(5-10 Sample Rows in Chat)"]
+    Phase2 --> Gate1{"Human Gate 1: Scale & Volume Confirmation<br/>(ask_question)"}
+    Gate1 -->|Fast-Path CLI| GenBQ["Orchestrator: Batch Synthesis & BQ Upload<br/>(demo-create data generate + upload)"]
+    GenBQ --> ModelCLI["Orchestrator: Semantic Modeling<br/>(demo-create lookml model)"]
+    ModelCLI --> SnowflakeBranch{"Is Schema 3NF Snowflake<br/>with Chasm Traps?"}
+    SnowflakeBranch -->|Yes: Spawn On-Demand Subagent| S_Snowflake["On-Demand Subagent: lookml-snowflake-modeler<br/>(NDT Rollups & Chasm Trap Elimination)"]
+    SnowflakeBranch -->|No: Standard Star Schema| GateOpt{"Human Gate 2: Run Performance Optimizer?<br/>(Guarded ask_question)"}
+    S_Snowflake --> GateOpt
+    GateOpt -->|Yes: Confirmed| OptCLI["Orchestrator: Performance Optimizer<br/>(demo-create lookml optimize --backup)"]
+    GateOpt -->|No: Skipped| DeployCLI["Orchestrator: Pre-Deployment QA & Release<br/>(demo-create lookml deploy)"]
+    OptCLI --> DeployCLI
+    DeployCLI --> QAStatus{"LookML & Query Validation<br/>Passed 100%?"}
+    QAStatus -->|Fail: Spawn On-Demand Subagent| S_QA["On-Demand Subagent: lookml-qa-validator<br/>(Max 3 Self-Healing Loops)"]
+    S_QA -->|Certified Ready| DeployProd["Orchestrator: Production Release<br/>(lkr tools lookml deploy)"]
+    QAStatus -->|Pass 100%| DeployProd
+    DeployProd --> GateCA{"Human Gate 3: Provision CA Agent?<br/>(ask_question)"}
+    GateCA -->|Yes| CA_CLI["Orchestrator: CA Agent & GE Grounding<br/>(demo-create agent create --publish-ge)"]
+    GateCA -->|No| DeliveryReport["Orchestrator: Final Delivery Report<br/>(DELIVERY_REPORT.md)"]
+    CA_CLI --> DeliveryReport
 ```
 
-| Component | Responsibility | Tool Access & Scope |
+| Component | Execution Mode | Responsibility & Scope |
 |---|---|---|
-| **Parent Orchestrator** | State machine, conversational co-design, human interactive gates (`ask_question`), production deploy, and final summary. | Full tool access, interactive UI modals. |
-| [`data-engineer`](subagents/data-engineer.md) | Synthesizes full Parquet dataset and loads tables into BigQuery; strict ADC error boundary. | Bash, filesystem. Read-only Looker. No `ask_question`. |
-| [`lookml-modeler`](subagents/lookml-modeler.md) | Front-door semantic modeler. Models simple/star schemas directly; routes 3NF snowflake schemas with chasm traps to `lookml-snowflake-modeler`. | Filesystem tools. Read-only Looker. No deploy. |
-| [`lookml-snowflake-modeler`](subagents/lookml-snowflake-modeler.md) | 3NF semantic modeling, NDT rollup chasm trap elimination, role-playing diamond joins, and mandatory labels/descriptions. | Filesystem, `schema_graph_analyzer.py`. No Looker deploy. |
-| [`lookml-dashboard-designer`](subagents/lookml-dashboard-designer.md) | Pixel-perfect executive dashboard authoring grounded strictly in staged explores; tabbed layout, KPI stat cards, dual-axis timelines, `advanced_vis_config`, and popovers. | Filesystem tools. No Looker deploy. |
-| [`lookml-performance-optimizer`](subagents/lookml-performance-optimizer.md) | Audits and enriches staged LookML in-place with Google Cloud performance standards (static suggestions, suggestable: no, datagroups, partition filters, FK hiding). | Filesystem tools. No Looker deploy. |
-| [`lookml-qa-validator`](subagents/lookml-qa-validator.md) | Pushes dev branch, audits LookML, runs 100% of dashboard queries via API; bounded self-healing (max 3 attempts). | Code Mode, Looker API queries, single-file push. No deploy. |
-| [`ca-agent-provisioner`](subagents/ca-agent-provisioner.md) | Provisions CA Agent, extracts Golden Queries, links to agent, publishes to Gemini Enterprise. *(Spawned only if explicitly confirmed)*. | Code Mode, Looker REST API. |
-| [`embed-portal-engineer`](subagents/embed-portal-engineer.md) | Scaffolds `looker-embed-demo`, injects environment variables, customizes brand theme tokens, verifies build. *(Spawned only if explicitly confirmed)*. | Bash, frontend filesystem, Vite/npm. |
+| **Parent Orchestrator** | Direct Parent Turn | Interactive co-design gates (`ask_question`), fast CLI subcommands (`demo-create data`, `lookml model`, `lookml optimize`, `lookml deploy`, `agent create`), state machine, and final delivery report. |
+| [`lookml-snowflake-modeler`](subagents/lookml-snowflake-modeler.md) | **On-Demand Subagent** | Spawned ONLY when schemas contain complex 3NF snowflake structures with Chasm Traps (multiple 1:N children), diamond joins, or require Native Derived Table (NDT) rollups. |
+| [`lookml-qa-validator`](subagents/lookml-qa-validator.md) | **On-Demand Subagent** | Spawned ONLY when `demo-create lookml deploy` encounters validation errors or failing queries; runs up to 3 self-healing loops via `lookml-dashboard-to-query`. |
+| [`embed-portal-engineer`](subagents/embed-portal-engineer.md) | **On-Demand Subagent** | Spawned ONLY if external embed demo portal is requested by user. |
 
 > [!IMPORTANT]
-> ### Mandatory Programmatic Subagent Registration via `define_subagent`
-> To maintain strict role boundaries and prevent parent context saturation, the parent orchestrator **MUST register each specialized subagent via `define_subagent`** at the beginning of the workflow:
-> - Supply the exact contents of the respective `.md` file in `subagents/` as the `system_prompt`.
-> - Configure `enable_write_tools=True` and `enable_subagent_tools=False`.
-> - **Never execute LookML modeling, dashboard authoring, performance optimization, QA validation, or CA agent provisioning directly inside the parent conversation turn.**
-> - Subagents do NOT have `ask_question`; all interactive user confirmations remain strictly with the parent orchestrator.
+> ### Subagent Lifecycle Kill-Fence & Headless Rollback Protocol
+> 1. **Subagent Kill-Fence**: Before any file revert, rollback, or manual code restoration, the orchestrator **MUST kill all running subagents** via `manage_subagents(Action='kill_all')` (or `manage_subagents(Action='kill', ConversationIds=[...])`) to prevent background tasks from overwriting restored files.
+> 2. **Headless Directory Snapshots**: In headless environments without Git tracking, `demo-create lookml optimize` automatically snapshots pre-optimization files to `lookml/.backup_pre_opt`. If the user rejects optimization or requests a rollback, execute `demo-create lookml restore --lookml-dir <dir>` to cleanly restore files in 1 command.
+> 3. **Artifact Boundaries**: `ArtifactMetadata` in `write_to_file` is strictly for files inside `<appDataDir>/brain/<conversation-id>/`. For workspace files, never supply `ArtifactMetadata`.
 
 ---
 
@@ -285,47 +283,55 @@ subagent:
 
 ---
 
-### C. LookML Server Performance Optimization Gate (Interactive Confirmation Gate)
+### C. LookML Server Performance Optimization Gate (Strictly Guarded Interactive Gate)
 
-> [!IMPORTANT]
-> **Interactive Performance Optimization Gate (`ask_question`)**:
-> Before running the optimizer, the parent orchestrator **MUST prompt the user via `ask_question`**:
+> [!CAUTION]
+> ### 🛑 STRICT CONDITIONAL BRANCH FENCE: NEVER AUTO-RUN OPTIMIZER
+> Spawning the optimizer subagent or running `demo-create lookml optimize` without prior user confirmation violates the co-design contract. The orchestrator **MUST pause and prompt the user via `ask_question`**:
 > - **Question**: "Would you like to run the LookML Performance Optimizer to audit and apply Google Cloud Looker Server Optimization best practices?"
 > - **Options**:
 >   - `(Recommended) Yes: Apply Google Cloud performance optimizations (datagroup caching, partition pruning filters, static suggestions, foreign key hiding)`
 >   - `No: Skip performance optimization and proceed directly to QA validation`
 >
-> If the user selects **Yes**, delegate to the **[`lookml-performance-optimizer`](subagents/lookml-performance-optimizer.md)** subagent (or execute `demo-create lookml optimize --lookml-dir <dir>`).
-> If the user selects **No**, skip directly to Phase D (Pre-Deployment QA Validator).
+> **Execution Branches**:
+> - **If user selects "Yes"**: Execute directly in the parent session via fast-path CLI:
+>   ```bash
+>   demo-create lookml optimize --lookml-dir <lookml_dir>
+>   ```
+>   The CLI automatically snapshots current LookML files into `<lookml_dir>/.backup_pre_opt` before modifying any files.
+> - **If user selects "No"**: Advance immediately to Phase D without touching LookML files.
+> - **If user requests a Rollback**:
+>   1. Enforce the **Kill-Fence**: Immediately terminate any active subagents: `manage_subagents(Action='kill_all')`.
+>   2. Atomically restore the pre-optimization snapshot with 1 command (headless, zero git requirement):
+>      ```bash
+>      demo-create lookml restore --lookml-dir <lookml_dir>
+>      ```
 
-```yaml
-subagent:
-  type: "skills/looker-demo-orchestrator/subagents/lookml-performance-optimizer.md"
-  prompt: "Audit and optimize staged LookML files in-place using `demo-create lookml optimize --lookml-dir <lookml_dir>`. Enforce datagroup caching, partition pruning filters, disable suggestions on high-cardinality keys, and hide raw foreign keys."
-  inputs:
-    project_name: "{looker_project_name}"
-    model_name: "{looker_model_name}"
-    lookml_dir: "lookml/"
-    table_specs: "{extracted_table_specs}"
-```
-
-- **Fast-Path Automated Optimization**: The subagent executes `demo-create lookml optimize --lookml-dir <lookml_dir>` to audit and patch files in a single pass without manual turn exhaustion.
-- **Static Suggestions on Low-Cardinality Dims**: Injects `suggestions: ["val1", "val2", ...]` on categorical fields with $\le 15$ distinct values to eliminate database roundtrips when filters open.
-- **Disable Suggestions on Unique Keys**: Injects `suggestable: no` on primary keys, foreign key UUIDs, timestamps, and free text.
-- **Model Datagroup Caching**: Configures production datagroups (`max_cache_age: "4 hours"`) and applies `persist_with: default_caching_policy`.
-- **Partition Pruning**: Enforces `always_filter` or `conditionally_filter` on BigQuery partitioned date columns.
-- **Field Pruning**: Sets `hidden: yes` on raw foreign key IDs and asserts `primary_key: yes` on unique grains.
+- **Optimizations Applied by the CLI Engine**:
+  - **Static Suggestions on Low-Cardinality Dims**: Injects `suggestions: ["val1", "val2", ...]` on categorical fields with $\le 15$ distinct values to eliminate database roundtrips when filters open.
+  - **Disable Suggestions on Unique Keys**: Injects `suggestable: no` on primary keys, foreign key UUIDs, timestamps, and free text.
+  - **Model Datagroup Caching**: Configures production datagroups (`max_cache_age: "4 hours"`) and applies `persist_with: default_caching_policy`.
+  - **Partition Pruning**: Enforces `always_filter` or `conditionally_filter` on BigQuery partitioned date columns.
+  - **Field Pruning**: Sets `hidden: yes` on raw foreign key IDs and asserts `primary_key: yes` on unique grains.
 
 ---
 
-### D. Mandatory Pre-Deployment Validation Gate (Delegate to QA Validator Subagent)
+### D. Mandatory Pre-Deployment Validation Gate (CLI Fast-Path with On-Demand QA Healing)
 
-To ensure zero confirmation bias and protect the parent session from query execution log bloat, delegate dev branch deployment, LookML validation, and dashboard query verification to the independent **[`lookml-qa-validator`](subagents/lookml-qa-validator.md)** subagent:
+1. **Direct Fast-Path Deploy & Query Test**:
+   Execute dev push, project validator, and dashboard query verification directly in the parent session:
+   ```bash
+   demo-create lookml deploy --project <looker_project_name> --lookml-dir <lookml_dir> --looker-account <oauth_account>
+   ```
+   If all LookML checks and dashboard query tests return 100% HTTP 200 OK, the CLI automatically deploys to production and updates state.
+
+2. **On-Demand QA Healing Subagent (Triggered ONLY on Validation / Query Failure)**:
+   If validation fails or any dashboard query encounters an error, spawn the **[`lookml-qa-validator`](subagents/lookml-qa-validator.md)** subagent:
 
 ```yaml
 subagent:
   type: "skills/looker-demo-orchestrator/subagents/lookml-qa-validator.md"
-  prompt: "Push LookML files to dev branch, run LookML Validator, execute 100% of dashboard queries, and self-heal missing fields (up to max 3 attempts). Certify deploy readiness."
+  prompt: "Investigate LookML validator errors or query failures, run bounded self-healing (max 3 attempts) using lookml-dashboard-to-query, and certify deploy readiness."
   inputs:
     project_name: "{looker_project_name}"
     oauth_account: "{oauth_account}"
@@ -333,7 +339,7 @@ subagent:
     dashboard_files: ["dashboards/*.dashboard.lookml"]
 ```
 
-The `lookml-qa-validator` subagent runs this 4-step sequence:
+The `lookml-qa-validator` subagent executes bounded self-healing:
 
 ```mermaid
 graph LR
@@ -341,18 +347,13 @@ graph LR
     Step2 --> Step3[3. Run Dashboard Query Tests]
     Step3 -->|Errors Found| Heal{Self-Heal Loop<br/>Max 3 Attempts}
     Heal -->|Patch Applied| Step1
-    Heal -->|Exceeded 3| Fail[Report Failure]
+    Heal -->|Exceeded 3| Fail[Report Failure to Parent]
     Step3 -->|100% Pass| Step4[Return Deploy Certificate]
 ```
 
-> [!IMPORTANT]
-> **Strict Bounded Self-Healing Ceiling: Maximum 3 Attempts**
-> If LookML validator errors or query failures occur, the `lookml-qa-validator` subagent is permitted up to a **maximum of 3 self-healing iterations** (using `lookml-dashboard-to-query`) to patch missing dimensions or syntax before escalating to the user.
-
 > [!CAUTION]
 > **Production Deployment Authority Remains with Parent Orchestrator**:
-> The `lookml-qa-validator` subagent is **strictly an auditing worker** and is prohibited from calling `tools lookml deploy`. Production deployment is executed by the **Parent Orchestrator ONLY AFTER** receiving `{ready_to_deploy: true}` from the validator subagent:
->
+> The `lookml-qa-validator` subagent is strictly an auditing/healing worker and cannot release to production. Once it returns `{ready_to_deploy: true}`, the **Parent Orchestrator** executes production release:
 > ```bash
 > lkr --oauth-account=<oauth_account> tools lookml deploy --project=<project_name>
 > ```

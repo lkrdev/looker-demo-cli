@@ -72,6 +72,7 @@ from looker_demo_cli.workflow.steps.step_ca_agent import (
 from looker_demo_cli.services.optimizer_service import (
     optimize_lookml_project,
     render_optimization_report,
+    restore_lookml_backup,
 )
 from looker_demo_cli.workflow.steps.step_looker_deploy import run_looker_deploy_step
 
@@ -477,17 +478,31 @@ app.add_typer(ge_app, name="ge")
 def ge_status(
     instance_url: Annotated[Optional[str], typer.Option("--instance", help="Looker instance base URL")] = None,
     account: Annotated[Optional[str], typer.Option("--looker-account", help="Saved Looker OAuth account alias")] = None,
+    output_json: Annotated[bool, typer.Option("--json", help="Emit raw JSON status report for agent programmatic consumption")] = False,
 ):
     """Fetch and display current Looker Gemini enablement and GE configuration."""
     headers, base_url = get_looker_auth_context(instance_url=instance_url, preferred_account=account)
     if not base_url:
+        if output_json:
+            import json
+            print(json.dumps({"error": "No Looker instance URL configured"}, indent=2))
+            raise typer.Exit(code=1)
         print_error("No Looker instance URL configured. Provide --instance or authenticate with `lkr auth login`.")
         raise typer.Exit(code=1)
 
     config = get_looker_ge_config(base_url, headers)
     if not config:
+        if output_json:
+            import json
+            print(json.dumps({"error": "Failed to retrieve Gemini enablement configuration from Looker"}, indent=2))
+            raise typer.Exit(code=1)
         print_error("Failed to retrieve Gemini enablement configuration from Looker.")
         raise typer.Exit(code=1)
+
+    if output_json:
+        import json
+        print(json.dumps(config, indent=2))
+        return
 
     render_ge_status_table(config)
     if is_ge_configured(config):
@@ -637,6 +652,7 @@ def data_inspect(
     dataset: Annotated[Optional[str], typer.Option("--dataset", help="BigQuery dataset ID")] = None,
     gcp_project: Annotated[str, typer.Option("--gcp-project", help="Target GCP Project ID")] = DEFAULT_GCP_PROJECT,
     location: Annotated[str, typer.Option("--location", help="BigQuery dataset location")] = "US",
+    output_json: Annotated[bool, typer.Option("--json", help="Emit raw JSON inspection report for agent programmatic consumption")] = False,
 ):
     """Inspect tables, schemas, and metadata in a BigQuery dataset."""
     state = load_flow_state()
@@ -645,10 +661,38 @@ def data_inspect(
 
     bq_helper = BigQueryHelper(project_id=proj_id, location=location)
     if not bq_helper.dataset_exists(ds_id):
+        if output_json:
+            import json
+            print(json.dumps({"error": f"Dataset `{proj_id}.{ds_id}` does not exist.", "exists": False}, indent=2))
+            raise typer.Exit(code=1)
         print_error(f"Dataset `{proj_id}.{ds_id}` does not exist.")
         raise typer.Exit(code=1)
 
     tables = bq_helper.list_tables(ds_id)
+    if output_json:
+        import json
+        tables_data = []
+        for t_id in tables:
+            tbl_ref = bq_helper.client.dataset(ds_id).table(t_id)
+            try:
+                tbl = bq_helper.client.get_table(tbl_ref)
+                tables_data.append({
+                    "table_id": t_id,
+                    "table_type": tbl.table_type,
+                    "column_count": len(tbl.schema),
+                    "num_rows": tbl.num_rows,
+                    "columns": [{"name": f.name, "field_type": f.field_type, "mode": f.mode} for f in tbl.schema],
+                })
+            except Exception as e:
+                tables_data.append({"table_id": t_id, "error": str(e)})
+        print(json.dumps({
+            "project_id": proj_id,
+            "dataset_id": ds_id,
+            "location": location,
+            "tables": tables_data,
+        }, indent=2))
+        return
+
     if not tables:
         print_warning(f"Dataset `{ds_id}` exists but has no tables.")
         return
@@ -784,6 +828,9 @@ def lookml_optimize(
     json_output: Annotated[
         bool, typer.Option("--json", help="Output machine-readable JSON report")
     ] = False,
+    backup: Annotated[
+        bool, typer.Option("--backup/--no-backup", help="Snapshot LookML files into .backup_pre_opt before patching")
+    ] = True,
 ):
     """Scan and patch staged LookML files in-place with Google Cloud Server Performance Best Practices."""
     state = load_flow_state()
@@ -795,13 +842,52 @@ def lookml_optimize(
         raise typer.Exit(code=1)
 
     print_info(f"Auditing and optimizing LookML files in `{target_dir}`...")
-    res = optimize_lookml_project(target_dir)
+    res = optimize_lookml_project(target_dir, backup=backup)
     if json_output:
         import json
 
         print(json.dumps(res, indent=2))
     else:
         render_optimization_report(res)
+
+
+@lookml_app.command(name="restore")
+def lookml_restore(
+    lookml_dir: Annotated[
+        Optional[Path],
+        typer.Option("--lookml-dir", help="Directory containing LookML files"),
+    ] = None,
+    json_output: Annotated[
+        bool, typer.Option("--json", help="Output machine-readable JSON report")
+    ] = False,
+):
+    """Restore LookML files from .backup_pre_opt snapshot directory (atomic headless rollback)."""
+    state = load_flow_state()
+    target_dir = lookml_dir or state.lookml_output_dir or Path("lookml")
+    if not target_dir.exists():
+        if json_output:
+            import json
+            print(json.dumps({"status": "FAILED", "error": f"LookML directory `{target_dir}` does not exist."}, indent=2))
+            raise typer.Exit(code=1)
+        print_error(f"LookML directory `{target_dir}` does not exist.")
+        raise typer.Exit(code=1)
+
+    print_info(f"Restoring LookML files from snapshot in `{target_dir}`...")
+    res = restore_lookml_backup(target_dir)
+    if json_output:
+        import json
+        print(json.dumps(res, indent=2))
+        if res.get("status") != "SUCCESS":
+            raise typer.Exit(code=1)
+    else:
+        if res.get("status") == "SUCCESS":
+            restored = res.get("files_restored", [])
+            print_success(f"Successfully restored {len(restored)} LookML file(s) from `.backup_pre_opt`:")
+            for f in restored:
+                console.print(f"  • {f}")
+        else:
+            print_error(res.get("error", "Failed to restore backup."))
+            raise typer.Exit(code=1)
 
 
 # -------------------------------------------------------------------------

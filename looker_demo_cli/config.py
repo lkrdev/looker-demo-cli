@@ -5,6 +5,10 @@ from pathlib import Path
 from typing import Any, Dict, List, Tuple
 from pydantic import BaseModel, Field
 
+# Pre-bake Google API mTLS bypass for Cloudtop and enterprise workstations
+os.environ.setdefault("CLOUDSDK_CONTEXT_AWARE_USE_CLIENT_CERTIFICATE", "false")
+os.environ.setdefault("GOOGLE_API_USE_CLIENT_CERTIFICATE", "false")
+
 # Global Directory Paths
 HOME_DIR = Path.home()
 GEMINI_CONFIG_DIR = HOME_DIR / ".gemini" / "config"

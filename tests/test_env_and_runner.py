@@ -78,6 +78,54 @@ sys.exit(0)
         self.assertIn("mcp", res.stdout)
         self.assertIn("pydantic-monty", res.stdout)
 
+    def test_lookml_optimize_and_restore(self):
+        from looker_demo_cli.services.optimizer_service import (
+            optimize_lookml_project,
+            restore_lookml_backup,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp_dir_str:
+            tmp_dir = Path(tmp_dir_str)
+            views_dir = tmp_dir / "views"
+            views_dir.mkdir()
+            view_file = views_dir / "users.view.lkml"
+            original_content = """
+view: users {
+  sql_table_name: `demo.users` ;;
+  dimension: id {
+    primary_key: yes
+    type: string
+    sql: ${TABLE}.id ;;
+  }
+  dimension: status {
+    type: string
+    sql: ${TABLE}.status ;;
+  }
+}
+"""
+            view_file.write_text(original_content, encoding="utf-8")
+
+            # 1. Optimize with backup
+            opt_res = optimize_lookml_project(tmp_dir, backup=True)
+            self.assertEqual(opt_res["status"], "SUCCESS")
+            self.assertTrue(opt_res["backup_created"])
+            backup_dir = tmp_dir / ".backup_pre_opt"
+            self.assertTrue(backup_dir.exists())
+
+            # File should be modified (suggestable: no added, etc.)
+            modified_content = view_file.read_text(encoding="utf-8")
+            self.assertNotEqual(original_content, modified_content)
+            self.assertIn("suggestable: no", modified_content)
+
+            # 2. Restore backup
+            restore_res = restore_lookml_backup(tmp_dir)
+            self.assertEqual(restore_res["status"], "SUCCESS")
+            self.assertFalse(backup_dir.exists())
+
+            # File should be completely reverted to original
+            reverted_content = view_file.read_text(encoding="utf-8")
+            self.assertEqual(original_content, reverted_content)
+
 
 if __name__ == "__main__":
     unittest.main()

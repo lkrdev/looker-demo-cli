@@ -143,6 +143,12 @@ def init_workspace_venv(target_dir: Path, install_self: bool = True) -> Tuple[bo
                 subprocess.run(cmd, check=True, capture_output=True)
 
         activate_script = venv_dir / "bin" / "activate"
+        if activate_script.exists():
+            with open(activate_script, "a", encoding="utf-8") as f:
+                f.write("\n# Pre-baked Google Cloud mTLS bypass for Cloudtop & enterprise workstations\n")
+                f.write("export CLOUDSDK_CONTEXT_AWARE_USE_CLIENT_CERTIFICATE=false\n")
+                f.write("export GOOGLE_API_USE_CLIENT_CERTIFICATE=false\n")
+
         print_success(f"Virtual environment created successfully at `{venv_dir}`.")
         return True, f"source {activate_script}"
     except Exception as e:

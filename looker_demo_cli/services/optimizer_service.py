@@ -1,14 +1,15 @@
 from __future__ import annotations
 
 import re
+import shutil
 from pathlib import Path
 from typing import Any, Dict, List
 from rich.table import Table
 
-from looker_demo_cli.utils.console import console, print_info, print_success
+from looker_demo_cli.utils.console import console, print_info, print_success, print_warning
 
 
-def optimize_lookml_project(lookml_dir: Path) -> Dict[str, Any]:
+def optimize_lookml_project(lookml_dir: Path, backup: bool = True) -> Dict[str, Any]:
     """Scan and patch staged LookML files in-place according to Google Cloud Server Optimization Best Practices.
     
     5-Point Protocol:
@@ -25,16 +26,35 @@ def optimize_lookml_project(lookml_dir: Path) -> Dict[str, Any]:
             "error": f"Directory not found: {lookml_dir}",
             "optimizations_applied": {},
             "files_patched": [],
+            "backup_created": False,
         }
 
+    backup_dir = lookml_dir / ".backup_pre_opt"
+    backup_created = False
+    if backup and lookml_dir.exists():
+        try:
+            if backup_dir.exists():
+                shutil.rmtree(backup_dir)
+            backup_dir.mkdir(parents=True, exist_ok=True)
+            for f in lookml_dir.rglob("*.lkml"):
+                if ".backup_pre_opt" in f.parts:
+                    continue
+                rel = f.relative_to(lookml_dir)
+                dest = backup_dir / rel
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(f, dest)
+            backup_created = True
+        except Exception as e:
+            print_warning(f"Could not snapshot LookML backup to `{backup_dir}`: {e}")
+
     view_files = list(lookml_dir.glob("**/views/**/*.view.lkml")) + list(lookml_dir.glob("**/*.view.lkml"))
-    view_files = list({f.resolve(): f for f in view_files}.values())
+    view_files = [f for f in {f.resolve(): f for f in view_files}.values() if ".backup_pre_opt" not in f.parts]
 
     model_files = list(lookml_dir.glob("**/models/**/*.model.lkml")) + list(lookml_dir.glob("**/*.model.lkml"))
-    model_files = list({f.resolve(): f for f in model_files}.values())
+    model_files = [f for f in {f.resolve(): f for f in model_files}.values() if ".backup_pre_opt" not in f.parts]
 
     explore_files = list(lookml_dir.glob("**/explores/**/*.explore.lkml")) + list(lookml_dir.glob("**/*.explore.lkml"))
-    explore_files = list({f.resolve(): f for f in explore_files}.values())
+    explore_files = [f for f in {f.resolve(): f for f in explore_files}.values() if ".backup_pre_opt" not in f.parts]
 
     patched_files: List[Path] = []
     stats = {
@@ -176,8 +196,57 @@ persist_with: default_caching_policy
         "lookml_dir": str(lookml_dir),
         "optimizations_applied": stats,
         "files_patched": [str(f.relative_to(lookml_dir) if f.is_relative_to(lookml_dir) else f) for f in patched_files],
+        "backup_created": backup_created,
+        "backup_dir": str(backup_dir) if backup_created else None,
         "error": None,
     }
+
+
+def restore_lookml_backup(lookml_dir: Path) -> Dict[str, Any]:
+    """Restore LookML files from adjacent .backup_pre_opt snapshot directory.
+    
+    This enables headless, atomic rollback without requiring Git tracking.
+    """
+    if not lookml_dir.exists():
+        return {
+            "status": "FAILED",
+            "lookml_dir": str(lookml_dir),
+            "error": f"Directory not found: {lookml_dir}",
+            "files_restored": [],
+        }
+
+    backup_dir = lookml_dir / ".backup_pre_opt"
+    if not backup_dir.exists():
+        return {
+            "status": "FAILED",
+            "lookml_dir": str(lookml_dir),
+            "error": f"No pre-optimization backup found at `{backup_dir}`.",
+            "files_restored": [],
+        }
+
+    restored_files: List[str] = []
+    try:
+        for f in backup_dir.rglob("*.lkml"):
+            rel = f.relative_to(backup_dir)
+            dest = lookml_dir / rel
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(f, dest)
+            restored_files.append(str(rel))
+
+        shutil.rmtree(backup_dir)
+        return {
+            "status": "SUCCESS",
+            "lookml_dir": str(lookml_dir),
+            "error": None,
+            "files_restored": restored_files,
+        }
+    except Exception as e:
+        return {
+            "status": "FAILED",
+            "lookml_dir": str(lookml_dir),
+            "error": f"Error restoring backup: {e}",
+            "files_restored": restored_files,
+        }
 
 
 def render_optimization_report(result: Dict[str, Any]) -> None:
@@ -223,3 +292,6 @@ def render_optimization_report(result: Dict[str, Any]) -> None:
             console.print(f"  • {f}")
     else:
         print_info("All LookML files already satisfy Google Cloud Server Optimization standards.")
+
+    if result.get("backup_created"):
+        print_info(f"Snapshot backup saved to `{result.get('backup_dir')}`. Run `demo-create lookml restore` to roll back if needed.")
