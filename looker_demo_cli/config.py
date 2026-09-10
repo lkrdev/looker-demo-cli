@@ -76,6 +76,12 @@ INTENT_SKILL_DEFINITIONS: Dict[str, Dict[str, Tuple[str, str]]] = {
         "lookml-sets": ("looker-embed-demo", "lookml-sets"),
         "lookml-tests": ("looker-embed-demo", "lookml-tests"),
         "embed-themes": ("looker-embed-demo", "embed-themes"),
+        "lookml-snowflake-modeler": ("local_cli", "lookml-snowflake-modeler"),
+        "looker-visualizations": ("local_cli", "looker-visualizations"),
+        "looker-vis-cartesian": ("local_cli", "looker-visualizations/looker-vis-cartesian"),
+        "looker-vis-tabular-kpi": ("local_cli", "looker-visualizations/looker-vis-tabular-kpi"),
+        "looker-vis-specialty-maps": ("local_cli", "looker-visualizations/looker-vis-specialty-maps"),
+        "looker-vis-advanced-config": ("local_cli", "looker-visualizations/looker-vis-advanced-config"),
     },
     "embed-portal": {
         "looker-demo-orchestrator": ("local_cli", "looker-demo-orchestrator"),

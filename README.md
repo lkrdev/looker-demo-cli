@@ -147,6 +147,7 @@ The AI agent orchestrates the entire workflow interactively:
 - **Fast-Path Deterministic CLI Execution**: The parent agent runs compiled CLI subcommands directly (`demo-create data`, `demo-create lookml model`, `demo-create lookml optimize`, `demo-create lookml deploy`, `demo-create agent create`), eliminating subagent initialization drag and serialization latency.
 - **On-Demand Specialized Subagents**: Spawned strictly for complex or non-deterministic recovery paths:
   - [`lookml-snowflake-modeler`](skills/looker-demo-orchestrator/subagents/lookml-snowflake-modeler.md) (3NF semantic modeling, NDT rollups & diamond joins when normalized schemas are detected)
+  - [`lookml-dashboard-designer`](skills/looker-demo-orchestrator/subagents/lookml-dashboard-designer.md) (Authors executive tabbed dashboards using the [`looker-visualizations`](skills/looker-visualizations/SKILL.md) suite)
   - [`lookml-qa-validator`](skills/looker-demo-orchestrator/subagents/lookml-qa-validator.md) (Dev push, validator & max 3 query self-healing when deployment tests fail)
   - [`embed-portal-engineer`](skills/looker-demo-orchestrator/subagents/embed-portal-engineer.md) (Vite embed portal; conditional on user confirmation)
 
@@ -352,6 +353,12 @@ When you run `demo-create pre-check --fix`, skills are automatically pulled from
 │   ├── lookml-view/
 │   ├── lookml-dashboard/
 │   ├── lookml-dashboard-to-query/
+│   ├── lookml-snowflake-modeler/
+│   ├── looker-visualizations/
+│   │   ├── looker-vis-cartesian/
+│   │   ├── looker-vis-tabular-kpi/
+│   │   ├── looker-vis-specialty-maps/
+│   │   └── looker-vis-advanced-config/
 │   └── embed-themes/
 └── embed-portal/
     ├── looker-demo-orchestrator/

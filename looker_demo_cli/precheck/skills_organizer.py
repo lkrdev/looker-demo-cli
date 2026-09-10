@@ -107,7 +107,7 @@ def audit_and_organize_skills(fix: bool = False) -> List[SkillInstallStatus]:
 
         for skill_name, (repo_key, skill_rel_folder) in skills.items():
             if repo_key == "local_cli":
-                src_path = local_cli_root / "skills" / skill_name
+                src_path = local_cli_root / "skills" / (skill_rel_folder or skill_name)
             else:
                 base_repo = repo_paths.get(repo_key, SKILLS_CACHE_DIR / repo_key)
                 subpath = SKILL_GIT_REPOSITORIES.get(repo_key, {}).get("skills_subpath", "skills")
@@ -122,7 +122,7 @@ def audit_and_organize_skills(fix: bool = False) -> List[SkillInstallStatus]:
             )
 
             if fix and source_exists:
-                # Remove legacy flat symlink or broken symlink if needed
+                # Remove legacy category symlink or broken symlink if needed
                 if target_link.is_symlink() or target_link.exists():
                     try:
                         if target_link.is_symlink():
@@ -137,6 +137,12 @@ def audit_and_organize_skills(fix: bool = False) -> List[SkillInstallStatus]:
                     print_warning(f"Could not symlink {skill_name} in {category}: {e}")
 
                 # Also symlink at root for flat skill discovery compatibility
+                if flat_target_link.is_symlink() or flat_target_link.exists():
+                    try:
+                        if flat_target_link.is_symlink():
+                            flat_target_link.unlink()
+                    except Exception:
+                        pass
                 if not flat_target_link.exists():
                     try:
                         flat_target_link.symlink_to(src_path, target_is_directory=True)

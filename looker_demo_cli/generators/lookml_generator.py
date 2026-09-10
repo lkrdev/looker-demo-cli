@@ -41,6 +41,7 @@ class DashboardTileSpec(BaseModel):
     limit: Optional[int] = None
     listen: dict[str, str] = Field(default_factory=dict)
     tab_name: Optional[str] = None
+    advanced_vis_config: Optional[str] = None
     row: int = 0
     col: int = 0
     width: int = 12
@@ -365,6 +366,8 @@ class LookMLGenerator:
                 lines.append(f"    limit: {el.limit}")
             if el.tab_name:
                 lines.append(f'    tab_name: "{el.tab_name}"')
+            if el.advanced_vis_config:
+                lines.append(f"    advanced_vis_config: '{el.advanced_vis_config}'")
             lines.extend([
                 f"    row: {el.row}",
                 f"    col: {el.col}",
@@ -481,6 +484,7 @@ class LookMLGenerator:
                     sorts=[f"{month_timeline} asc"],
                     limit=500,
                     tab_name="Executive Pulse",
+                    advanced_vis_config='{"chart": {"borderRadius": 8}}',
                     row=4,
                     col=0,
                     width=14,
@@ -514,6 +518,7 @@ class LookMLGenerator:
                 sorts=[f"{primary_fact.table_name}.total_{kpi_1 if kpi_1 != 'count' else 'count'} desc"],
                 limit=15,
                 tab_name="Entity Breakdown",
+                advanced_vis_config='{"chart": {"borderRadius": 8}, "plotOptions": {"series": {"borderRadius": 4}}}',
                 row=0,
                 col=0,
                 width=12,
@@ -544,6 +549,7 @@ class LookMLGenerator:
                 sorts=[f"{primary_fact.table_name}.count desc"],
                 limit=20,
                 tab_name="Operational Health",
+                advanced_vis_config='{"chart": {"borderRadius": 8}, "plotOptions": {"series": {"borderRadius": 4}}}',
                 row=0,
                 col=0,
                 width=24,

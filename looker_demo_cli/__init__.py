@@ -6,4 +6,4 @@ os.environ.setdefault("GOOGLE_API_USE_CLIENT_CERTIFICATE", "false")
 
 """Looker Demo Orchestrator CLI (`demo-create`)."""
 
-__version__ = "0.2.0"
+__version__ = "0.2.1"

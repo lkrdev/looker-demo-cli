@@ -51,6 +51,7 @@ graph TD
 |---|---|---|
 | **Parent Orchestrator** | Direct Parent Turn | Interactive co-design gates (`ask_question`), fast CLI subcommands (`demo-create data`, `lookml model`, `lookml optimize`, `lookml deploy`, `agent create`), state machine, and final delivery report. |
 | [`lookml-snowflake-modeler`](subagents/lookml-snowflake-modeler.md) | **On-Demand Subagent** | Spawned ONLY when schemas contain complex 3NF snowflake structures with Chasm Traps (multiple 1:N children), diamond joins, or require Native Derived Table (NDT) rollups. |
+| [`lookml-dashboard-designer`](subagents/lookml-dashboard-designer.md) | **On-Demand Subagent** | Authors executive tabbed dashboards grounded in staged explores/views using the [`looker-visualizations`](../looker-visualizations/SKILL.md) suite. |
 | [`lookml-qa-validator`](subagents/lookml-qa-validator.md) | **On-Demand Subagent** | Spawned ONLY when `demo-create lookml deploy` encounters validation errors or failing queries; runs up to 3 self-healing loops via `lookml-dashboard-to-query`. |
 | [`embed-portal-engineer`](subagents/embed-portal-engineer.md) | **On-Demand Subagent** | Spawned ONLY if external embed demo portal is requested by user. |
 
@@ -270,12 +271,12 @@ subagent:
 
 ### B. Executive Tabbed Dashboard Authoring (Delegate to Dashboard Designer Subagent)
 
-Delegate dashboard creation to the dedicated **[`lookml-dashboard-designer`](subagents/lookml-dashboard-designer.md)** subagent:
+Delegate dashboard creation to the dedicated **[`lookml-dashboard-designer`](subagents/lookml-dashboard-designer.md)** subagent, powered by the **[`looker-visualizations`](../looker-visualizations/SKILL.md)** suite:
 
 ```yaml
 subagent:
   type: "skills/looker-demo-orchestrator/subagents/lookml-dashboard-designer.md"
-  prompt: "Author pixel-perfect, executive-ready tabbed dashboard for {project_name} grounded strictly in staged explores and views. Include KPI stat banners, dual-axis timelines, advanced_vis_config rounded geometry, cross-filtering, and popovers."
+  prompt: "Author pixel-perfect, executive-ready tabbed dashboard for {project_name} grounded strictly in staged explores and views. Use looker-visualizations suite (looker-vis-cartesian, looker-vis-tabular-kpi, looker-vis-specialty-maps, looker-vis-advanced-config) to select optimal chart archetypes, enforce query shape constraints, and apply valid Highcharts advanced_vis_config styling. Include KPI stat banners, dual-axis timelines, cross-filtering, and popovers."
   inputs:
     project_name: "{looker_project_name}"
     model_name: "{looker_model_name}"
@@ -285,8 +286,13 @@ subagent:
 ```
 
 - **Strict Explore-Grounded Authoring**: Inspects staged `explores/*.explore.lkml` and `views/*.view.lkml` files to discover available dimensions and measures (NEVER invents fields).
+- **Visualization Hub & Decision Rules**: Consults [`looker-visualizations`](../looker-visualizations/SKILL.md) to match data intent to optimal visual archetypes:
+  - **KPI Scorecards & Data Grids**: [`looker-vis-tabular-kpi`](../looker-visualizations/looker-vis-tabular-kpi/SKILL.md) for `single_value` stat banners with change comparisons and sparklines, plus `looker_grid` for audit logs.
+  - **Timelines & Dual-Axis Series**: [`looker-vis-cartesian`](../looker-visualizations/looker-vis-cartesian/SKILL.md) for volume trajectory timelines, ranked horizontal bars, and clustered columns.
+  - **Distributions & Flows**: [`looker-vis-specialty-maps`](../looker-visualizations/looker-vis-specialty-maps/SKILL.md) for donut share breakdowns ($\le 6$ slices), funnels, sankey diagrams, and maps.
+  - **Highcharts Styling (`advanced_vis_config`)**: [`looker-vis-advanced-config`](../looker-visualizations/looker-vis-advanced-config/SKILL.md) for rounded geometry (`borderRadius: 8`, `plotOptions.series.borderRadius: 4`) with strictly valid double-quoted JSON, never raw JavaScript functions or `formatter:` spelling errors.
 - **Tabbed Architecture**: Modern 2–4 tab operational command center (e.g. *Executive Overview*, *Operations Deep Dive*, *Alerts & Exceptions*).
-- **Visual Standards**: Single-value KPI cards, dual-axis timelines, donut breakdowns, clustered bar charts, `advanced_vis_config` rounded geometry (`borderRadius: 8`), and universal cross-filtering (use `crossfilter_enabled: true` at dashboard root; NEVER use deprecated root `crossfilter: true`).
+- **Visual Standards**: Universal cross-filtering (use `crossfilter_enabled: true` at dashboard root; NEVER use deprecated root `crossfilter: true`) and double-quoted YAML strings (`title: "..."`).
 
 ---
 
