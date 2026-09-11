@@ -156,7 +156,7 @@ def get_oauth_credentials_for_account(account_id: str) -> google.oauth2.credenti
 
 def inspect_gcp_accounts(target_project: str = DEFAULT_GCP_PROJECT) -> list[GCPAccountInfo]:
     """Inspect all authenticated GCP accounts and test BigQuery dataset access."""
-    # Ensure client certificates don't cause failures on linux/cloudtop
+    # Ensure client certificates don't cause failures on linux/ 
     os.environ["CLOUDSDK_CONTEXT_AWARE_USE_CLIENT_CERTIFICATE"] = "false"
     os.environ["GOOGLE_API_USE_CLIENT_CERTIFICATE"] = "false"
 

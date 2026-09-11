@@ -138,7 +138,7 @@ lkr auth list
 >          "enabled": true
 >        }
 >        ```
->      - **Remote Host / SSH Tunneling**: If operating on a remote machine / Cloudtop / VM, remind the user to forward port 8000:
+>      - **Remote Host / SSH Tunneling**: If operating on a remote machine /   / VM, remind the user to forward port 8000:
 >        ```bash
 >        ssh -L 8000:localhost:8000 <remote-host>
 >        ```

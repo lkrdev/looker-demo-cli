@@ -583,7 +583,7 @@ def _render_looker_remediation() -> None:
     console.print(Syntax(oauth_payload_json, "json", theme="monokai", line_numbers=False))
     console.print('     - Check [bold]"I Understand"[/bold] and click [bold]"Run"[/bold].')
 
-    console.print("\n  [bold]C. Remote Host / Cloudtop / SSH Port Forwarding:[/bold]")
+    console.print("\n  [bold]C. Remote Host /   / SSH Port Forwarding:[/bold]")
     console.print(
         "     Because the OAuth callback redirects to [cyan]http://localhost:8000/callback[/cyan], forward port 8000 from your local machine:"
     )

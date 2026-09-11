@@ -53,7 +53,7 @@ The parent orchestrator invokes you with:
      ```
    - **Execution Command**: Always execute via `uv run <script_path>` or `demo-create run-script <script_path>`.
    - **NEVER execute bare `python3 <script_path>`** as system Python lacks required libraries.
-   - **Mandatory Cloudtop/mTLS Bypass**: All BigQuery scripts running in Google environments must set:
+   - **Mandatory  /mTLS Bypass**: All BigQuery scripts running in Google environments must set:
      ```python
      import os
 

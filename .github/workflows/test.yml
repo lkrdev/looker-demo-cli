@@ -12,7 +12,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # The CLI pre-bakes these for Cloudtop/enterprise workstations; setting them
+  # The CLI pre-bakes these for  /enterprise workstations; setting them
   # in CI keeps behavior identical to a developer machine.
   CLOUDSDK_CONTEXT_AWARE_USE_CLIENT_CERTIFICATE: "false"
   GOOGLE_API_USE_CLIENT_CERTIFICATE: "false"

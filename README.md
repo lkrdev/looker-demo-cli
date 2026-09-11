@@ -126,9 +126,9 @@ demo-create pre-check --fix
    > 4. Check **"I Understand"** and click **"Run"**.
 
    > [!TIP]
-   > **Remote Hosts, Cloudtop & SSH Port Forwarding**:
+   > **Remote Hosts,   & SSH Port Forwarding**:
    > The Looker OAuth callback redirects your browser to `http://localhost:8000/callback`.
-   > If developing on a remote machine, Cloudtop, or VM, forward port 8000 through SSH:
+   > If developing on a remote machine,  , or VM, forward port 8000 through SSH:
    > ```bash
    > ssh -L 8000:localhost:8000 <remote-host>
    > ```

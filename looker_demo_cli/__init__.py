@@ -1,6 +1,6 @@
 import os
 
-# Pre-bake Google API mTLS bypass for Cloudtop and enterprise workstations
+# Pre-bake Google API mTLS bypass for   and enterprise workstations
 os.environ.setdefault("CLOUDSDK_CONTEXT_AWARE_USE_CLIENT_CERTIFICATE", "false")
 os.environ.setdefault("GOOGLE_API_USE_CLIENT_CERTIFICATE", "false")
 
