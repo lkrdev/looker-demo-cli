@@ -8,8 +8,8 @@ description: Master orchestration skill for designing, generating, modeling, and
 This skill defines the mandatory operational procedure for an AI agent or engineer creating full-stack data demos on Google Cloud BigQuery and Looker.
 
 > [!CAUTION]
-> **CRITICAL RULE: DO NOT USE `demo-create run` MONOLITHICALLY TO BYPASS CO-DESIGN.**
-> Running `demo-create run` autonomously without human interaction bypasses iterative schema co-design and volume validation. The agent **MUST** orchestrate the workflow interactively stage-by-stage as detailed below.
+> **CRITICAL RULE: THE GATES ARE MANDATORY AND MUST NOT BE BATCHED.**
+> There is deliberately no single command that builds a demo end to end -- the monolithic `demo-create run` was removed in 0.3.0 precisely because it bypassed iterative schema co-design and volume validation. The agent **MUST** orchestrate the gated subcommands interactively stage-by-stage as detailed below, pausing for human confirmation where required.
 
 ---
 
@@ -63,6 +63,36 @@ graph TD
 
 ---
 
+## Orientation: `demo-create status` Is the Source of Truth
+
+Before deciding what to do next -- at the start of a session, after any
+interruption, and between every gate -- run:
+
+```bash
+demo-create status --json
+```
+
+The envelope reports:
+
+| Field | Use |
+| :--- | :--- |
+| `completed_gates` | Which stages are already done; never redo one. |
+| `current_gate` | Where the build actually is. |
+| `next_command` | The literal command to run, with every known value substituted and `<placeholder>` where a value is still needed. |
+| `requires_human_confirmation` | **Branch on this.** When `true`, call `ask_question` with the gate's `human_checkpoint` *before* running `next_command`. |
+| `is_complete` | When `true`, the build is finished and `next_actions` is empty. |
+
+The gate sections below explain *why* each gate exists and precisely what to
+confirm with the user. `demo-create status` tells you *where you are*. Prefer the
+command for state and this document for intent -- the command is generated from
+the implementation and cannot drift from it.
+
+Every command also accepts `--state-file` to target an explicit
+`.demo-state.json`, and `--json` to emit the machine-readable envelope. All
+failures carry a distinct exit code (`AuthError`=3, `ConfigError`=4,
+`RemoteApiError`=5, `ValidationError`=6, `StateError`=7), so branch on the exit
+code rather than parsing prose.
+
 ## 0. Bootstrap on Fresh Machines (Mandatory Step 0)
 
 If `demo-create` is not available on `PATH`, the agent **MUST immediately run**:
@@ -88,7 +118,7 @@ lkr auth list
 
 > [!CAUTION]
 > ### 🛑 Mandatory Pre-Flight Hard Stop & Immediate Auth Fail Gate
-> 1. **Immediate Fail on Missing Auth**: If `demo-create pre-check` exits with code 1 or reports `is_blocked: true`:
+> 1. **Immediate Fail on Missing Auth**: If `demo-create pre-check` exits with code **3** (`AUTH_ERROR`) or reports `data.is_blocked: true`:
 >    - **GCP Missing / Unauthenticated**: STOP immediately. Prompt the user to run:
 >      ```bash
 >      gcloud auth login
@@ -334,7 +364,7 @@ subagent:
 1. **Direct Fast-Path Deploy & Query Test**:
    Execute dev push, project validator, and dashboard query verification directly in the parent session:
    ```bash
-   demo-create lookml deploy --project <looker_project_name> --lookml-dir <lookml_dir> --looker-account <oauth_account>
+   demo-create lookml deploy --looker-project <looker_project_name> --lookml-dir <lookml_dir> --looker-account <oauth_account>
    ```
    If all LookML checks and dashboard query tests return 100% HTTP 200 OK, the CLI automatically deploys to production and updates state.
 
@@ -612,16 +642,16 @@ When performing isolated operations or delegating granular tasks to specialized 
 
 | Command Group | Subcommand | Purpose | Key Flags |
 |---|---|---|---|
-| **`demo-create data`** | `generate` | Synthesizes local Parquet dataset tables | `--domain`, `--scale`, `--output-dir` |
-| | `upload` | Creates dataset and uploads Parquet tables to BigQuery | `--parquet-dir`, `--project`, `--dataset`, `--location` |
-| | `inspect` | Introspects tables and schema in existing BigQuery dataset | `--project`, `--dataset` |
-| **`demo-create lookml`** | `model` | Generates LookML views, explores, and models from BigQuery (with Knowledge Catalog & PK/FK constraints) or Parquet | `--project`, `--dataset`, `--parquet-dir`, `--connection`, `--output-dir` |
-| | `deploy` | Pushes staged LookML to dev workspace, validates, runs query tests, and deploys to production | `--project`, `--lookml-dir`, `--oauth-account` |
+| **`demo-create data`** | `generate` | Synthesizes local Parquet dataset tables | `--domain`, `--row-count`, `--output-dir` |
+| | `upload` | Creates dataset and uploads Parquet tables to BigQuery | `--parquet-dir`, `--gcp-project`, `--dataset`, `--location` |
+| | `inspect` | Introspects tables and schema in existing BigQuery dataset | `--gcp-project`, `--dataset` |
+| **`demo-create lookml`** | `model` | Generates LookML views, explores, and models from BigQuery (with Knowledge Catalog & PK/FK constraints) or Parquet | `--looker-project`, `--dataset`, `--parquet-dir`, `--connection`, `--output-dir` |
+| | `deploy` | Pushes staged LookML to dev workspace, validates, runs query tests, and deploys to production | `--looker-project`, `--lookml-dir`, `--looker-account` |
 | **`demo-create agent`** | `create` | Creates CA Agent, grounds golden queries, and optionally publishes to GE | `--model`, `--explore`, `--dashboard-id`, `--publish-ge` |
 | | `golden-queries` | Extracts queries from dashboard files/IDs and links as Golden Queries | `--agent-id`, `--dashboard-id`, `--dashboards-dir` |
-| | `publish` | Verifies GE config and publishes agent to connected GE apps | `--agent-id`, `--oauth-account` |
-| **`demo-create embed`** | `scaffold` | Scaffolds React/Vite embed portal workspace with `.env` and theme tokens | `--project`, `--dashboard-id`, `--agent-id`, `--brand-name`, `--target-dir` |
-| **`demo-create ge`** | `status` | Displays current Looker Gemini enablement and GE config | `--oauth-account` |
+| | `publish` | Verifies GE config and publishes agent to connected GE apps | `--agent-id`, `--looker-account` |
+| **`demo-create embed`** | `scaffold` | Scaffolds React/Vite embed portal workspace with `.env` and theme tokens | `--looker-project`, `--dashboard-id`, `--agent-id`, `--brand-name`, `--target-dir` |
+| **`demo-create ge`** | `status` | Displays current Looker Gemini enablement and GE config | `--looker-account` |
 | | `configure` | Discovers GE apps on GCP, configures Looker GE settings, and grants IAM roles | `--instance-id`, `--location`, `--gcp-project` |
 
 

@@ -6,17 +6,16 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
-from pydantic import BaseModel, Field
 
 from packaging import version
+from pydantic import BaseModel, Field
 
-from looker_demo_cli.utils.console import print_error, print_info, print_success, print_warning
+from looker_demo_cli.utils.console import print_error, print_info, print_success
 
 
 class DependencyCheckResult(BaseModel):
     package_name: str
-    installed_version: Optional[str] = None
+    installed_version: str | None = None
     expected_constraint: str
     is_satisfied: bool
     notes: str = ""
@@ -27,10 +26,10 @@ class RuntimeEnvironmentStatus(BaseModel):
     python_executable: str
     python_version: str
     uv_installed: bool
-    uv_version: Optional[str] = None
-    dependency_checks: List[DependencyCheckResult] = Field(default_factory=list)
+    uv_version: str | None = None
+    dependency_checks: list[DependencyCheckResult] = Field(default_factory=list)
     is_healthy: bool = True
-    active_venv_path: Optional[str] = None
+    active_venv_path: str | None = None
 
 
 CRITICAL_CONSTRAINTS = {
@@ -59,7 +58,7 @@ def check_runtime_environment() -> RuntimeEnvironmentStatus:
         except Exception:
             uv_ver = "installed"
 
-    dep_results: List[DependencyCheckResult] = []
+    dep_results: list[DependencyCheckResult] = []
     overall_healthy = True
 
     for pkg, (constraint_str, validator_fn) in CRITICAL_CONSTRAINTS.items():
@@ -102,7 +101,7 @@ def check_runtime_environment() -> RuntimeEnvironmentStatus:
     )
 
 
-def init_workspace_venv(target_dir: Path, install_self: bool = True) -> Tuple[bool, str]:
+def init_workspace_venv(target_dir: Path, install_self: bool = True) -> tuple[bool, str]:
     """Create a dedicated .venv in target_dir using uv (or venv fallback) and install looker-demo-cli."""
     venv_dir = target_dir / ".venv"
     has_uv = bool(shutil.which("uv"))
@@ -114,6 +113,7 @@ def init_workspace_venv(target_dir: Path, install_self: bool = True) -> Tuple[bo
         else:
             print_info(f"Creating virtual environment in `{venv_dir}` using Python `venv`...")
             import venv
+
             venv.create(str(venv_dir), with_pip=True)
 
         # Install dependencies

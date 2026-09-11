@@ -181,11 +181,18 @@ When deploying Conversational Analytics (CA) Agents to publish into Gemini Enter
 
 ### 💻 Mode 2: Standalone CLI (Headless Engine)
 
-Execute `demo-create` directly from your terminal or CI/CD pipeline:
+Execute `demo-create` directly from your terminal or CI/CD pipeline, one gate at a time:
 
 ```bash
-demo-create run --project=retail_analytics --scope=internal
+demo-create pre-check --fix
+demo-create data generate --domain retail --row-count 25000 --output-dir scratch/parquet
+demo-create data upload --parquet-dir scratch/parquet --gcp-project my-gcp-project --dataset retail_analytics
+demo-create lookml model --looker-project retail_analytics --dataset retail_analytics --connection my_bq_connection
+demo-create lookml deploy --looker-project retail_analytics --lookml-dir lookml
 ```
+
+State is persisted to `.demo-state.json` between calls, so later gates inherit
+earlier answers and you only pass what changes.
 
 ---
 
@@ -197,8 +204,8 @@ You can also execute the CLI on-demand in an ephemeral cache without pre-install
 # Run pre-flight audit and auto-fix MCP / skills
 uvx looker-demo-cli pre-check --fix
 
-# Run end-to-end interactive demo creator
-uvx looker-demo-cli run --project=retail_analytics --scope=internal
+# Generate a synthetic dataset without pre-installing anything
+uvx looker-demo-cli data generate --domain retail --row-count 25000 --output-dir scratch/parquet
 ```
 
 ### Workspace Virtual Environment & Script Runner
@@ -232,9 +239,57 @@ uv pip install -e .
 
 ---
 
+## Documentation
+
+| Document | Purpose |
+| :--- | :--- |
+| [`docs/COMMANDS.md`](docs/COMMANDS.md) | **Full command reference** -- every command, flag, and default, generated from the implementation and enforced by a CI drift test. |
+| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | How the CLI is layered, and the invariants a change must preserve. |
+| [`CONTRIBUTING.md`](CONTRIBUTING.md) | Setup, the local gate, and how to add a command. |
+| [`AGENTS.md`](AGENTS.md) | Instructions for an AI agent orchestrating a build. |
+
+The sections below are a guided tour; `docs/COMMANDS.md` is the exhaustive reference.
+
 ## Commands & Usage
 
-### 1. Environment & Skill Audit (`pre-check`)
+### 1. Where Am I? (`status`)
+The orientation command. It reads `.demo-state.json` and reports which gates are
+done, which gate is current, and the **literal next command to run** with every
+value it already knows substituted in. Anything it does not know appears as an
+obvious `<placeholder>`.
+
+```bash
+# Human-readable gate table
+demo-create status
+
+# Machine-readable: an agent can drive the entire pipeline from this
+demo-create status --json
+```
+
+The JSON payload carries `completed_gates`, `current_gate`, `next_command`, and
+`requires_human_confirmation` — the last being the single field an orchestrating
+agent branches on to decide whether it must stop and ask the user before
+proceeding. When `is_complete` is true, `next_command` is `null` and
+`next_actions` is empty, so a loop over `next_actions` terminates naturally.
+
+```console
+$ demo-create status
+┏━━━┳━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━┳━━━━━━━━━━━━┓
+┃   ┃ Gate ┃ Stage                                    ┃ Status  ┃ Human gate ┃
+┡━━━╇━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━╇━━━━━━━━━━━━┩
+│ ✓ │    0 │ Environment audit & 4-target confirmation│ done    │ confirm    │
+│ ✓ │    1 │ Schema co-design, synthesis & BQ load    │ done    │ confirm    │
+│ ▶ │    2 │ Semantic modeling & dashboard generation │ current │ --         │
+│ · │    3 │ Optimization, validation & release       │ pending │ confirm    │
+│ · │    4 │ Conversational Analytics agent grounding │ pending │ confirm    │
+│ · │    5 │ Gemini Enterprise publishing             │ pending │ confirm    │
+└───┴──────┴──────────────────────────────────────────┴─────────┴────────────┘
+→ Gate 2: Semantic modeling & dashboard generation
+    $ demo-create lookml model --looker-project retail_demo --dataset retail \
+        --connection acme_bigquery --gcp-project acme-analytics
+```
+
+### 2. Environment & Skill Audit (`pre-check`)
 ```bash
 # Run visual audit of GCP credentials, MCP tools, and intent skills
 demo-create pre-check
@@ -246,30 +301,20 @@ demo-create pre-check --fix
 demo-create pre-check --json
 ```
 
-### 2. End-to-End Demo Creation (`run`)
-```bash
-# Interactive wizard
-demo-create run --project=retail_insights --scope=internal
-
-# Non-interactive / Agent Mode
-demo-create run \
-  --project=logistics_analytics \
-  --scope=external \
-  --gcp-project=my-analytics-project \
-  --gcp-account=user@example.com \
-  --agent-mode
-```
-
-### 3. Modular Pipeline Commands
-You can run any phase of the pipeline independently. State is automatically persisted in `.demo-state.json` across executions:
+### 3. Gated Pipeline Commands
+Every phase runs independently and in any order that respects the gates. State is
+automatically persisted in `.demo-state.json` across executions, so each command
+inherits the previous one's answers. Every command accepts `--state-file` to point
+at an explicit state file instead of the discovered one, and `--json` to emit the
+machine-readable envelope:
 
 #### Data Synthesis & Ingestion (`demo-create data`)
 ```bash
 # Synthesize local Parquet files
-demo-create data generate --domain retail --scale medium --output-dir scratch/parquet
+demo-create data generate --domain retail --row-count 25000 --output-dir scratch/parquet
 
 # Upload Parquet tables to BigQuery
-demo-create data upload --parquet-dir scratch/parquet --project my-gcp-project --dataset retail_analytics
+demo-create data upload --parquet-dir scratch/parquet --gcp-project my-gcp-project --dataset retail_analytics
 
 # Inspect existing BigQuery tables and schema (table view or raw JSON)
 demo-create data inspect --gcp-project my-gcp-project --dataset retail_analytics
@@ -279,15 +324,15 @@ demo-create data inspect --gcp-project my-gcp-project --dataset retail_analytics
 #### Semantic Modeling, Optimization & Deployment (`demo-create lookml`)
 ```bash
 # Generate LookML from an existing BigQuery dataset with Knowledge Catalog / Dataplex introspection
-demo-create lookml model --project retail_analytics --dataset retail_analytics --connection bigquery_connection
+demo-create lookml model --looker-project retail_analytics --dataset retail_analytics --connection bigquery_connection
 
 # Generate LookML from local Parquet files
-demo-create lookml model --project retail_analytics --parquet-dir scratch/parquet --connection bigquery_connection
+demo-create lookml model --looker-project retail_analytics --parquet-dir scratch/parquet --connection bigquery_connection
 
 # Audit and delete orphaned duplicate LookML files at project root (e.g. users.view.lkml vs views/users.view.lkml)
-demo-create lookml clean-root --project retail_analytics
-demo-create lookml clean-root --project retail_analytics --dry-run
-demo-create lookml clean-root --project retail_analytics --json
+demo-create lookml clean-root --looker-project retail_analytics
+demo-create lookml clean-root --looker-project retail_analytics --dry-run
+demo-create lookml clean-root --looker-project retail_analytics --json
 
 # Audit and optimize staged LookML with Google Cloud server best practices (auto-snapshots to .backup_pre_opt)
 demo-create lookml optimize --lookml-dir lookml/
@@ -296,7 +341,7 @@ demo-create lookml optimize --lookml-dir lookml/
 demo-create lookml restore --lookml-dir lookml/
 
 # Deploy staged LookML files to dev workspace, run query tests, and release to production
-demo-create lookml deploy --project retail_analytics --lookml-dir lookml/
+demo-create lookml deploy --looker-project retail_analytics --lookml-dir lookml/
 ```
 
 #### Conversational Analytics & Golden Queries (`demo-create agent`)
@@ -315,7 +360,7 @@ demo-create agent publish --agent-id 1042 --json
 #### Standalone Embed Portal Scaffolding (`demo-create embed`)
 ```bash
 # Scaffold React/Vite portal with .env configured for Looker, dashboard, and CA chat
-demo-create embed scaffold --project retail_analytics --dashboard-id 1042 --agent-id 1042 --brand-name "Retail Insights"
+demo-create embed scaffold --looker-project retail_analytics --dashboard-id 1042 --agent-id 1042 --brand-name "Retail Insights"
 ```
 
 #### Gemini Enterprise Management (`demo-create ge`)

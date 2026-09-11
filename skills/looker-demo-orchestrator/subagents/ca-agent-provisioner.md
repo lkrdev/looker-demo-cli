@@ -76,14 +76,16 @@ The CA Agent provisioner can execute the entire flow via `demo-create agent` and
 ### Step 1: Create Conversational Analytics Agent
 Execute via `lkr code-mode sandbox`:
 ```python
-agent = create_agent(body={
-    'name': f'{project_name} Assistant',
-    'description': f'AI Conversational Analytics Assistant for {project_name}',
-    'sources': [{'model': model_name, 'explore': primary_explore}],
-    'context': {'instructions': system_instructions},
-    'code_interpreter': True
-})
-agent_id = agent.get('id')
+agent = create_agent(
+    body={
+        "name": f"{project_name} Assistant",
+        "description": f"AI Conversational Analytics Assistant for {project_name}",
+        "sources": [{"model": model_name, "explore": primary_explore}],
+        "context": {"instructions": system_instructions},
+        "code_interpreter": True,
+    }
+)
+agent_id = agent.get("id")
 ```
 
 ### Step 2: Extract & Register Dashboard Golden Queries
@@ -94,7 +96,7 @@ Inspect all query tiles in `dashboard_files`:
    - **Step 2b**: Create Golden Query resource: exactly **ONE question** per golden query (`questions: [prompt]`, `answer: expanded_share_url`, `is_active: True`).
    - **Step 2c**: Collect all created Golden Query IDs and link to agent:
      ```python
-     update_agent(agent_id=agent_id, body={'golden_query_ids': created_gq_ids})
+     update_agent(agent_id=agent_id, body={"golden_query_ids": created_gq_ids})
      ```
 
 ### Step 3: Publish to Gemini Enterprise (If Confirmed)
@@ -131,7 +133,9 @@ for attempt in range(1, max_attempts + 1):
         print(f"GE publish attempt {attempt} failed: {e}")
 
 if not published:
-    print(f"Failed to publish agent {agent_id} after {max_attempts} attempts. Check Admin > Gemini and Looker SA roles/licenses.")
+    print(
+        f"Failed to publish agent {agent_id} after {max_attempts} attempts. Check Admin > Gemini and Looker SA roles/licenses."
+    )
 ```
 
 > [!NOTE]

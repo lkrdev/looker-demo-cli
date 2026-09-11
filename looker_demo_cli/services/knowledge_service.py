@@ -1,14 +1,14 @@
 from __future__ import annotations
 
-import os
-from typing import Any, Dict, List, Optional
+from typing import Any
+
 import google.auth
 import google.auth.transport.requests
 import requests
 from google.cloud import bigquery
 
 from looker_demo_cli.generators.lookml_generator import LookMLTableSpec
-from looker_demo_cli.utils.console import print_info, print_warning
+from looker_demo_cli.utils.console import print_warning
 
 
 def introspect_bq_table_specs(
@@ -16,10 +16,10 @@ def introspect_bq_table_specs(
     dataset_id: str,
     credentials: Any = None,
     location: str = "US",
-    table_filter: Optional[List[str]] = None,
-) -> List[LookMLTableSpec]:
+    table_filter: list[str] | None = None,
+) -> list[LookMLTableSpec]:
     """Introspect BigQuery tables, constraints, and Knowledge Catalog/Dataplex semantics.
-    
+
     Generates rich LookMLTableSpec objects for LookML modeling.
     """
     if not credentials:
@@ -47,15 +47,15 @@ def introspect_bq_table_specs(
     except Exception:
         pass
 
-    specs: List[LookMLTableSpec] = []
+    specs: list[LookMLTableSpec] = []
 
     for tbl_id in target_tables:
         try:
             tbl = bq_client.get_table(dataset_ref.table(tbl_id))
-            schema_fields: Dict[str, str] = {}
-            column_descriptions: Dict[str, str] = {}
-            primary_key: Optional[str] = None
-            foreign_keys: Dict[str, str] = {}
+            schema_fields: dict[str, str] = {}
+            column_descriptions: dict[str, str] = {}
+            primary_key: str | None = None
+            foreign_keys: dict[str, str] = {}
 
             # 1. Native BigQuery Schema & Types
             for field in tbl.schema:

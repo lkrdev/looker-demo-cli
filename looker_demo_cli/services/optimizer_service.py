@@ -3,15 +3,16 @@ from __future__ import annotations
 import re
 import shutil
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any
+
 from rich.table import Table
 
 from looker_demo_cli.utils.console import console, print_info, print_success, print_warning
 
 
-def optimize_lookml_project(lookml_dir: Path, backup: bool = True) -> Dict[str, Any]:
+def optimize_lookml_project(lookml_dir: Path, backup: bool = True) -> dict[str, Any]:
     """Scan and patch staged LookML files in-place according to Google Cloud Server Optimization Best Practices.
-    
+
     5-Point Protocol:
       1. Static filter suggestions / caching on low-cardinality dimensions.
       2. Disable filter suggestions (suggestable: no) on PKs, FKs, UUIDs, timestamps, and large text.
@@ -56,7 +57,7 @@ def optimize_lookml_project(lookml_dir: Path, backup: bool = True) -> Dict[str, 
     explore_files = list(lookml_dir.glob("**/explores/**/*.explore.lkml")) + list(lookml_dir.glob("**/*.explore.lkml"))
     explore_files = [f for f in {f.resolve(): f for f in explore_files}.values() if ".backup_pre_opt" not in f.parts]
 
-    patched_files: List[Path] = []
+    patched_files: list[Path] = []
     stats = {
         "static_suggestions_added": 0,
         "suggestable_disabled_count": 0,
@@ -91,18 +92,34 @@ def optimize_lookml_project(lookml_dir: Path, backup: bool = True) -> Dict[str, 
             nonlocal stats
 
             modified_block = block
-            if (dim_name.endswith("_id") or any(k in dim_name.lower() for k in ["uuid", "hash", "token", "payload", "raw_content"])) and "primary_key: yes" not in block:
+            if (
+                dim_name.endswith("_id")
+                or any(k in dim_name.lower() for k in ["uuid", "hash", "token", "payload", "raw_content"])
+            ) and "primary_key: yes" not in block:
                 if "suggestable:" not in modified_block:
-                    modified_block = re.sub(r"(dimension:\s*[a-zA-Z0-9_]+\s*\{)", r"\1\n    suggestable: no", modified_block, count=1)
+                    modified_block = re.sub(
+                        r"(dimension:\s*[a-zA-Z0-9_]+\s*\{)", r"\1\n    suggestable: no", modified_block, count=1
+                    )
                     stats["suggestable_disabled_count"] += 1
 
                 if dim_name.endswith("_id") and "hidden:" not in modified_block:
-                    modified_block = re.sub(r"(dimension:\s*[a-zA-Z0-9_]+\s*\{)", r"\1\n    hidden: yes", modified_block, count=1)
+                    modified_block = re.sub(
+                        r"(dimension:\s*[a-zA-Z0-9_]+\s*\{)", r"\1\n    hidden: yes", modified_block, count=1
+                    )
                     stats["foreign_keys_hidden"] += 1
 
             elif any(k in dim_name.lower() for k in ["status", "type", "tier", "priority", "category", "channel"]):
-                if "suggest_persist_for:" not in modified_block and "suggestions:" not in modified_block and "suggestable: no" not in modified_block:
-                    modified_block = re.sub(r"(dimension:\s*[a-zA-Z0-9_]+\s*\{)", r'\1\n    suggest_persist_for: "24 hours"', modified_block, count=1)
+                if (
+                    "suggest_persist_for:" not in modified_block
+                    and "suggestions:" not in modified_block
+                    and "suggestable: no" not in modified_block
+                ):
+                    modified_block = re.sub(
+                        r"(dimension:\s*[a-zA-Z0-9_]+\s*\{)",
+                        r'\1\n    suggest_persist_for: "24 hours"',
+                        modified_block,
+                        count=1,
+                    )
                     stats["static_suggestions_added"] += 1
 
             return modified_block
@@ -202,9 +219,9 @@ persist_with: default_caching_policy
     }
 
 
-def restore_lookml_backup(lookml_dir: Path) -> Dict[str, Any]:
+def restore_lookml_backup(lookml_dir: Path) -> dict[str, Any]:
     """Restore LookML files from adjacent .backup_pre_opt snapshot directory.
-    
+
     This enables headless, atomic rollback without requiring Git tracking.
     """
     if not lookml_dir.exists():
@@ -224,7 +241,7 @@ def restore_lookml_backup(lookml_dir: Path) -> Dict[str, Any]:
             "files_restored": [],
         }
 
-    restored_files: List[str] = []
+    restored_files: list[str] = []
     try:
         for f in backup_dir.rglob("*.lkml"):
             rel = f.relative_to(backup_dir)
@@ -249,7 +266,7 @@ def restore_lookml_backup(lookml_dir: Path) -> Dict[str, Any]:
         }
 
 
-def render_optimization_report(result: Dict[str, Any]) -> None:
+def render_optimization_report(result: dict[str, Any]) -> None:
     """Print a clean CLI summary table of applied LookML optimizations."""
     table = Table(title="Google Cloud LookML Performance Optimization Summary", show_header=True)
     table.add_column("Optimization Area", style="cyan")
@@ -294,4 +311,6 @@ def render_optimization_report(result: Dict[str, Any]) -> None:
         print_info("All LookML files already satisfy Google Cloud Server Optimization standards.")
 
     if result.get("backup_created"):
-        print_info(f"Snapshot backup saved to `{result.get('backup_dir')}`. Run `demo-create lookml restore` to roll back if needed.")
+        print_info(
+            f"Snapshot backup saved to `{result.get('backup_dir')}`. Run `demo-create lookml restore` to roll back if needed."
+        )

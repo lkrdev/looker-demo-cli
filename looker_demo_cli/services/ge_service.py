@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-import json
 import os
 import subprocess
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any
+
 import requests
-from rich.panel import Panel
 from rich.prompt import Confirm, Prompt
 from rich.table import Table
 
@@ -19,13 +18,13 @@ from looker_demo_cli.utils.console import (
 )
 
 if TYPE_CHECKING:
-    from looker_demo_cli.workflow.state import FlowState
+    from looker_demo_cli.state import FlowState
 
 
 def get_looker_auth_context(
-    instance_url: Optional[str] = None,
-    preferred_account: Optional[str] = None,
-) -> Tuple[Dict[str, str], str]:
+    instance_url: str | None = None,
+    preferred_account: str | None = None,
+) -> tuple[dict[str, str], str]:
     """Retrieve Looker authentication bearer headers and base URL from active OAuth or env."""
     oauth_instances = get_authenticated_oauth_instances()
     target_oauth = None
@@ -53,7 +52,7 @@ def get_looker_auth_context(
         return headers, base_url
 
     # Fallback to env base URL if present
-    base_url = (instance_url or os.getenv("LOOKERSDK_BASE_URL", "")).rstrip("/")
+    base_url = (instance_url or os.getenv("LOOKERSDK_BASE_URL") or "").rstrip("/")
     headers = {
         "Content-Type": "application/json",
         "Accept": "application/json",
@@ -61,9 +60,9 @@ def get_looker_auth_context(
     return headers, base_url
 
 
-def get_looker_ge_config(instance_url: str, headers: Dict[str, str]) -> Dict[str, Any]:
+def get_looker_ge_config(instance_url: str, headers: dict[str, str]) -> dict[str, Any]:
     """Fetch current Gemini enablement and GE configuration from Looker internal API.
-    
+
     Endpoint: GET /api/4.0/gemini_enablement
     """
     clean_url = instance_url.rstrip("/")
@@ -72,15 +71,13 @@ def get_looker_ge_config(instance_url: str, headers: Dict[str, str]) -> Dict[str
         resp = requests.get(endpoint, headers=headers, timeout=12)
         if resp.status_code == 200:
             return resp.json()
-        print_warning(
-            f"Could not fetch GE configuration from Looker ({resp.status_code}): {resp.text[:200]}"
-        )
+        print_warning(f"Could not fetch GE configuration from Looker ({resp.status_code}): {resp.text[:200]}")
     except Exception as e:
         print_warning(f"Error fetching Looker GE configuration from {endpoint}: {e}")
     return {}
 
 
-def is_ge_configured(config: Dict[str, Any]) -> bool:
+def is_ge_configured(config: dict[str, Any]) -> bool:
     """Check if Gemini Enterprise is already fully configured in Looker."""
     project_id = config.get("ai_ge_project_id") or ""
     instance_id = config.get("ai_ge_instance_id") or ""
@@ -88,7 +85,7 @@ def is_ge_configured(config: Dict[str, Any]) -> bool:
     return bool(project_id.strip() and instance_id.strip() and location.strip())
 
 
-def render_ge_status_table(config: Dict[str, Any]) -> None:
+def render_ge_status_table(config: dict[str, Any]) -> None:
     """Render a Rich table showing current Gemini enablement and GE parameters."""
     t = Table(title="Looker Gemini Enterprise Configuration", show_header=True, header_style="bold blue")
     t.add_column("Setting", style="bold")
@@ -119,15 +116,15 @@ def render_ge_status_table(config: Dict[str, Any]) -> None:
 
 def patch_looker_ge_config(
     instance_url: str,
-    headers: Dict[str, str],
-    existing_config: Dict[str, Any],
+    headers: dict[str, str],
+    existing_config: dict[str, Any],
     project_id: str,
     location: str,
     instance_id: str,
     publish_enabled: bool = True,
-) -> Tuple[bool, Optional[str]]:
+) -> tuple[bool, str | None]:
     """Update Looker GE configuration via PATCH /api/internal/core/4.0/gemini_enablement.
-    
+
     Endpoint: PATCH /api/4.0/gemini_enablement
     """
     clean_url = instance_url.rstrip("/")
@@ -161,8 +158,8 @@ def patch_looker_ge_config(
 
 def list_gcp_ge_instances(
     project_id: str,
-    locations: Optional[List[str]] = None,
-) -> List[Dict[str, str]]:
+    locations: list[str] | None = None,
+) -> list[dict[str, str]]:
     """Discover available Gemini Enterprise / Discovery Engine apps across standard locations."""
     if locations is None:
         locations = ["global", "us", "eu"]
@@ -197,7 +194,7 @@ def list_gcp_ge_instances(
     if not token:
         return []
 
-    engines: List[Dict[str, str]] = []
+    engines: list[dict[str, str]] = []
     headers = {
         "Authorization": f"Bearer {token}",
         "Accept": "application/json",
@@ -217,19 +214,21 @@ def list_gcp_ge_instances(
                     eng_name = eng.get("name", "")
                     eng_id = eng_name.split("/")[-1] if "/" in eng_name else eng_name
                     display_name = eng.get("displayName") or eng_id
-                    engines.append({
-                        "id": eng_id,
-                        "name": display_name,
-                        "location": loc,
-                        "display": f"{display_name} ({eng_id}) [location: {loc}]",
-                    })
+                    engines.append(
+                        {
+                            "id": eng_id,
+                            "name": display_name,
+                            "location": loc,
+                            "display": f"{display_name} ({eng_id}) [location: {loc}]",
+                        }
+                    )
         except Exception:
             continue
 
     return engines
 
 
-def grant_looker_sa_iam(project_id: str, sa_email: str) -> Tuple[bool, str]:
+def grant_looker_sa_iam(project_id: str, sa_email: str) -> tuple[bool, str]:
     """Grant roles/discoveryengine.admin to Looker Service Account on target GCP project."""
     cmd = [
         "gcloud",
@@ -251,12 +250,12 @@ def grant_looker_sa_iam(project_id: str, sa_email: str) -> Tuple[bool, str]:
 
 def ensure_gemini_enterprise_configured(
     state: FlowState,
-    headers: Dict[str, str],
+    headers: dict[str, str],
     interactive: bool = True,
     allow_reconfigure: bool = True,
 ) -> FlowState:
     """Ensure Gemini Enterprise is configured in Looker before publishing.
-    
+
     1. Fetches current Looker GE config via GET /api/internal/core/4.0/gemini_enablement.
     2. If already configured:
        - Displays existing config.
@@ -290,6 +289,7 @@ def ensure_gemini_enterprise_configured(
 
         if interactive and allow_reconfigure:
             import sys
+
             if not sys.stdin.isatty():
                 return state
             try:
@@ -318,7 +318,9 @@ def ensure_gemini_enterprise_configured(
             console.print("\n[bold cyan]Discovered Gemini Enterprise Apps in GCP:[/bold cyan]")
             for idx, app in enumerate(discovered, 1):
                 console.print(f"  [bold green]{idx}.[/bold green] {app['display']}")
-            console.print(f"  [bold yellow]{len(discovered) + 1}.[/bold yellow] Enter custom App ID / Location manually")
+            console.print(
+                f"  [bold yellow]{len(discovered) + 1}.[/bold yellow] Enter custom App ID / Location manually"
+            )
 
             choice = Prompt.ask(
                 "Select a Gemini Enterprise App to configure in Looker",
@@ -340,9 +342,7 @@ def ensure_gemini_enterprise_configured(
 
     if not selected_id:
         if not discovered:
-            print_info(
-                f"No existing Gemini Enterprise instances auto-detected in project `{state.gcp_project_id}`."
-            )
+            print_info(f"No existing Gemini Enterprise instances auto-detected in project `{state.gcp_project_id}`.")
         if interactive and is_tty:
             selected_id = Prompt.ask("Enter Gemini Enterprise App / Engine ID", default="my-gemini-app")
             selected_loc = Prompt.ask("Enter Gemini Enterprise Location / Region", default="global")
@@ -385,8 +385,8 @@ def ensure_gemini_enterprise_configured(
                 f"Please ensure `{sa_email}` has 'Discovery Engine Admin' on project `{state.gcp_project_id}`.\n"
                 f"Manual command:\n"
                 f"  $ gcloud projects add-iam-policy-binding {state.gcp_project_id} \\\n"
-                f"      --member=\"serviceAccount:{sa_email}\" \\\n"
-                f"      --role=\"roles/discoveryengine.admin\"\n"
+                f'      --member="serviceAccount:{sa_email}" \\\n'
+                f'      --role="roles/discoveryengine.admin"\n'
                 f"IAM Console: https://console.cloud.google.com/iam-admin/iam?project={state.gcp_project_id}"
             )
     else:

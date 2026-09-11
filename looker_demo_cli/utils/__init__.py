@@ -4,18 +4,16 @@ from looker_demo_cli.utils.console import (
     print_banner,
     print_error,
     print_info,
-    print_step_header,
     print_success,
     print_warning,
 )
 
 __all__ = [
+    "BigQueryHelper",
     "console",
     "print_banner",
     "print_error",
     "print_info",
-    "print_step_header",
     "print_success",
     "print_warning",
-    "BigQueryHelper",
 ]

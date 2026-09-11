@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
+
 import google.auth
 from google.cloud import bigquery
 from google.cloud.exceptions import NotFound
 
 from looker_demo_cli.config import DEFAULT_GCP_PROJECT
-from looker_demo_cli.utils.console import print_error, print_info, print_success, print_warning
+from looker_demo_cli.utils.console import print_warning
 
 os.environ["CLOUDSDK_CONTEXT_AWARE_USE_CLIENT_CERTIFICATE"] = "false"
 os.environ["GOOGLE_API_USE_CLIENT_CERTIFICATE"] = "false"
@@ -35,7 +36,7 @@ class BigQueryHelper:
             print_warning(f"Notice while checking dataset `{dataset_id}`: {e}")
             return False
 
-    def list_tables(self, dataset_id: str) -> List[str]:
+    def list_tables(self, dataset_id: str) -> list[str]:
         """List all table IDs in a dataset."""
         dataset_ref = self.client.dataset(dataset_id)
         try:
@@ -45,7 +46,9 @@ class BigQueryHelper:
             print_warning(f"Could not list tables in `{dataset_id}`: {e}")
             return []
 
-    def ensure_dataset(self, dataset_id: str, description: str = "Demo Dataset created by demo-create") -> bigquery.Dataset:
+    def ensure_dataset(
+        self, dataset_id: str, description: str = "Demo Dataset created by demo-create"
+    ) -> bigquery.Dataset:
         """Ensure dataset exists; create if missing."""
         dataset_ref = self.client.dataset(dataset_id)
         try:
@@ -61,8 +64,8 @@ class BigQueryHelper:
         dataset_id: str,
         table_name: str,
         parquet_file: Path,
-        clustering_fields: Optional[List[str]] = None,
-        partition_field: Optional[str] = None,
+        clustering_fields: list[str] | None = None,
+        partition_field: str | None = None,
     ) -> int:
         """Load a single Parquet file into a BigQuery table with optional partitioning and clustering."""
         if not parquet_file.exists():

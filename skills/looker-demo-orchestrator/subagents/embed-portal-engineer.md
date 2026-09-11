@@ -43,7 +43,7 @@ The parent orchestrator invokes you with:
    Use the dedicated CLI scaffolding command:
    ```bash
    demo-create embed scaffold \
-     --project <project_name> \
+     --looker-project <project_name> \
      --dashboard-id <dashboard_id> \
      --agent-id <ca_agent_id> \
      --brand-name "<brand_name>" \

@@ -5,7 +5,6 @@ import json
 import os
 import sqlite3
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
 
 import google.auth
 import google.auth.credentials
@@ -15,28 +14,28 @@ from pydantic import BaseModel
 
 from looker_demo_cli.config import (
     DEFAULT_GCP_PROJECT,
-    GCLOUD_CONFIGS_DIR,
     GCLOUD_CONFIG_DIR,
+    GCLOUD_CONFIGS_DIR,
     GCLOUD_CREDS_DB,
 )
-from looker_demo_cli.utils.console import console, print_error, print_info, print_success, print_warning
+from looker_demo_cli.utils.console import print_warning
 
 
 class GCPAccountInfo(BaseModel):
     account_id: str
     is_active: bool = False
-    project_id: Optional[str] = None
+    project_id: str | None = None
     has_bigquery_access: bool = False
-    error_message: Optional[str] = None
+    error_message: str | None = None
 
 
 class GCPActiveContext(BaseModel):
-    active_account: Optional[str] = None
-    active_project: Optional[str] = None
-    active_config_name: Optional[str] = None
-    adc_project_id: Optional[str] = None
-    adc_quota_project_id: Optional[str] = None
-    adc_file_path: Optional[str] = None
+    active_account: str | None = None
+    active_project: str | None = None
+    active_config_name: str | None = None
+    adc_project_id: str | None = None
+    adc_quota_project_id: str | None = None
+    adc_file_path: str | None = None
     adc_file_exists: bool = False
 
 
@@ -44,23 +43,23 @@ def get_gcp_active_context() -> GCPActiveContext:
     """Retrieve active gcloud account, gcloud project, and ADC project settings."""
     active_cfg = get_active_gcloud_config_name()
     configs = get_available_gcloud_configs()
-    
+
     active_acc = None
     active_proj = None
     if active_cfg and active_cfg in configs:
         active_acc = configs[active_cfg].get("core.account")
         active_proj = configs[active_cfg].get("core.project")
-    
+
     adc_path_str = os.getenv("GOOGLE_APPLICATION_CREDENTIALS") or str(
         GCLOUD_CONFIG_DIR / "application_default_credentials.json"
     )
     adc_file = Path(adc_path_str)
     adc_exists = adc_file.exists()
     adc_quota_proj = None
-    
+
     if adc_exists:
         try:
-            with open(adc_file, "r", encoding="utf-8") as f:
+            with open(adc_file, encoding="utf-8") as f:
                 data = json.load(f)
                 adc_quota_proj = data.get("quota_project_id")
         except Exception:
@@ -84,9 +83,9 @@ def get_gcp_active_context() -> GCPActiveContext:
     )
 
 
-def get_available_gcloud_configs() -> Dict[str, Dict[str, str]]:
+def get_available_gcloud_configs() -> dict[str, dict[str, str]]:
     """Parse all configurations in ~/.config/gcloud/configurations/."""
-    configs = {}
+    configs: dict[str, dict[str, str]] = {}
     if not GCLOUD_CONFIGS_DIR.exists():
         return configs
 
@@ -105,7 +104,7 @@ def get_available_gcloud_configs() -> Dict[str, Dict[str, str]]:
     return configs
 
 
-def get_active_gcloud_config_name() -> Optional[str]:
+def get_active_gcloud_config_name() -> str | None:
     """Read the active config name from ~/.config/gcloud/active_config."""
     active_file = GCLOUD_CONFIG_DIR / "active_config"
     if active_file.exists():
@@ -113,9 +112,9 @@ def get_active_gcloud_config_name() -> Optional[str]:
     return None
 
 
-def get_authenticated_accounts() -> List[str]:
+def get_authenticated_accounts() -> list[str]:
     """Query all accounts stored in ~/.config/gcloud/credentials.db."""
-    accounts = []
+    accounts: list[str] = []
     if not GCLOUD_CREDS_DB.exists():
         return accounts
 
@@ -129,7 +128,7 @@ def get_authenticated_accounts() -> List[str]:
     return accounts
 
 
-def get_oauth_credentials_for_account(account_id: str) -> Optional[google.oauth2.credentials.Credentials]:
+def get_oauth_credentials_for_account(account_id: str) -> google.oauth2.credentials.Credentials | None:
     """Build google.oauth2.credentials.Credentials for a given account from credentials.db."""
     if not GCLOUD_CREDS_DB.exists():
         return None
@@ -155,7 +154,7 @@ def get_oauth_credentials_for_account(account_id: str) -> Optional[google.oauth2
         return None
 
 
-def inspect_gcp_accounts(target_project: str = DEFAULT_GCP_PROJECT) -> List[GCPAccountInfo]:
+def inspect_gcp_accounts(target_project: str = DEFAULT_GCP_PROJECT) -> list[GCPAccountInfo]:
     """Inspect all authenticated GCP accounts and test BigQuery dataset access."""
     # Ensure client certificates don't cause failures on linux/cloudtop
     os.environ["CLOUDSDK_CONTEXT_AWARE_USE_CLIENT_CERTIFICATE"] = "false"
@@ -165,7 +164,7 @@ def inspect_gcp_accounts(target_project: str = DEFAULT_GCP_PROJECT) -> List[GCPA
     configs = get_available_gcloud_configs()
     accounts = get_authenticated_accounts()
 
-    results: List[GCPAccountInfo] = []
+    results: list[GCPAccountInfo] = []
 
     for acc in accounts:
         info = GCPAccountInfo(account_id=acc)
@@ -207,10 +206,10 @@ def inspect_gcp_accounts(target_project: str = DEFAULT_GCP_PROJECT) -> List[GCPA
 
 
 def select_gcp_credentials(
-    preferred_account: Optional[str] = None,
-    preferred_project: Optional[str] = None,
+    preferred_account: str | None = None,
+    preferred_project: str | None = None,
     interactive: bool = True,
-) -> Tuple[google.auth.credentials.Credentials, str]:
+) -> tuple[google.auth.credentials.Credentials, str]:
     """Select or prompt for the active GCP account and project ID."""
     os.environ["CLOUDSDK_CONTEXT_AWARE_USE_CLIENT_CERTIFICATE"] = "false"
     os.environ["GOOGLE_API_USE_CLIENT_CERTIFICATE"] = "false"
@@ -238,13 +237,14 @@ def select_gcp_credentials(
     return adc_creds, preferred_project or project or DEFAULT_GCP_PROJECT
 
 
-def list_available_gcp_projects() -> List[Dict[str, str]]:
+def list_available_gcp_projects() -> list[dict[str, str]]:
     """List accessible Google Cloud projects via gcloud or Cloud Resource Manager API."""
     import subprocess
-    import requests
-    import google.auth.transport.requests
 
-    projects_map: Dict[str, Dict[str, str]] = {}
+    import google.auth.transport.requests
+    import requests
+
+    projects_map: dict[str, dict[str, str]] = {}
 
     # 1. Try gcloud CLI
     try:
@@ -317,4 +317,3 @@ def list_available_gcp_projects() -> List[Dict[str, str]]:
             }
 
     return list(projects_map.values())
-

@@ -1,38 +1,28 @@
 from __future__ import annotations
 
-import json
-from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
-import requests
-import yaml
+from typing import Any
 
-from looker_demo_cli.services.ge_service import (
-    ensure_gemini_enterprise_configured,
-    get_looker_auth_context,
+import requests
+
+from looker_demo_cli.services.ca_agent_service import (
+    generate_default_ca_instructions,
 )
 from looker_demo_cli.utils.console import (
-    console,
     print_error,
-    print_info,
     print_success,
     print_warning,
-)
-from looker_demo_cli.workflow.steps.step_ca_agent import (
-    extract_golden_queries_from_dashboards,
-    generate_default_ca_instructions,
-    publish_agent_to_ge,
 )
 
 
 def extract_golden_queries_from_dashboard_id(
     instance_url: str,
-    headers: Dict[str, str],
+    headers: dict[str, str],
     dashboard_id: str,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """Extract query tiles from a deployed Looker dashboard via REST API."""
     clean_url = instance_url.rstrip("/")
     endpoint = f"{clean_url}/api/4.0/dashboards/{dashboard_id}"
-    golden_queries: List[Dict[str, Any]] = []
+    golden_queries: list[dict[str, Any]] = []
 
     try:
         resp = requests.get(endpoint, headers=headers, timeout=12)
@@ -57,18 +47,20 @@ def extract_golden_queries_from_dashboard_id(
                 elif "breakdown" in title.lower() or "distribution" in title.lower():
                     prompt = f"Show the breakdown of {title.lower()}."
 
-                golden_queries.append({
-                    "prompt": prompt,
-                    "query": {
-                        "model": q.get("model"),
-                        "view": q.get("view"),
-                        "fields": q.get("fields", []),
-                        "pivots": q.get("pivots", []),
-                        "filters": dict(q.get("filters", {})),
-                        "sorts": q.get("sorts", []),
-                        "limit": str(q.get("limit", "500")),
-                    },
-                })
+                golden_queries.append(
+                    {
+                        "prompt": prompt,
+                        "query": {
+                            "model": q.get("model"),
+                            "view": q.get("view"),
+                            "fields": q.get("fields", []),
+                            "pivots": q.get("pivots", []),
+                            "filters": dict(q.get("filters", {})),
+                            "sorts": q.get("sorts", []),
+                            "limit": str(q.get("limit", "500")),
+                        },
+                    }
+                )
     except Exception as e:
         print_warning(f"Error extracting queries from dashboard `{dashboard_id}`: {e}")
 
@@ -77,13 +69,13 @@ def extract_golden_queries_from_dashboard_id(
 
 def register_and_link_golden_queries(
     instance_url: str,
-    headers: Dict[str, str],
+    headers: dict[str, str],
     agent_id: str,
-    golden_queries: List[Dict[str, Any]],
+    golden_queries: list[dict[str, Any]],
 ) -> int:
     """Register golden queries and link them to the Looker CA agent."""
     clean_url = instance_url.rstrip("/")
-    created_gq_ids: List[str] = []
+    created_gq_ids: list[str] = []
 
     for idx, gq in enumerate(golden_queries, 1):
         try:
@@ -140,12 +132,12 @@ def register_and_link_golden_queries(
 
 def provision_ca_agent(
     instance_url: str,
-    headers: Dict[str, str],
+    headers: dict[str, str],
     model_name: str,
     explore_name: str,
-    agent_name: Optional[str] = None,
-    custom_instructions: Optional[str] = None,
-) -> Optional[str]:
+    agent_name: str | None = None,
+    custom_instructions: str | None = None,
+) -> str | None:
     """Create a Conversational Analytics Agent via Looker REST API."""
     clean_url = instance_url.rstrip("/")
     name = agent_name or f"{model_name.replace('_', ' ').title()} Assistant"

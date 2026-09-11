@@ -1,0 +1,154 @@
+name: Test
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Cancel superseded runs on the same branch to keep PR feedback fast.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # The CLI pre-bakes these for Cloudtop/enterprise workstations; setting them
+  # in CI keeps behavior identical to a developer machine.
+  CLOUDSDK_CONTEXT_AWARE_USE_CLIENT_CERTIFICATE: "false"
+  GOOGLE_API_USE_CLIENT_CERTIFICATE: "false"
+
+jobs:
+  lint:
+    name: Lint and format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: "latest"
+          enable-cache: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: uv sync --group dev
+
+      - name: Ruff lint
+        run: uv run ruff check --output-format=github .
+
+      - name: Ruff format check
+        run: uv run ruff format --check .
+
+  typecheck:
+    name: Type check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: "latest"
+          enable-cache: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: uv sync --group dev
+
+      # mypy runs non-strict; the strictness ratchet tightens per-module over
+      # time. Config lives in pyproject.toml; see CONTRIBUTING.md.
+      - name: mypy
+        run: uv run mypy looker_demo_cli
+
+      # Also asserted by tests/test_docs_drift.py, but surfaced as its own step
+      # so a stale reference fails with an actionable name and a one-line fix
+      # rather than as one assertion among hundreds.
+      - name: docs are generated from the CLI
+        run: uv run python scripts/gen_docs.py --check
+
+  test:
+    name: Unit tests (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: "latest"
+          enable-cache: true
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: uv sync --group dev
+
+      # `addopts` in pyproject.toml already deselects `-m integration`, so this
+      # run is fully hermetic: no network, no gcloud, no real subprocesses.
+      - name: Run unit tests with coverage
+        run: >
+          uv run pytest
+          --cov=looker_demo_cli
+          --cov-report=term-missing
+          --cov-report=xml
+          --cov-fail-under=${{ env.COVERAGE_FLOOR }}
+        env:
+          # Coverage ratchet. Raise this as each refactor phase adds tests;
+          # never lower it. Phase 5 measured 65% against 735 hermetic tests,
+          # adding the pure gate model (gates.py), the `status` command, and a
+          # rewritten state layer -- state.py is at 96% and every generated
+          # gate command is validated against the real Click parser.
+          # Held two points below the measurement so an unrelated PR that
+          # happens to shift a branch ratio does not fail on arrival.
+          COVERAGE_FLOOR: "63"
+
+      - name: Upload coverage artifact
+        if: matrix.python-version == '3.12'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-xml
+          path: coverage.xml
+          if-no-files-found: warn
+
+  build:
+    name: Build distributions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: "latest"
+          enable-cache: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Catches packaging regressions (notably the `skills` force-include)
+      # before a release tag rather than after.
+      - name: Build package
+        run: uv build
+
+      - name: Verify the built wheel imports and exposes the CLI
+        run: |
+          uv run --isolated --no-project --with dist/*.whl -- \
+            python -c "from looker_demo_cli.cli import app; print('entrypoint OK')"

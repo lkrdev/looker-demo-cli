@@ -84,11 +84,11 @@ Evaluate the `table_specs` relational graph:
 1. **Automated CLI Modeling (Mandatory)**:
    Scaffold views, explores, and models from BigQuery/Knowledge Catalog metadata:
    ```bash
-   demo-create lookml model --project <project_name> --dataset <dataset_id> --connection <connection_name> --output-dir lookml/
+   demo-create lookml model --looker-project <project_name> --dataset <dataset_id> --connection <connection_name> --output-dir lookml/
    ```
    Or model from local Parquet files:
    ```bash
-   demo-create lookml model --project <project_name> --parquet-dir <parquet_path> --connection <connection_name> --output-dir lookml/
+   demo-create lookml model --looker-project <project_name> --parquet-dir <parquet_path> --connection <connection_name> --output-dir lookml/
    ```
 
 2. **Generate View Files (`views/*.view.lkml`)**:

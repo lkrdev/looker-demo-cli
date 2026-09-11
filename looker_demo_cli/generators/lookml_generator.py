@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
+
 from pydantic import BaseModel, Field
 
 
@@ -9,7 +10,7 @@ class LookMLTableSpec(BaseModel):
     table_name: str
     table_type: str = "dimension"  # fact or dimension
     schema_fields: dict[str, str] = Field(default_factory=dict)
-    primary_key: Optional[str] = None
+    primary_key: str | None = None
     foreign_keys: dict[str, str] = Field(default_factory=dict)  # fk_col -> TargetTable.TargetCol
 
 
@@ -17,7 +18,7 @@ class DashboardFilterSpec(BaseModel):
     name: str
     title: str
     type: str = "date_filter"  # date_filter, field_filter, string_filter
-    default_value: Optional[str] = "365 days"
+    default_value: str | None = "365 days"
     allow_multiple_values: bool = True
     required: bool = False
     ui_config: dict[str, Any] = Field(default_factory=lambda: {"type": "advanced", "display": "popover"})
@@ -30,7 +31,7 @@ class DashboardTabSpec(BaseModel):
 
 class DashboardTileSpec(BaseModel):
     title: str
-    name: Optional[str] = None
+    name: str | None = None
     model: str
     explore: str
     type: str = "looker_column"  # single_value, looker_area, looker_column, looker_bar, looker_donut_multiples, looker_grid, looker_scatter, looker_line
@@ -38,10 +39,10 @@ class DashboardTileSpec(BaseModel):
     pivots: list[str] = Field(default_factory=list)
     filters: dict[str, str] = Field(default_factory=dict)
     sorts: list[str] = Field(default_factory=list)
-    limit: Optional[int] = None
+    limit: int | None = None
     listen: dict[str, str] = Field(default_factory=dict)
-    tab_name: Optional[str] = None
-    advanced_vis_config: Optional[str] = None
+    tab_name: str | None = None
+    advanced_vis_config: str | None = None
     row: int = 0
     col: int = 0
     width: int = 12
@@ -67,21 +68,40 @@ class LookMLGenerator:
         self.dataset_id = dataset_id
         self.connection_name = connection_name
 
-    def _format_label(self, raw_name: Optional[str]) -> str:
+    def _format_label(self, raw_name: str | None) -> str:
         """Convert snake_case or raw identifier to human-friendly Title Case."""
         if not raw_name or not isinstance(raw_name, str):
             return "Field" if not raw_name else str(raw_name)
         clean = str(raw_name).replace("dim_", "").replace("fct_", "").replace("_usd", " (USD)").replace("_pct", " (%)")
         words = clean.split("_")
         acronyms = {
-            "id": "ID", "usd": "USD", "url": "URL", "api": "API", "kpi": "KPI",
-            "nps": "NPS", "ltv": "LTV", "fk": "FK", "pk": "PK", "uuid": "UUID",
-            "dtc": "DTC", "llm": "LLM", "ai": "AI", "saas": "SaaS", "arr": "ARR",
+            "id": "ID",
+            "usd": "USD",
+            "url": "URL",
+            "api": "API",
+            "kpi": "KPI",
+            "nps": "NPS",
+            "ltv": "LTV",
+            "fk": "FK",
+            "pk": "PK",
+            "uuid": "UUID",
+            "dtc": "DTC",
+            "llm": "LLM",
+            "ai": "AI",
+            "saas": "SaaS",
+            "arr": "ARR",
         }
         formatted = [acronyms.get(w.lower(), w.capitalize()) for w in words if w]
         return " ".join(formatted) if formatted else str(raw_name)
 
-    def _format_description(self, field_name: Optional[str], field_type: Optional[str], is_pk: bool = False, is_fk: bool = False, table_name: Optional[str] = "") -> str:
+    def _format_description(
+        self,
+        field_name: str | None,
+        field_type: str | None,
+        is_pk: bool = False,
+        is_fk: bool = False,
+        table_name: str | None = "",
+    ) -> str:
         """Generate descriptive documentation for LookML fields."""
         f_name = str(field_name or "field")
         f_type = str(field_type or "STRING").upper()
@@ -95,7 +115,9 @@ class LookMLGenerator:
         if f_type in ("DATE", "TIMESTAMP", "DATETIME") or f_name.endswith(("_date", "_time", "_at")):
             action = f_name.replace("_date", "").replace("_time", "").replace("_at", "").replace("_", " ")
             return f"Date/timestamp recording when the {action} occurred."
-        if any(k in f_name.lower() for k in ["usd", "amount", "price", "revenue", "cost", "spend", "budget", "fee", "loss"]):
+        if any(
+            k in f_name.lower() for k in ["usd", "amount", "price", "revenue", "cost", "spend", "budget", "fee", "loss"]
+        ):
             return f"Monetary amount for {f_name.replace('_', ' ')} in USD."
         if any(k in f_name.lower() for k in ["pct", "rate", "score", "ratio", "percentage"]):
             return f"Calculated metric or score for {f_name.replace('_', ' ')}."
@@ -115,33 +137,45 @@ class LookMLGenerator:
         ]
 
         for field_name, field_type in spec.schema_fields.items():
-            is_pk = (field_name == spec.primary_key)
-            is_fk = (field_name in spec.foreign_keys or (field_name.endswith("_id") and not is_pk))
+            is_pk = field_name == spec.primary_key
+            is_fk = field_name in spec.foreign_keys or (field_name.endswith("_id") and not is_pk)
             label = self._format_label(field_name)
-            desc = self._format_description(field_name, field_type, is_pk=is_pk, is_fk=is_fk, table_name=spec.table_name)
+            desc = self._format_description(
+                field_name, field_type, is_pk=is_pk, is_fk=is_fk, table_name=spec.table_name
+            )
 
-            is_time_col = field_type in ("TIMESTAMP", "DATETIME", "DATE") or field_name.endswith(("_time", "_date", "_at", "_day"))
+            is_time_col = field_type in ("TIMESTAMP", "DATETIME", "DATE") or field_name.endswith(
+                ("_time", "_date", "_at", "_day")
+            )
             if is_time_col and field_type not in ("INT64", "FLOAT64", "NUMERIC", "DOUBLE", "INTEGER"):
                 group_name = field_name
                 for sfx in ["_time", "_date", "_at", "_day"]:
                     if group_name.endswith(sfx):
-                        group_name = group_name[:-len(sfx)]
+                        group_name = group_name[: -len(sfx)]
                         break
                 group_label = self._format_label(group_name)
-                is_date_only = (field_type == "DATE") or field_name.endswith(("_date", "_day")) or field_name.startswith("date_")
+                is_date_only = (
+                    (field_type == "DATE") or field_name.endswith(("_date", "_day")) or field_name.startswith("date_")
+                )
                 dt_param = "date" if is_date_only else "timestamp"
-                t_frames = "[raw, date, week, month, quarter, year]" if is_date_only else "[raw, time, date, week, month, quarter, year]"
-                lines.extend([
-                    f"  dimension_group: {group_name} {{",
-                    f'    label: "{group_label}"',
-                    f'    description: "{desc}"',
-                    "    type: time",
-                    f"    datatype: {dt_param}",
-                    f"    timeframes: {t_frames}",
-                    f"    sql: ${{TABLE}}.{field_name} ;;",
-                    "  }",
-                    "",
-                ])
+                t_frames = (
+                    "[raw, date, week, month, quarter, year]"
+                    if is_date_only
+                    else "[raw, time, date, week, month, quarter, year]"
+                )
+                lines.extend(
+                    [
+                        f"  dimension_group: {group_name} {{",
+                        f'    label: "{group_label}"',
+                        f'    description: "{desc}"',
+                        "    type: time",
+                        f"    datatype: {dt_param}",
+                        f"    timeframes: {t_frames}",
+                        f"    sql: ${{TABLE}}.{field_name} ;;",
+                        "  }",
+                        "",
+                    ]
+                )
             elif field_type in ("INT64", "FLOAT64", "NUMERIC", "DOUBLE", "INTEGER"):
                 dim_lines = [
                     f"  dimension: {field_name} {{",
@@ -154,23 +188,27 @@ class LookMLGenerator:
                 elif is_fk:
                     dim_lines.append("    hidden: yes")
                     dim_lines.append("    suggestable: no")
-                dim_lines.extend([
-                    "    type: number",
-                    f"    sql: ${{TABLE}}.{field_name} ;;",
-                    "  }",
-                    "",
-                ])
+                dim_lines.extend(
+                    [
+                        "    type: number",
+                        f"    sql: ${{TABLE}}.{field_name} ;;",
+                        "  }",
+                        "",
+                    ]
+                )
                 lines.extend(dim_lines)
             elif field_type in ("BOOL", "BOOLEAN"):
-                lines.extend([
-                    f"  dimension: {field_name} {{",
-                    f'    label: "{label}"',
-                    f'    description: "{desc}"',
-                    "    type: yesno",
-                    f"    sql: ${{TABLE}}.{field_name} ;;",
-                    "  }",
-                    "",
-                ])
+                lines.extend(
+                    [
+                        f"  dimension: {field_name} {{",
+                        f'    label: "{label}"',
+                        f'    description: "{desc}"',
+                        "    type: yesno",
+                        f"    sql: ${{TABLE}}.{field_name} ;;",
+                        "  }",
+                        "",
+                    ]
+                )
             else:
                 dim_lines = [
                     f"  dimension: {field_name} {{",
@@ -183,67 +221,100 @@ class LookMLGenerator:
                 elif is_fk:
                     dim_lines.append("    hidden: yes")
                     dim_lines.append("    suggestable: no")
-                elif any(sfx in field_name.lower() for sfx in ["uuid", "hash", "token", "payload", "raw", "description", "content"]):
+                elif any(
+                    sfx in field_name.lower()
+                    for sfx in ["uuid", "hash", "token", "payload", "raw", "description", "content"]
+                ):
                     dim_lines.append("    suggestable: no")
-                elif any(kw in field_name.lower() for kw in ["status", "type", "state", "priority", "tier", "category", "channel"]):
+                elif any(
+                    kw in field_name.lower()
+                    for kw in ["status", "type", "state", "priority", "tier", "category", "channel"]
+                ):
                     dim_lines.append('    suggest_persist_for: "24 hours"')
-                dim_lines.extend([
-                    "    type: string",
-                    f"    sql: ${{TABLE}}.{field_name} ;;",
-                    "  }",
-                    "",
-                ])
+                dim_lines.extend(
+                    [
+                        "    type: string",
+                        f"    sql: ${{TABLE}}.{field_name} ;;",
+                        "  }",
+                        "",
+                    ]
+                )
                 lines.extend(dim_lines)
 
         # Standard Measures
-        lines.extend([
-            "  # -------------------------------------------------------------",
-            "  # Measures",
-            "  # -------------------------------------------------------------",
-            "  measure: count {",
-            f'    label: "Total {self._format_label(spec.table_name)} Count"',
-            f'    description: "Total record count of {self._format_label(spec.table_name)}."',
-            "    type: count",
-            "  }",
-            "",
-        ])
+        lines.extend(
+            [
+                "  # -------------------------------------------------------------",
+                "  # Measures",
+                "  # -------------------------------------------------------------",
+                "  measure: count {",
+                f'    label: "Total {self._format_label(spec.table_name)} Count"',
+                f'    description: "Total record count of {self._format_label(spec.table_name)}."',
+                "    type: count",
+                "  }",
+                "",
+            ]
+        )
 
         if spec.primary_key:
             pk_label = self._format_label(spec.primary_key)
-            lines.extend([
-                f"  measure: count_distinct_{spec.table_name} {{",
-                f'    label: "Distinct {self._format_label(spec.table_name)} Count"',
-                f'    description: "Distinct unique count of {pk_label}."',
-                "    type: count_distinct",
-                f"    sql: ${{{spec.primary_key}}} ;;",
-                "  }",
-                "",
-            ])
+            lines.extend(
+                [
+                    f"  measure: count_distinct_{spec.table_name} {{",
+                    f'    label: "Distinct {self._format_label(spec.table_name)} Count"',
+                    f'    description: "Distinct unique count of {pk_label}."',
+                    "    type: count_distinct",
+                    f"    sql: ${{{spec.primary_key}}} ;;",
+                    "  }",
+                    "",
+                ]
+            )
 
         # Sum/Avg measures for numeric columns
         for field_name, field_type in spec.schema_fields.items():
             if field_name != spec.primary_key and not field_name.endswith("_id"):
                 if field_type in ("FLOAT64", "NUMERIC", "INT64", "DOUBLE"):
-                    val_format = "usd_0" if any(k in field_name.lower() for k in ["usd", "cost", "rev", "price", "loss", "fee", "val", "amount", "payout", "premium", "spend"]) else "decimal_1"
+                    val_format = (
+                        "usd_0"
+                        if any(
+                            k in field_name.lower()
+                            for k in [
+                                "usd",
+                                "cost",
+                                "rev",
+                                "price",
+                                "loss",
+                                "fee",
+                                "val",
+                                "amount",
+                                "payout",
+                                "premium",
+                                "spend",
+                            ]
+                        )
+                        else "decimal_1"
+                    )
                     field_label = self._format_label(field_name)
-                    lines.extend([
-                        f"  measure: total_{field_name} {{",
-                        f'    label: "Total {field_label}"',
-                        f'    description: "Sum of {field_label.lower()} across all matching records."',
-                        "    type: sum",
-                        f"    sql: ${{{field_name}}} ;;",
-                        f"    value_format_name: {val_format}",
-                        "  }",
-                        "",
-                        f"  measure: average_{field_name} {{",
-                        f'    label: "Average {field_label}"',
-                        f'    description: "Average {field_label.lower()} per record."',
-                        "    type: average",
-                        f"    sql: ${{{field_name}}} ;;",
-                        f"    value_format_name: {val_format}",
-                        "  }",
-                        "",
-                    ])
+                    lines.extend(
+                        [
+                            f"  measure: total_{field_name} {{",
+                            f'    label: "Total {field_label}"',
+                            f'    description: "Sum of {field_label.lower()} across all matching records."',
+                            "    type: sum",
+                            f"    sql: ${{{field_name}}} ;;",
+                            f"    value_format_name: {val_format}",
+                            "  }",
+                            "",
+                            f"  measure: average_{field_name} {{",
+                            f'    label: "Average {field_label}"',
+                            f'    description: "Average {field_label.lower()} per record."',
+                            "    type: average",
+                            f"    sql: ${{{field_name}}} ;;",
+                            f"    value_format_name: {val_format}",
+                            "  }",
+                            "",
+                        ]
+                    )
 
         lines.append("}")
         return "\n".join(lines)
@@ -269,11 +340,13 @@ class LookMLGenerator:
         explored_tables = [t for t in tables if t.table_type == "fact" or len(t.foreign_keys) > 0] or tables[:1]
         for ft in explored_tables:
             label = self._format_label(ft.table_name)
-            lines.extend([
-                f"explore: {ft.table_name} {{",
-                f'  label: "{label}"',
-                f'  description: "Explore for analyzing {label.lower()} data with relational dimensions."',
-            ])
+            lines.extend(
+                [
+                    f"explore: {ft.table_name} {{",
+                    f'  label: "{label}"',
+                    f'  description: "Explore for analyzing {label.lower()} data with relational dimensions."',
+                ]
+            )
 
             # Partition pruning filter check (Performance Best Practice Rule 4)
             date_col = None
@@ -286,30 +359,34 @@ class LookMLGenerator:
                     if col_type in ("TIMESTAMP", "DATETIME") or col.endswith(("_time", "_at")):
                         for sfx in ["_time", "_at", "_date"]:
                             if col.endswith(sfx):
-                                date_col = f"{ft.table_name}.{col[:-len(sfx)]}_date"
+                                date_col = f"{ft.table_name}.{col[: -len(sfx)]}_date"
                                 break
                         if not date_col:
                             date_col = f"{ft.table_name}.{col}_date"
                         break
 
             if date_col:
-                lines.extend([
-                    "  always_filter: {",
-                    f'    filters: [{date_col}: "365 days"]',
-                    "  }",
-                ])
+                lines.extend(
+                    [
+                        "  always_filter: {",
+                        f'    filters: [{date_col}: "365 days"]',
+                        "  }",
+                    ]
+                )
 
             # Add joins
             for fk_col, parent_ref in ft.foreign_keys.items():
                 parent_table = parent_ref.split(".")[0]
                 parent_pk = parent_ref.split(".")[1] if "." in parent_ref else "id"
-                lines.extend([
-                    f"  join: {parent_table} {{",
-                    "    type: left_outer",
-                    "    relationship: many_to_one",
-                    f"    sql_on: ${{{ft.table_name}.{fk_col}}} = ${{{parent_table}.{parent_pk}}} ;;",
-                    "  }",
-                ])
+                lines.extend(
+                    [
+                        f"  join: {parent_table} {{",
+                        "    type: left_outer",
+                        "    relationship: many_to_one",
+                        f"    sql_on: ${{{ft.table_name}.{fk_col}}} = ${{{parent_table}.{parent_pk}}} ;;",
+                        "  }",
+                    ]
+                )
             lines.extend(["}", ""])
 
         return "\n".join(lines)
@@ -327,37 +404,43 @@ class LookMLGenerator:
         if spec.tabs:
             lines.append("  tabs:")
             for t in spec.tabs:
-                lines.extend([
-                    f'  - name: "{t.name}"',
-                    f'    label: "{t.label}"',
-                ])
+                lines.extend(
+                    [
+                        f'  - name: "{t.name}"',
+                        f'    label: "{t.label}"',
+                    ]
+                )
 
         if spec.filters:
             lines.append("  filters:")
             for f in spec.filters:
-                lines.extend([
-                    f'  - name: "{f.name}"',
-                    f'    title: "{f.title}"',
-                    f"    type: {f.type}",
-                    f'    default_value: "{f.default_value}"',
-                    f"    allow_multiple_values: {'true' if f.allow_multiple_values else 'false'}",
-                    f"    required: {'true' if f.required else 'false'}",
-                    "    ui_config:",
-                    f"      type: {f.ui_config.get('type', 'advanced')}",
-                    f"      display: {f.ui_config.get('display', 'popover')}",
-                ])
+                lines.extend(
+                    [
+                        f'  - name: "{f.name}"',
+                        f'    title: "{f.title}"',
+                        f"    type: {f.type}",
+                        f'    default_value: "{f.default_value}"',
+                        f"    allow_multiple_values: {'true' if f.allow_multiple_values else 'false'}",
+                        f"    required: {'true' if f.required else 'false'}",
+                        "    ui_config:",
+                        f"      type: {f.ui_config.get('type', 'advanced')}",
+                        f"      display: {f.ui_config.get('display', 'popover')}",
+                    ]
+                )
 
         lines.append("  elements:")
         for el in spec.elements:
             tile_name = el.name or el.title
-            lines.extend([
-                f'  - title: "{el.title}"',
-                f'    name: "{tile_name}"',
-                f"    model: {el.model}",
-                f"    explore: {el.explore}",
-                f"    type: {el.type}",
-                f"    fields: [{', '.join(el.fields)}]",
-            ])
+            lines.extend(
+                [
+                    f'  - title: "{el.title}"',
+                    f'    name: "{tile_name}"',
+                    f"    model: {el.model}",
+                    f"    explore: {el.explore}",
+                    f"    type: {el.type}",
+                    f"    fields: [{', '.join(el.fields)}]",
+                ]
+            )
             if el.pivots:
                 lines.append(f"    pivots: [{', '.join(el.pivots)}]")
             if el.sorts:
@@ -368,12 +451,14 @@ class LookMLGenerator:
                 lines.append(f'    tab_name: "{el.tab_name}"')
             if el.advanced_vis_config:
                 lines.append(f"    advanced_vis_config: '{el.advanced_vis_config}'")
-            lines.extend([
-                f"    row: {el.row}",
-                f"    col: {el.col}",
-                f"    width: {el.width}",
-                f"    height: {el.height}",
-            ])
+            lines.extend(
+                [
+                    f"    row: {el.row}",
+                    f"    col: {el.col}",
+                    f"    width: {el.width}",
+                    f"    height: {el.height}",
+                ]
+            )
             if el.listen:
                 lines.append("    listen:")
                 for filter_k, target_col in el.listen.items():
@@ -389,8 +474,11 @@ class LookMLGenerator:
         dim_tables = [t for t in tables if t.table_type == "dimension" and t.table_name != primary_fact.table_name]
 
         numeric_fields = [
-            f for f, t in primary_fact.schema_fields.items()
-            if t in ("FLOAT64", "NUMERIC", "INT64", "DOUBLE") and f != primary_fact.primary_key and not f.endswith("_id")
+            f
+            for f, t in primary_fact.schema_fields.items()
+            if t in ("FLOAT64", "NUMERIC", "INT64", "DOUBLE")
+            and f != primary_fact.primary_key
+            and not f.endswith("_id")
         ]
         kpi_1 = numeric_fields[0] if numeric_fields else "count"
         kpi_2 = numeric_fields[1] if len(numeric_fields) > 1 else (numeric_fields[0] if numeric_fields else "count")
@@ -406,15 +494,28 @@ class LookMLGenerator:
                     date_field = f
                     break
 
-        date_group = date_field.replace("_date", "").replace("_time", "").replace("_at", "").replace("_day", "") if date_field else None
+        date_group = (
+            date_field.replace("_date", "").replace("_time", "").replace("_at", "").replace("_day", "")
+            if date_field
+            else None
+        )
         date_filter_target = f"{primary_fact.table_name}.{date_group}_date" if date_group else None
         month_timeline = f"{primary_fact.table_name}.{date_group}_month" if date_group else None
 
         cat_dims = [
-            f for f, t in primary_fact.schema_fields.items()
+            f
+            for f, t in primary_fact.schema_fields.items()
             if t == "STRING" and f != primary_fact.primary_key and not f.endswith("_id")
         ]
-        cat_1 = cat_dims[0] if cat_dims else (dim_tables[0].primary_key if dim_tables and dim_tables[0].primary_key else (primary_fact.primary_key or "category"))
+        cat_1 = (
+            cat_dims[0]
+            if cat_dims
+            else (
+                dim_tables[0].primary_key
+                if dim_tables and dim_tables[0].primary_key
+                else (primary_fact.primary_key or "category")
+            )
+        )
         cat_2 = cat_dims[1] if len(cat_dims) > 1 else (cat_1 or "category")
 
         title_display = self._format_label(model_name)
@@ -480,7 +581,10 @@ class LookMLGenerator:
                     model=model_name,
                     explore=primary_fact.table_name,
                     type="looker_area",
-                    fields=[month_timeline, f"{primary_fact.table_name}.total_{kpi_1 if kpi_1 != 'count' else 'count'}"],
+                    fields=[
+                        month_timeline,
+                        f"{primary_fact.table_name}.total_{kpi_1 if kpi_1 != 'count' else 'count'}",
+                    ],
                     sorts=[f"{month_timeline} asc"],
                     limit=500,
                     tab_name="Executive Pulse",
@@ -493,70 +597,81 @@ class LookMLGenerator:
                 )
             )
 
-        elements.extend([
-            DashboardTileSpec(
-                title=f"Distribution by {self._format_label(cat_1)}",
-                model=model_name,
-                explore=primary_fact.table_name,
-                type="looker_donut_multiples",
-                fields=[f"{primary_fact.table_name}.{cat_1}", f"{primary_fact.table_name}.count"],
-                sorts=[f"{primary_fact.table_name}.count desc"],
-                limit=10,
-                tab_name="Executive Pulse",
-                row=4,
-                col=14,
-                width=10,
-                height=8,
-                listen=listen_map,
-            ),
-            DashboardTileSpec(
-                title=f"Performance by {self._format_label(cat_2)}",
-                model=model_name,
-                explore=primary_fact.table_name,
-                type="looker_bar",
-                fields=[f"{primary_fact.table_name}.{cat_2}", f"{primary_fact.table_name}.total_{kpi_1 if kpi_1 != 'count' else 'count'}", f"{primary_fact.table_name}.count"],
-                sorts=[f"{primary_fact.table_name}.total_{kpi_1 if kpi_1 != 'count' else 'count'} desc"],
-                limit=15,
-                tab_name="Entity Breakdown",
-                advanced_vis_config='{"chart": {"borderRadius": 8}, "plotOptions": {"series": {"borderRadius": 4}}}',
-                row=0,
-                col=0,
-                width=12,
-                height=8,
-                listen=listen_map,
-            ),
-            DashboardTileSpec(
-                title=f"Detailed {title_display} Records Overview",
-                model=model_name,
-                explore=primary_fact.table_name,
-                type="looker_grid",
-                fields=[f"{primary_fact.table_name}.{cat_1}", f"{primary_fact.table_name}.count", f"{primary_fact.table_name}.total_{kpi_1 if kpi_1 != 'count' else 'count'}", f"{primary_fact.table_name}.average_{kpi_2 if kpi_2 != 'count' else 'count'}"],
-                sorts=[f"{primary_fact.table_name}.count desc"],
-                limit=50,
-                tab_name="Entity Breakdown",
-                row=0,
-                col=12,
-                width=12,
-                height=8,
-                listen=listen_map,
-            ),
-            DashboardTileSpec(
-                title=f"Volume Concentration by {self._format_label(cat_1)}",
-                model=model_name,
-                explore=primary_fact.table_name,
-                type="looker_column",
-                fields=[f"{primary_fact.table_name}.{cat_1}", f"{primary_fact.table_name}.count"],
-                sorts=[f"{primary_fact.table_name}.count desc"],
-                limit=20,
-                tab_name="Operational Health",
-                advanced_vis_config='{"chart": {"borderRadius": 8}, "plotOptions": {"series": {"borderRadius": 4}}}',
-                row=0,
-                col=0,
-                width=24,
-                height=8,
-                listen=listen_map,
-            ),
-        ])
+        elements.extend(
+            [
+                DashboardTileSpec(
+                    title=f"Distribution by {self._format_label(cat_1)}",
+                    model=model_name,
+                    explore=primary_fact.table_name,
+                    type="looker_donut_multiples",
+                    fields=[f"{primary_fact.table_name}.{cat_1}", f"{primary_fact.table_name}.count"],
+                    sorts=[f"{primary_fact.table_name}.count desc"],
+                    limit=10,
+                    tab_name="Executive Pulse",
+                    row=4,
+                    col=14,
+                    width=10,
+                    height=8,
+                    listen=listen_map,
+                ),
+                DashboardTileSpec(
+                    title=f"Performance by {self._format_label(cat_2)}",
+                    model=model_name,
+                    explore=primary_fact.table_name,
+                    type="looker_bar",
+                    fields=[
+                        f"{primary_fact.table_name}.{cat_2}",
+                        f"{primary_fact.table_name}.total_{kpi_1 if kpi_1 != 'count' else 'count'}",
+                        f"{primary_fact.table_name}.count",
+                    ],
+                    sorts=[f"{primary_fact.table_name}.total_{kpi_1 if kpi_1 != 'count' else 'count'} desc"],
+                    limit=15,
+                    tab_name="Entity Breakdown",
+                    advanced_vis_config='{"chart": {"borderRadius": 8}, "plotOptions": {"series": {"borderRadius": 4}}}',
+                    row=0,
+                    col=0,
+                    width=12,
+                    height=8,
+                    listen=listen_map,
+                ),
+                DashboardTileSpec(
+                    title=f"Detailed {title_display} Records Overview",
+                    model=model_name,
+                    explore=primary_fact.table_name,
+                    type="looker_grid",
+                    fields=[
+                        f"{primary_fact.table_name}.{cat_1}",
+                        f"{primary_fact.table_name}.count",
+                        f"{primary_fact.table_name}.total_{kpi_1 if kpi_1 != 'count' else 'count'}",
+                        f"{primary_fact.table_name}.average_{kpi_2 if kpi_2 != 'count' else 'count'}",
+                    ],
+                    sorts=[f"{primary_fact.table_name}.count desc"],
+                    limit=50,
+                    tab_name="Entity Breakdown",
+                    row=0,
+                    col=12,
+                    width=12,
+                    height=8,
+                    listen=listen_map,
+                ),
+                DashboardTileSpec(
+                    title=f"Volume Concentration by {self._format_label(cat_1)}",
+                    model=model_name,
+                    explore=primary_fact.table_name,
+                    type="looker_column",
+                    fields=[f"{primary_fact.table_name}.{cat_1}", f"{primary_fact.table_name}.count"],
+                    sorts=[f"{primary_fact.table_name}.count desc"],
+                    limit=20,
+                    tab_name="Operational Health",
+                    advanced_vis_config='{"chart": {"borderRadius": 8}, "plotOptions": {"series": {"borderRadius": 4}}}',
+                    row=0,
+                    col=0,
+                    width=24,
+                    height=8,
+                    listen=listen_map,
+                ),
+            ]
+        )
 
         spec = DashboardSpec(
             dashboard_name=f"{model_name}_overview",
@@ -572,7 +687,7 @@ class LookMLGenerator:
         output_dir: Path,
         model_name: str,
         tables: list[LookMLTableSpec],
-        dashboard_content: Optional[str] = None,
+        dashboard_content: str | None = None,
     ) -> list[Path]:
         """Write all LookML files to local output folder."""
         views_dir = output_dir / "views"

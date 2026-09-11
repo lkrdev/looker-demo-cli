@@ -11,20 +11,21 @@ and generates production-ready LookML models.
 from __future__ import annotations
 
 import argparse
-from collections import defaultdict, deque
 import json
+from collections import defaultdict, deque
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
+
 from pydantic import BaseModel, Field
 
 
 class TableSchemaSpec(BaseModel):
     table_name: str
     table_type: str = "dimension"  # fact, dimension, bridge, event
-    primary_key: Optional[str] = None
+    primary_key: str | None = None
     foreign_keys: dict[str, str] = Field(default_factory=dict)  # fk_col -> TargetTable.TargetCol
     schema_fields: dict[str, str] = Field(default_factory=dict)  # col_name -> TYPE
-    description: Optional[str] = None
+    description: str | None = None
 
 
 class JoinEdge(BaseModel):
@@ -88,7 +89,9 @@ class SchemaGraphAnalyzer:
                     target_table, target_pk = target_ref.split(".", 1)
                 else:
                     target_table = target_ref
-                    target_pk = self.tables_map.get(target_table, TableSchemaSpec(table_name=target_table)).primary_key or "id"
+                    target_pk = (
+                        self.tables_map.get(target_table, TableSchemaSpec(table_name=target_table)).primary_key or "id"
+                    )
 
                 self.adj_out[t_name].append((target_table, fk_col, target_pk))
                 self.adj_in[target_table].append((t_name, fk_col, target_pk))
@@ -97,7 +100,19 @@ class SchemaGraphAnalyzer:
         """Convert snake_case or raw identifier to human-friendly Title Case."""
         clean = raw_name.replace("dim_", "").replace("fct_", "").replace("_usd", " (USD)").replace("_pct", " (%)")
         words = clean.split("_")
-        acronyms = {"id": "ID", "usd": "USD", "url": "URL", "api": "API", "kpi": "KPI", "nps": "NPS", "ltv": "LTV", "fk": "FK", "pk": "PK", "qa": "QA", "pr": "PR"}
+        acronyms = {
+            "id": "ID",
+            "usd": "USD",
+            "url": "URL",
+            "api": "API",
+            "kpi": "KPI",
+            "nps": "NPS",
+            "ltv": "LTV",
+            "fk": "FK",
+            "pk": "PK",
+            "qa": "QA",
+            "pr": "PR",
+        }
         formatted = [acronyms.get(w.lower(), w.capitalize()) for w in words if w]
         return " ".join(formatted)
 
@@ -114,7 +129,11 @@ class SchemaGraphAnalyzer:
                 t_spec.table_type == "bridge"
                 or "mapping" in t_name
                 or "rel_" in t_name
-                or (d_out >= 2 and d_in == 0 and ("_id" in (t_spec.primary_key or "") and "," in (t_spec.primary_key or "")))
+                or (
+                    d_out >= 2
+                    and d_in == 0
+                    and ("_id" in (t_spec.primary_key or "") and "," in (t_spec.primary_key or ""))
+                )
             )
 
             if is_bridge:
@@ -158,7 +177,6 @@ class SchemaGraphAnalyzer:
         """Generate NDT summary specifications for all 1:N children of a base view to avoid chasm traps."""
         children = self.detect_chasm_traps(base_view)
         rollups = []
-        base_pk = self.tables_map.get(base_view, TableSchemaSpec(table_name=base_view)).primary_key or "id"
 
         for child_table, child_fk, parent_pk in children:
             child_spec = self.tables_map.get(child_table)
@@ -166,19 +184,26 @@ class SchemaGraphAnalyzer:
             view_name = f"{child_clean}_rollup_for_{base_view.replace('dim_', '').replace('fct_', '')}"
 
             measures = [
-                {"name": f"total_{child_clean}_count", "field": f"{child_table}.count", "type": "number", "label": f"Total {self._format_label(child_clean)} Count"}
+                {
+                    "name": f"total_{child_clean}_count",
+                    "field": f"{child_table}.count",
+                    "type": "number",
+                    "label": f"Total {self._format_label(child_clean)} Count",
+                }
             ]
 
             # Check if child has timestamp for last activity
             if child_spec:
                 for f_name, f_type in child_spec.schema_fields.items():
                     if f_type in ("TIMESTAMP", "DATETIME", "DATE") or f_name.endswith(("_at", "_time", "_date")):
-                        measures.append({
-                            "name": f"last_{child_clean}_time",
-                            "field": f"{child_table}.max_{f_name.replace('_at', '').replace('_time', '').replace('_date', '')}",
-                            "type": "time",
-                            "label": f"Last {self._format_label(child_clean)} Date/Time",
-                        })
+                        measures.append(
+                            {
+                                "name": f"last_{child_clean}_time",
+                                "field": f"{child_table}.max_{f_name.replace('_at', '').replace('_time', '').replace('_date', '')}",
+                                "type": "time",
+                                "label": f"Last {self._format_label(child_clean)} Date/Time",
+                            }
+                        )
                         break
 
             rollups.append(
@@ -254,7 +279,9 @@ class SchemaGraphAnalyzer:
 
                 if is_role_playing:
                     role_alias = fk_col.replace("_user_id", "").replace("_id", "").replace("id_", "")
-                    join_name = role_alias if role_alias not in (base_clean, singular_base) else f"{role_alias}_{target_table}"
+                    join_name = (
+                        role_alias if role_alias not in (base_clean, singular_base) else f"{role_alias}_{target_table}"
+                    )
                     view_label = self._format_label(role_alias)
                 else:
                     join_name = target_table
@@ -333,28 +360,34 @@ class SchemaGraphAnalyzer:
 
         for base_table in base_candidates:
             spec = self.build_explore_spec(base_table)
-            lines.extend([
-                f"explore: {spec.explore_name} {{",
-                f'  label: "{spec.label}"',
-                f'  description: "{spec.description}"',
-                f'  view_label: "{spec.label} (Base)"',
-                "",
-            ])
+            lines.extend(
+                [
+                    f"explore: {spec.explore_name} {{",
+                    f'  label: "{spec.label}"',
+                    f'  description: "{spec.description}"',
+                    f'  view_label: "{spec.label} (Base)"',
+                    "",
+                ]
+            )
 
             for j in spec.joins:
-                lines.extend([
-                    f"  join: {j.join_name} {{",
-                ])
+                lines.extend(
+                    [
+                        f"  join: {j.join_name} {{",
+                    ]
+                )
                 if j.from_view != j.join_name:
                     lines.append(f"    from: {j.from_view}")
-                lines.extend([
-                    f'    view_label: "{j.view_label}"',
-                    "    type: left_outer",
-                    f"    relationship: {j.relationship}",
-                    f"    sql_on: {j.sql_on} ;;",
-                    "  }",
-                    "",
-                ])
+                lines.extend(
+                    [
+                        f'    view_label: "{j.view_label}"',
+                        "    type: left_outer",
+                        f"    relationship: {j.relationship}",
+                        f"    sql_on: {j.sql_on} ;;",
+                        "  }",
+                        "",
+                    ]
+                )
 
             lines.extend(["}", ""])
 
@@ -374,29 +407,37 @@ class SchemaGraphAnalyzer:
         pk_col = spec.primary_key or "id"
 
         for field_name, field_type in spec.schema_fields.items():
-            is_pk = (field_name == pk_col)
+            is_pk = field_name == pk_col
             label = self._format_label(field_name)
-            desc = f"Primary key for {self._format_label(spec.table_name)}." if is_pk else f"Attribute representing {label.lower()}."
+            desc = (
+                f"Primary key for {self._format_label(spec.table_name)}."
+                if is_pk
+                else f"Attribute representing {label.lower()}."
+            )
 
-            is_time = field_type in ("TIMESTAMP", "DATETIME", "DATE") or field_name.endswith(("_at", "_time", "_date", "_day"))
+            is_time = field_type in ("TIMESTAMP", "DATETIME", "DATE") or field_name.endswith(
+                ("_at", "_time", "_date", "_day")
+            )
             if is_time and field_type not in ("INT64", "FLOAT64", "NUMERIC"):
                 group_name = field_name
                 for sfx in ["_at", "_time", "_date", "_day"]:
                     if group_name.endswith(sfx):
-                        group_name = group_name[:-len(sfx)]
+                        group_name = group_name[: -len(sfx)]
                         break
                 is_date = (field_type == "DATE") or field_name.endswith(("_date", "_day"))
-                lines.extend([
-                    f"  dimension_group: {group_name} {{",
-                    f'    label: "{self._format_label(group_name)}"',
-                    f'    description: "{desc}"',
-                    "    type: time",
-                    f"    datatype: {'date' if is_date else 'timestamp'}",
-                    f"    timeframes: [{'raw, date, week, month, quarter, year' if is_date else 'raw, time, date, week, month, quarter, year'}]",
-                    f"    sql: ${{TABLE}}.{field_name} ;;",
-                    "  }",
-                    "",
-                ])
+                lines.extend(
+                    [
+                        f"  dimension_group: {group_name} {{",
+                        f'    label: "{self._format_label(group_name)}"',
+                        f'    description: "{desc}"',
+                        "    type: time",
+                        f"    datatype: {'date' if is_date else 'timestamp'}",
+                        f"    timeframes: [{'raw, date, week, month, quarter, year' if is_date else 'raw, time, date, week, month, quarter, year'}]",
+                        f"    sql: ${{TABLE}}.{field_name} ;;",
+                        "  }",
+                        "",
+                    ]
+                )
             elif field_type in ("INT64", "FLOAT64", "NUMERIC", "DOUBLE", "INTEGER"):
                 dim_lines = [
                     f"  dimension: {field_name} {{",
@@ -405,23 +446,27 @@ class SchemaGraphAnalyzer:
                 ]
                 if is_pk:
                     dim_lines.append("    primary_key: yes")
-                dim_lines.extend([
-                    "    type: number",
-                    f"    sql: ${{TABLE}}.{field_name} ;;",
-                    "  }",
-                    "",
-                ])
+                dim_lines.extend(
+                    [
+                        "    type: number",
+                        f"    sql: ${{TABLE}}.{field_name} ;;",
+                        "  }",
+                        "",
+                    ]
+                )
                 lines.extend(dim_lines)
             elif field_type in ("BOOL", "BOOLEAN"):
-                lines.extend([
-                    f"  dimension: {field_name} {{",
-                    f'    label: "{label}"',
-                    f'    description: "{desc}"',
-                    "    type: yesno",
-                    f"    sql: ${{TABLE}}.{field_name} ;;",
-                    "  }",
-                    "",
-                ])
+                lines.extend(
+                    [
+                        f"  dimension: {field_name} {{",
+                        f'    label: "{label}"',
+                        f'    description: "{desc}"',
+                        "    type: yesno",
+                        f"    sql: ${{TABLE}}.{field_name} ;;",
+                        "  }",
+                        "",
+                    ]
+                )
             else:
                 dim_lines = [
                     f"  dimension: {field_name} {{",
@@ -430,68 +475,84 @@ class SchemaGraphAnalyzer:
                 ]
                 if is_pk:
                     dim_lines.append("    primary_key: yes")
-                dim_lines.extend([
-                    "    type: string",
-                    f"    sql: ${{TABLE}}.{field_name} ;;",
-                    "  }",
-                    "",
-                ])
+                dim_lines.extend(
+                    [
+                        "    type: string",
+                        f"    sql: ${{TABLE}}.{field_name} ;;",
+                        "  }",
+                        "",
+                    ]
+                )
                 lines.extend(dim_lines)
 
         # Measures
-        lines.extend([
-            "  # -------------------------------------------------------------",
-            "  # Measures",
-            "  # -------------------------------------------------------------",
-            "  measure: count {",
-            f'    label: "Total {self._format_label(spec.table_name)} Count"',
-            f'    description: "Total record count of {self._format_label(spec.table_name)}."',
-            "    type: count",
-            "  }",
-            "",
-            f"  measure: count_distinct_{spec.table_name} {{",
-            f'    label: "Distinct {self._format_label(spec.table_name)} Count"',
-            f'    description: "Distinct count of {self._format_label(pk_col)}."',
-            "    type: count_distinct",
-            f"    sql: ${{{pk_col}}} ;;",
-            "  }",
-            "",
-        ])
+        lines.extend(
+            [
+                "  # -------------------------------------------------------------",
+                "  # Measures",
+                "  # -------------------------------------------------------------",
+                "  measure: count {",
+                f'    label: "Total {self._format_label(spec.table_name)} Count"',
+                f'    description: "Total record count of {self._format_label(spec.table_name)}."',
+                "    type: count",
+                "  }",
+                "",
+                f"  measure: count_distinct_{spec.table_name} {{",
+                f'    label: "Distinct {self._format_label(spec.table_name)} Count"',
+                f'    description: "Distinct count of {self._format_label(pk_col)}."',
+                "    type: count_distinct",
+                f"    sql: ${{{pk_col}}} ;;",
+                "  }",
+                "",
+            ]
+        )
 
         for f_name, f_type in spec.schema_fields.items():
             if f_name != pk_col and not f_name.endswith("_id") and f_type in ("FLOAT64", "NUMERIC", "INT64", "DOUBLE"):
                 f_label = self._format_label(f_name)
-                fmt = "usd_0" if any(k in f_name.lower() for k in ["usd", "cost", "price", "amount", "rev"]) else "decimal_1"
-                lines.extend([
-                    f"  measure: total_{f_name} {{",
-                    f'    label: "Total {f_label}"',
-                    f'    description: "Sum of {f_label.lower()}."',
-                    "    type: sum",
-                    f"    sql: ${{{f_name}}} ;;",
-                    f"    value_format_name: {fmt}",
-                    "  }",
-                    "",
-                    f"  measure: average_{f_name} {{",
-                    f'    label: "Average {f_label}"',
-                    f'    description: "Average {f_label.lower()} per record."',
-                    "    type: average",
-                    f"    sql: ${{{f_name}}} ;;",
-                    f"    value_format_name: {fmt}",
-                    "  }",
-                    "",
-                ])
+                fmt = (
+                    "usd_0"
+                    if any(k in f_name.lower() for k in ["usd", "cost", "price", "amount", "rev"])
+                    else "decimal_1"
+                )
+                lines.extend(
+                    [
+                        f"  measure: total_{f_name} {{",
+                        f'    label: "Total {f_label}"',
+                        f'    description: "Sum of {f_label.lower()}."',
+                        "    type: sum",
+                        f"    sql: ${{{f_name}}} ;;",
+                        f"    value_format_name: {fmt}",
+                        "  }",
+                        "",
+                        f"  measure: average_{f_name} {{",
+                        f'    label: "Average {f_label}"',
+                        f'    description: "Average {f_label.lower()} per record."',
+                        "    type: average",
+                        f"    sql: ${{{f_name}}} ;;",
+                        f"    value_format_name: {fmt}",
+                        "  }",
+                        "",
+                    ]
+                )
 
         lines.append("}")
         return "\n".join(lines)
 
 
 def run_cli():
-    parser = argparse.ArgumentParser(description="Analyze Schema Graph and Generate LookML Explores for Snowflake Schemas.")
+    parser = argparse.ArgumentParser(
+        description="Analyze Schema Graph and Generate LookML Explores for Snowflake Schemas."
+    )
     parser.add_argument("--schema-file", type=str, help="Path to JSON file containing list of TableSchemaSpecs.")
-    parser.add_argument("--output-dir", type=str, default="./lookml_output", help="Directory to write LookML view and model files.")
+    parser.add_argument(
+        "--output-dir", type=str, default="./lookml_output", help="Directory to write LookML view and model files."
+    )
     parser.add_argument("--project-id", type=str, default="looker-demo-392616", help="Google Cloud Project ID.")
     parser.add_argument("--dataset-id", type=str, default="linear_demo", help="BigQuery Dataset ID.")
-    parser.add_argument("--connection-name", type=str, default="default_bigquery_connection", help="Looker Database Connection Name.")
+    parser.add_argument(
+        "--connection-name", type=str, default="default_bigquery_connection", help="Looker Database Connection Name."
+    )
     args = parser.parse_args()
 
     if not args.schema_file:
@@ -503,7 +564,7 @@ def run_cli():
         print(f"Error: File not found: {schema_path}")
         return
 
-    with open(schema_path, "r", encoding="utf-8") as f:
+    with open(schema_path, encoding="utf-8") as f:
         data = json.load(f)
 
     tables = [TableSchemaSpec(**t) for t in data]

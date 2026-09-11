@@ -56,6 +56,7 @@ The parent orchestrator invokes you with:
    - **Mandatory Cloudtop/mTLS Bypass**: All BigQuery scripts running in Google environments must set:
      ```python
      import os
+
      os.environ["CLOUDSDK_CONTEXT_AWARE_USE_CLIENT_CERTIFICATE"] = "false"
      os.environ["GOOGLE_API_USE_CLIENT_CERTIFICATE"] = "false"
      ```
@@ -71,11 +72,11 @@ The parent orchestrator invokes you with:
      ```
    - **Upload Parquet tables to BigQuery**:
      ```bash
-     demo-create data upload --parquet-dir <parquet_dir> --project <gcp_project_id> --dataset <dataset_id> --location <location>
+     demo-create data upload --parquet-dir <parquet_dir> --gcp-project <gcp_project_id> --dataset <dataset_id> --location <location>
      ```
    - **Inspect existing BigQuery dataset**:
      ```bash
-     demo-create data inspect --project <gcp_project_id> --dataset <dataset_id>
+     demo-create data inspect --gcp-project <gcp_project_id> --dataset <dataset_id>
      ```
 
 3. **Create BigQuery Dataset & Upload Tables**:

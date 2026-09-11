@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import subprocess
 from pathlib import Path
-from typing import Dict, List, Optional
+
 from pydantic import BaseModel
 
 from looker_demo_cli.config import (
@@ -12,7 +12,7 @@ from looker_demo_cli.config import (
     SKILL_GIT_REPOSITORIES,
     SKILLS_CACHE_DIR,
 )
-from looker_demo_cli.utils.console import print_error, print_info, print_success, print_warning
+from looker_demo_cli.utils.console import print_info, print_success, print_warning
 
 
 class SkillInstallStatus(BaseModel):
@@ -24,9 +24,9 @@ class SkillInstallStatus(BaseModel):
     is_valid: bool
 
 
-def sync_remote_skill_repos(fix: bool = False) -> Dict[str, Path]:
+def sync_remote_skill_repos(fix: bool = False) -> dict[str, Path]:
     """Ensure remote skill repositories are cloned or updated to the latest revision in cache."""
-    resolved_repo_paths: Dict[str, Path] = {}
+    resolved_repo_paths: dict[str, Path] = {}
     env = os.environ.copy()
     env["GIT_TERMINAL_PROMPT"] = "0"
 
@@ -91,14 +91,14 @@ def sync_remote_skill_repos(fix: bool = False) -> Dict[str, Path]:
     return resolved_repo_paths
 
 
-def audit_and_organize_skills(fix: bool = False) -> List[SkillInstallStatus]:
+def audit_and_organize_skills(fix: bool = False) -> list[SkillInstallStatus]:
     """Audit and organize skills by intent category into ~/.gemini/config/skills/."""
     GEMINI_SKILLS_DIR.mkdir(parents=True, exist_ok=True)
 
     repo_paths = sync_remote_skill_repos(fix=fix)
     local_cli_root = Path(__file__).resolve().parent.parent.parent
 
-    results: List[SkillInstallStatus] = []
+    results: list[SkillInstallStatus] = []
 
     for category, skills in INTENT_SKILL_DEFINITIONS.items():
         category_dir = GEMINI_SKILLS_DIR / category

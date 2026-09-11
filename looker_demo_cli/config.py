@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any
+
 from pydantic import BaseModel, Field
 
 # Pre-bake Google API mTLS bypass for Cloudtop and enterprise workstations
@@ -23,7 +24,7 @@ SYNTHETIC_DATA_GEN_REPO = Path(os.getenv("SYNTHETIC_DATA_GEN_PATH", str(HOME_DIR
 LOOKER_EMBED_DEMO_REPO = Path(os.getenv("LOOKER_EMBED_DEMO_PATH", str(HOME_DIR / "looker-embed-demo")))
 
 # Remote Repositories for Automatic Skill Syncing
-SKILL_GIT_REPOSITORIES: Dict[str, Dict[str, Any]] = {
+SKILL_GIT_REPOSITORIES: dict[str, dict[str, Any]] = {
     "synthetic-data-generator": {
         "urls": [
             "https://github.com/lkrdev/synthetic-data-generator.git",
@@ -53,7 +54,7 @@ SKILL_GIT_REPOSITORIES: Dict[str, Dict[str, Any]] = {
 }
 
 # Intent-Based Skill Mappings (category -> skill_name -> (repo_key, relative_skill_subfolder))
-INTENT_SKILL_DEFINITIONS: Dict[str, Dict[str, Tuple[str, str]]] = {
+INTENT_SKILL_DEFINITIONS: dict[str, dict[str, tuple[str, str]]] = {
     "data-design": {
         "data-designer": ("synthetic-data-generator", "data-designer"),
         "data-designer-architect": ("synthetic-data-generator", "data-designer-architect"),
@@ -100,13 +101,15 @@ INTENT_SKILL_DEFINITIONS: Dict[str, Dict[str, Tuple[str, str]]] = {
     },
 }
 
-def get_looker_credentials_from_mcp() -> Dict[str, str]:
+
+def get_looker_credentials_from_mcp() -> dict[str, str]:
     """Extract Looker credentials from ~/.gemini/config/mcp_config.json if present."""
     import json
+
     if not GEMINI_MCP_CONFIG.exists():
         return {}
     try:
-        with open(GEMINI_MCP_CONFIG, "r", encoding="utf-8") as f:
+        with open(GEMINI_MCP_CONFIG, encoding="utf-8") as f:
             data = json.load(f)
             lkr_env = data.get("mcpServers", {}).get("lkr_codemode", {}).get("env", {})
             return {
@@ -130,6 +133,7 @@ DEFAULT_GCP_LOCATION = os.getenv("BIGQUERY_LOCATION", "US")
 
 class AppConfig(BaseModel):
     """Global configuration settings for demo-create."""
+
     looker_base_url: str = Field(default_factory=lambda: DEFAULT_LOOKER_INSTANCE_URL)
     looker_client_id: str = Field(default_factory=lambda: DEFAULT_LOOKER_CLIENT_ID)
     looker_client_secret: str = Field(default_factory=lambda: DEFAULT_LOOKER_CLIENT_SECRET)

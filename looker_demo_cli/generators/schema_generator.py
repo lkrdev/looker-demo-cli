@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import datetime
-from pathlib import Path
 import random
+from pathlib import Path
 from typing import Any
-import numpy as np
+
 import pandas as pd
 from pydantic import BaseModel, Field
+
 from looker_demo_cli.generators.lookml_generator import LookMLTableSpec
 
 
@@ -132,17 +133,19 @@ class DynamicDataSynthesizer:
             if field.name in entity.foreign_keys or field.is_foreign_key:
                 ref = entity.foreign_keys.get(field.name) or field.foreign_reference or ""
                 parent_table = ref.split(".")[0] if "." in ref else ""
-                if parent_table in pk_pools and pk_pools[parent_table]:
+                if pk_pools.get(parent_table):
                     data[field.name] = [random.choice(pk_pools[parent_table]) for _ in range(row_count)]
                 else:
-                    data[field.name] = [f"{field.name[:3].upper()}-{random.randint(1, max(10, row_count // 5)):05d}" for _ in range(row_count)]
+                    data[field.name] = [
+                        f"{field.name[:3].upper()}-{random.randint(1, max(10, row_count // 5)):05d}"
+                        for _ in range(row_count)
+                    ]
                 continue
 
             # 2. Date / Timestamp generation
             if field.type == "DATE" or field.name.endswith(("_date", "_day")) or field.name.startswith("date_"):
                 data[field.name] = [
-                    (current_time - datetime.timedelta(days=random.randint(1, 730))).date()
-                    for _ in range(row_count)
+                    (current_time - datetime.timedelta(days=random.randint(1, 730))).date() for _ in range(row_count)
                 ]
             elif field.type == "TIMESTAMP" or field.name.endswith(("_time", "_at")):
                 data[field.name] = [
@@ -151,7 +154,21 @@ class DynamicDataSynthesizer:
                 ]
             # 3. Numeric values
             elif field.type in ("FLOAT64", "NUMERIC", "DOUBLE"):
-                if any(k in field.name.lower() for k in ["usd", "amount", "price", "cost", "revenue", "payout", "premium", "income", "limit", "value"]):
+                if any(
+                    k in field.name.lower()
+                    for k in [
+                        "usd",
+                        "amount",
+                        "price",
+                        "cost",
+                        "revenue",
+                        "payout",
+                        "premium",
+                        "income",
+                        "limit",
+                        "value",
+                    ]
+                ):
                     data[field.name] = [round(random.uniform(50.0, 5000.0), 2) for _ in range(row_count)]
                 elif any(k in field.name.lower() for k in ["rate", "pct", "discount", "margin", "ratio", "score"]):
                     data[field.name] = [round(random.uniform(0.01, 0.95), 3) for _ in range(row_count)]
@@ -176,15 +193,27 @@ class DynamicDataSynthesizer:
                 if field.sample_values:
                     data[field.name] = [random.choice(field.sample_values) for _ in range(row_count)]
                 elif "status" in field.name.lower():
-                    data[field.name] = [random.choice(["Active", "Completed", "Pending", "Cancelled"]) for _ in range(row_count)]
+                    data[field.name] = [
+                        random.choice(["Active", "Completed", "Pending", "Cancelled"]) for _ in range(row_count)
+                    ]
                 elif "segment" in field.name.lower() or "tier" in field.name.lower():
-                    data[field.name] = [random.choice(["Standard", "Preferred", "Enterprise", "High-Growth"]) for _ in range(row_count)]
+                    data[field.name] = [
+                        random.choice(["Standard", "Preferred", "Enterprise", "High-Growth"]) for _ in range(row_count)
+                    ]
                 elif "type" in field.name.lower() or "category" in field.name.lower():
-                    data[field.name] = [random.choice(["Category A", "Category B", "Category C", "Category D"]) for _ in range(row_count)]
+                    data[field.name] = [
+                        random.choice(["Category A", "Category B", "Category C", "Category D"])
+                        for _ in range(row_count)
+                    ]
                 elif "channel" in field.name.lower():
-                    data[field.name] = [random.choice(["Direct Online", "Mobile App", "Partner API", "Broker Referral"]) for _ in range(row_count)]
+                    data[field.name] = [
+                        random.choice(["Direct Online", "Mobile App", "Partner API", "Broker Referral"])
+                        for _ in range(row_count)
+                    ]
                 elif "state" in field.name.lower():
-                    data[field.name] = [random.choice(["CA", "NY", "TX", "FL", "IL", "WA", "CO", "MA"]) for _ in range(row_count)]
+                    data[field.name] = [
+                        random.choice(["CA", "NY", "TX", "FL", "IL", "WA", "CO", "MA"]) for _ in range(row_count)
+                    ]
                 elif "name" in field.name.lower():
                     firsts = ["Jordan", "Taylor", "Morgan", "Alex", "Casey", "Riley", "Cameron", "Avery"]
                     data[field.name] = [f"{random.choice(firsts)} {i}" for i in range(1, row_count + 1)]
@@ -213,9 +242,13 @@ def create_dynamic_blueprint_from_name(domain_name: str) -> DomainBlueprint:
                 fields=[
                     EntityFieldSpec(name="entity_id", type="STRING", is_primary_key=True),
                     EntityFieldSpec(name="entity_name", type="STRING"),
-                    EntityFieldSpec(name="category", type="STRING", sample_values=["Tier 1", "Tier 2", "Tier 3", "Enterprise"]),
+                    EntityFieldSpec(
+                        name="category", type="STRING", sample_values=["Tier 1", "Tier 2", "Tier 3", "Enterprise"]
+                    ),
                     EntityFieldSpec(name="status", type="STRING", sample_values=["Active", "Pending", "Archived"]),
-                    EntityFieldSpec(name="region", type="STRING", sample_values=["North America", "EMEA", "APAC", "LATAM"]),
+                    EntityFieldSpec(
+                        name="region", type="STRING", sample_values=["North America", "EMEA", "APAC", "LATAM"]
+                    ),
                     EntityFieldSpec(name="created_date", type="DATE"),
                 ],
             ),
@@ -229,11 +262,15 @@ def create_dynamic_blueprint_from_name(domain_name: str) -> DomainBlueprint:
                     EntityFieldSpec(name="event_id", type="STRING", is_primary_key=True),
                     EntityFieldSpec(name="entity_id", type="STRING", is_foreign_key=True),
                     EntityFieldSpec(name="event_date", type="DATE"),
-                    EntityFieldSpec(name="event_type", type="STRING", sample_values=["Type A", "Type B", "Type C", "Type D"]),
+                    EntityFieldSpec(
+                        name="event_type", type="STRING", sample_values=["Type A", "Type B", "Type C", "Type D"]
+                    ),
                     EntityFieldSpec(name="amount_usd", type="FLOAT64"),
                     EntityFieldSpec(name="fee_usd", type="FLOAT64"),
                     EntityFieldSpec(name="net_value_usd", type="FLOAT64"),
-                    EntityFieldSpec(name="status", type="STRING", sample_values=["Success", "Processing", "Flagged", "Refunded"]),
+                    EntityFieldSpec(
+                        name="status", type="STRING", sample_values=["Success", "Processing", "Flagged", "Refunded"]
+                    ),
                     EntityFieldSpec(name="channel", type="STRING", sample_values=["Web", "Mobile", "API", "Partner"]),
                 ],
             ),
@@ -253,4 +290,6 @@ def generate_domain_dataset(
         blueprint = create_dynamic_blueprint_from_name(target)
 
     synthesizer = DynamicDataSynthesizer()
-    return synthesizer.synthesize_dataset(blueprint=blueprint, output_dir=output_dir, micro_sample_only=micro_sample_only)
+    return synthesizer.synthesize_dataset(
+        blueprint=blueprint, output_dir=output_dir, micro_sample_only=micro_sample_only
+    )

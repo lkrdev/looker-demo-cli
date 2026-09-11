@@ -1,29 +1,56 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any
+
 import requests
 
+from looker_demo_cli.errors import RemoteApiError, looker_not_authenticated
 from looker_demo_cli.services.ge_service import get_looker_auth_context
-from looker_demo_cli.utils.console import print_error, print_info, print_success, print_warning
+from looker_demo_cli.utils.console import print_info, print_success, print_warning
 
 
-def find_root_duplicate_files(project_id: str, headers: Dict[str, str], base_url: str) -> List[str]:
-    """Inspect Looker project files and return a list of duplicate files sitting in the project root.
-    
-    Identifies root files (e.g. 'users.view.lkml') that also exist in structured subfolders
-    ('views/users.view.lkml', 'models/marketing.model.lkml', etc.).
+def find_root_duplicate_files(project_id: str, headers: dict[str, str], base_url: str) -> list[str]:
+    """Inspect Looker project files and return duplicate files sitting in the project root.
+
+    Identifies root files (e.g. ``users.view.lkml``) that also exist in
+    structured subfolders (``views/users.view.lkml``,
+    ``models/marketing.model.lkml``, etc.).
+
+    Args:
+        project_id: Looker project to audit.
+        headers: Authenticated request headers.
+        base_url: Looker instance base URL.
+
+    Returns:
+        The root-level paths that are duplicated under ``views/``, ``models/``
+        or ``dashboards/``.
+
+    Raises:
+        RemoteApiError: The project files could not be listed. This is raised
+            rather than returning ``[]`` because the two outcomes are otherwise
+            indistinguishable, and the caller would report a failed audit as a
+            clean project.
     """
     clean_url = base_url.rstrip("/")
     endpoint = f"{clean_url}/api/4.0/projects/{project_id}/files"
     try:
         r = requests.get(endpoint, headers=headers, timeout=15)
-        if r.status_code != 200:
-            print_warning(f"Could not fetch project files for `{project_id}` (HTTP {r.status_code}): {r.text[:200]}")
-            return []
-        files = r.json()
-    except Exception as e:
-        print_warning(f"Could not query project files for `{project_id}`: {e}")
-        return []
+    except Exception as exc:
+        raise RemoteApiError(
+            f"Could not query project files for `{project_id}`: {exc}",
+            remediation="Check network reachability to the Looker instance and retry.",
+            details={"project_id": project_id, "endpoint": endpoint},
+        ) from exc
+
+    if r.status_code != 200:
+        raise RemoteApiError(
+            f"Could not fetch project files for `{project_id}` (HTTP {r.status_code}).",
+            status_code=r.status_code,
+            remediation="Confirm the project exists and the credentials have `develop` permission.",
+            details={"project_id": project_id, "response": r.text[:200]},
+        )
+
+    files = r.json()
 
     all_paths = set()
     for f in files:
@@ -31,8 +58,8 @@ def find_root_duplicate_files(project_id: str, headers: Dict[str, str], base_url
         if p:
             all_paths.add(p)
 
-    duplicates: List[str] = []
-    for p in sorted(list(all_paths)):
+    duplicates: list[str] = []
+    for p in sorted(all_paths):
         if "/" not in p and (p.endswith(".view.lkml") or p.endswith(".model.lkml") or p.endswith(".dashboard.lookml")):
             sub_view = f"views/{p}"
             sub_model = f"models/{p}"
@@ -45,24 +72,35 @@ def find_root_duplicate_files(project_id: str, headers: Dict[str, str], base_url
 
 def clean_root_duplicate_files(
     project_id: str,
-    headers: Optional[Dict[str, str]] = None,
-    base_url: Optional[str] = None,
-    preferred_account: Optional[str] = None,
+    headers: dict[str, str] | None = None,
+    base_url: str | None = None,
+    preferred_account: str | None = None,
     dry_run: bool = False,
-) -> Dict[str, Any]:
-    """Find and delete root-level duplicate files that have structured counterparts in views/ or models/.
-    
+) -> dict[str, Any]:
+    """Find and delete root-level duplicates that have counterparts in views/ or models/.
+
     This fixes and prevents permanent master branch desync caused by push fallbacks.
+
+    Args:
+        project_id: Looker project to clean.
+        headers: Authenticated request headers. Resolved automatically if omitted.
+        base_url: Looker instance base URL. Resolved automatically if omitted.
+        preferred_account: Saved OAuth account alias used when resolving credentials.
+        dry_run: Report the duplicates without deleting them.
+
+    Returns:
+        A report dict with ``status`` (``SUCCESS``/``PARTIAL``/``DRY_RUN``) and
+        ``cleaned_files``.
+
+    Raises:
+        AuthError: No usable Looker credentials.
+        RemoteApiError: The project files could not be listed.
     """
     if not headers or not base_url:
         headers, base_url = get_looker_auth_context(instance_url=base_url, preferred_account=preferred_account)
 
     if not base_url or not headers:
-        return {
-            "status": "FAILED",
-            "error": "No Looker authentication available. Authenticate with `lkr auth login`.",
-            "cleaned_files": [],
-        }
+        raise looker_not_authenticated()
 
     duplicates = find_root_duplicate_files(project_id=project_id, headers=headers, base_url=base_url)
     if not duplicates:
@@ -82,7 +120,7 @@ def clean_root_duplicate_files(
             "message": f"Found {len(duplicates)} duplicate root file(s) (Dry Run).",
         }
 
-    cleaned: List[str] = []
+    cleaned: list[str] = []
     clean_url = base_url.rstrip("/")
     for p in duplicates:
         del_endpoint = f"{clean_url}/api/4.0/projects/{project_id}/files"
@@ -93,12 +131,16 @@ def clean_root_duplicate_files(
                 print_success(f"Deleted remote duplicate root orphan: `{p}`")
             else:
                 # Fallback: try endpoint with path in URL
-                r2 = requests.delete(f"{clean_url}/api/4.0/projects/{project_id}/files/{p}", headers=headers, timeout=12)
+                r2 = requests.delete(
+                    f"{clean_url}/api/4.0/projects/{project_id}/files/{p}", headers=headers, timeout=12
+                )
                 if r2.status_code in (200, 204):
                     cleaned.append(p)
                     print_success(f"Deleted remote duplicate root orphan: `{p}`")
                 else:
-                    print_warning(f"Could not delete `{p}` via API ({r.status_code} / {r2.status_code}): {r.text[:150]}")
+                    print_warning(
+                        f"Could not delete `{p}` via API ({r.status_code} / {r2.status_code}): {r.text[:150]}"
+                    )
         except Exception as e:
             print_warning(f"Error while attempting to delete `{p}`: {e}")
 

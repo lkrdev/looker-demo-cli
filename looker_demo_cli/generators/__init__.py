@@ -3,11 +3,11 @@ from looker_demo_cli.generators.lookml_generator import LookMLGenerator, LookMLT
 from looker_demo_cli.generators.schema_generator import DomainBlueprint, EntityFieldSpec, EntitySchemaSpec
 
 __all__ = [
+    "DomainBlueprint",
+    "EmbedConfigOptions",
+    "EmbedScaffolder",
+    "EntityFieldSpec",
+    "EntitySchemaSpec",
     "LookMLGenerator",
     "LookMLTableSpec",
-    "EmbedScaffolder",
-    "EmbedConfigOptions",
-    "DomainBlueprint",
-    "EntitySchemaSpec",
-    "EntityFieldSpec",
 ]

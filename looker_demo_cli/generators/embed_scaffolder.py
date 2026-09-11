@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import os
 import shutil
+import subprocess
 from pathlib import Path
-from typing import Any, Dict, Optional
+
 from pydantic import BaseModel
 
-import subprocess
 from looker_demo_cli.config import LOOKER_EMBED_DEMO_REPO, SKILLS_CACHE_DIR
-from looker_demo_cli.utils.console import print_error, print_info, print_success, print_warning
+from looker_demo_cli.utils.console import print_info, print_success
 
 
 class EmbedConfigOptions(BaseModel):
@@ -46,7 +46,9 @@ class EmbedScaffolder:
         ]
         for url in urls:
             try:
-                res = subprocess.run(["git", "clone", "--depth", "1", url, str(cache_path)], capture_output=True, text=True, env=env)
+                res = subprocess.run(
+                    ["git", "clone", "--depth", "1", url, str(cache_path)], capture_output=True, text=True, env=env
+                )
                 if res.returncode == 0:
                     return cache_path
             except Exception:
@@ -67,7 +69,9 @@ class EmbedScaffolder:
             shutil.copytree(
                 source_repo,
                 target_dir,
-                ignore=shutil.ignore_patterns(".git", "node_modules", ".venv", "dist", "build", ".pytest_cache", ".ruff_cache", "scratch"),
+                ignore=shutil.ignore_patterns(
+                    ".git", "node_modules", ".venv", "dist", "build", ".pytest_cache", ".ruff_cache", "scratch"
+                ),
             )
 
         # 1. Update .env

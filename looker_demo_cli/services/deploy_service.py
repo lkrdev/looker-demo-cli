@@ -1,8 +1,18 @@
+"""Push local LookML to a Looker instance, validate it, and release to production.
+
+Wraps the external ``lkr`` CLI plus the Looker REST validator. Promoted out of
+the deleted ``workflow/steps`` package: ``lookml deploy`` is the only caller and
+invokes it directly, so it is a service, not a pipeline stage.
+"""
+
+from __future__ import annotations
+
 import os
 import shutil
 import subprocess
 import sys
 from pathlib import Path
+
 import requests
 
 from looker_demo_cli.config import (
@@ -11,17 +21,59 @@ from looker_demo_cli.config import (
     DEFAULT_LOOKER_INSTANCE_URL,
 )
 from looker_demo_cli.precheck.looker_auth import get_authenticated_oauth_instances
-from looker_demo_cli.utils.console import print_error, print_info, print_step_header, print_success
-from looker_demo_cli.workflow.state import FlowState
+from looker_demo_cli.state import FlowState
+from looker_demo_cli.utils.console import print_banner, print_error, print_info, print_success
 
 
-def run_looker_deploy_step(state: FlowState) -> FlowState:
-    """Step 5: Upload LookML files, validate, commit, and deploy to Looker production using lkr-dev-cli."""
-    print_step_header(5, state.total_steps, "Looker Production Deployment via lkr-dev-cli")
+def deploy_lookml_project(state: FlowState) -> FlowState:
+    """Upload LookML files, validate, commit, and deploy to Looker production via lkr-dev-cli.
+
+    Args:
+        state: Flow state carrying the LookML output directory, project name,
+            and Looker connection details.
+
+    Returns:
+        The same state, mutated with the deploy outcome. Callers must branch on
+        ``state.status`` -- a failure is reported there, not raised, because
+        ``lookml deploy`` reports partial progress through the same envelope.
+    """
+    print_banner("LOOKER PRODUCTION DEPLOYMENT", "Pushing LookML via lkr-dev-cli, validating, then releasing")
 
     if not state.lookml_output_dir or not state.lookml_output_dir.exists():
         print_error("No LookML output directory found. Cannot deploy.")
         state.status = "failed"
+        state.error_message = "No LookML output directory found."
+        return state
+
+    # These used to be supplied by placeholder FlowState defaults, so a deploy
+    # invoked before any modelling step would happily create a Looker project
+    # named after the placeholder on the live instance. They are now required.
+    #
+    # Bound to locals and tested directly rather than via a comprehension: the
+    # direct test is what lets the type checker narrow all three to `str` for
+    # the ~27 unconditional uses below.
+    looker_project = state.looker_project_name
+    lookml_model = state.lookml_model_name
+    connection_name = state.looker_connection_name
+
+    if not looker_project or not lookml_model or not connection_name:
+        # Each value is labelled by how the caller can actually supply it, not
+        # by the field it maps to. Only `--looker-project` is a flag on this
+        # command; the model name and the connection can *only* arrive via
+        # state, because `lookml deploy` writes both into the Looker model's
+        # `allowed_db_connection_names` and has no flag for either. The
+        # previous message advised passing `--connection` explicitly, which is
+        # not an option this command accepts -- following it produced exit 2.
+        remedies = {
+            "--looker-project (flag or state)": looker_project,
+            "model name (recorded by `demo-create lookml model`)": lookml_model,
+            "database connection (recorded by `demo-create lookml model --connection`)": connection_name,
+        }
+        detail = ", ".join(label for label, value in remedies.items() if not value)
+        print_error(f"Cannot deploy: missing {detail}.")
+        print_info("Run `demo-create lookml model --connection <name>` first; it records all three for the deploy.")
+        state.status = "failed"
+        state.error_message = f"Missing required deploy settings: {detail}."
         return state
 
     oauth_instances = get_authenticated_oauth_instances()
@@ -29,9 +81,13 @@ def run_looker_deploy_step(state: FlowState) -> FlowState:
     if state.looker_account:
         active_oauth = next((i for i in oauth_instances if i["instance_name"] == state.looker_account), None)
     if not active_oauth:
-        active_oauth = next((i for i in oauth_instances if i["is_current"]), None) or (oauth_instances[0] if oauth_instances else None)
+        active_oauth = next((i for i in oauth_instances if i["is_current"]), None) or (
+            oauth_instances[0] if oauth_instances else None
+        )
 
-    instance_url = (active_oauth["base_url"] if active_oauth else state.looker_instance_url) or DEFAULT_LOOKER_INSTANCE_URL
+    instance_url = (
+        active_oauth["base_url"] if active_oauth else state.looker_instance_url
+    ) or DEFAULT_LOOKER_INSTANCE_URL
     state.looker_instance_url = instance_url.rstrip("/")
 
     # Ensure Looker SDK environment variables
@@ -49,25 +105,46 @@ def run_looker_deploy_step(state: FlowState) -> FlowState:
     if headers:
         try:
             # Set dev workspace
-            requests.patch(f"{state.looker_instance_url}/api/4.0/session", json={"workspace_id": "dev"}, headers=headers, timeout=10)
+            requests.patch(
+                f"{state.looker_instance_url}/api/4.0/session",
+                json={"workspace_id": "dev"},
+                headers=headers,
+                timeout=10,
+            )
 
             # Check / Create project
-            r_proj = requests.get(f"{state.looker_instance_url}/api/4.0/projects/{state.looker_project_name}", headers=headers, timeout=10)
+            r_proj = requests.get(
+                f"{state.looker_instance_url}/api/4.0/projects/{looker_project}", headers=headers, timeout=10
+            )
             if r_proj.status_code != 200:
-                print_info(f"Creating Looker project `{state.looker_project_name}` via OAuth REST API...")
-                requests.post(f"{state.looker_instance_url}/api/4.0/projects", json={"name": state.looker_project_name}, headers=headers, timeout=10)
-                requests.patch(f"{state.looker_instance_url}/api/4.0/projects/{state.looker_project_name}", json={"git_remote_url": None, "git_service_name": "bare"}, headers=headers, timeout=10)
+                print_info(f"Creating Looker project `{looker_project}` via OAuth REST API...")
+                requests.post(
+                    f"{state.looker_instance_url}/api/4.0/projects",
+                    json={"name": looker_project},
+                    headers=headers,
+                    timeout=10,
+                )
+                requests.patch(
+                    f"{state.looker_instance_url}/api/4.0/projects/{looker_project}",
+                    json={"git_remote_url": None, "git_service_name": "bare"},
+                    headers=headers,
+                    timeout=10,
+                )
 
             # Check / Create model
-            r_mod = requests.get(f"{state.looker_instance_url}/api/4.0/lookml_models/{state.lookml_model_name}", headers=headers, timeout=10)
+            r_mod = requests.get(
+                f"{state.looker_instance_url}/api/4.0/lookml_models/{lookml_model}",
+                headers=headers,
+                timeout=10,
+            )
             if r_mod.status_code != 200:
-                print_info(f"Registering LookML model `{state.lookml_model_name}` via OAuth REST API...")
+                print_info(f"Registering LookML model `{lookml_model}` via OAuth REST API...")
                 requests.post(
                     f"{state.looker_instance_url}/api/4.0/lookml_models",
                     json={
-                        "name": state.lookml_model_name,
-                        "project_name": state.looker_project_name,
-                        "allowed_db_connection_names": [state.looker_connection_name],
+                        "name": lookml_model,
+                        "project_name": looker_project,
+                        "allowed_db_connection_names": [connection_name],
                         "unlimited_db_connections": False,
                     },
                     headers=headers,
@@ -84,24 +161,24 @@ def run_looker_deploy_step(state: FlowState) -> FlowState:
             sdk.update_session(models40.WriteApiSession(workspace_id="dev"))
 
             try:
-                sdk.project(state.looker_project_name)
+                sdk.project(looker_project)
             except Exception:
-                print_info(f"Creating Looker project `{state.looker_project_name}`...")
-                sdk.create_project(models40.WriteProject(name=state.looker_project_name))
+                print_info(f"Creating Looker project `{looker_project}`...")
+                sdk.create_project(models40.WriteProject(name=looker_project))
                 sdk.update_project(
-                    project_id=state.looker_project_name,
+                    project_id=looker_project,
                     body=models40.WriteProject(git_remote_url=None, git_service_name="bare"),
                 )
 
             try:
-                sdk.lookml_model(state.lookml_model_name)
+                sdk.lookml_model(lookml_model)
             except Exception:
-                print_info(f"Registering LookML model `{state.lookml_model_name}`...")
+                print_info(f"Registering LookML model `{lookml_model}`...")
                 sdk.create_lookml_model(
                     models40.WriteLookmlModel(
-                        name=state.lookml_model_name,
-                        project_name=state.looker_project_name,
-                        allowed_db_connection_names=[state.looker_connection_name],
+                        name=lookml_model,
+                        project_name=looker_project,
+                        allowed_db_connection_names=[connection_name],
                         unlimited_db_connections=False,
                     )
                 )
@@ -110,6 +187,7 @@ def run_looker_deploy_step(state: FlowState) -> FlowState:
 
     # 1b. Pre-flight Dashboard YAML Validation
     import yaml
+
     dashboard_files = list(state.lookml_output_dir.glob("**/*.dashboard.lookml"))
     yaml_errors = []
     for df in dashboard_files:
@@ -136,13 +214,15 @@ def run_looker_deploy_step(state: FlowState) -> FlowState:
     ]
     if active_oauth:
         cmd_push.extend(["--oauth-account", active_oauth["instance_name"]])
-    cmd_push.extend([
-        "tools",
-        "lookml",
-        "push",
-        str(state.lookml_output_dir),
-        f"--project={state.looker_project_name}",
-    ])
+    cmd_push.extend(
+        [
+            "tools",
+            "lookml",
+            "push",
+            str(state.lookml_output_dir),
+            f"--project={looker_project}",
+        ]
+    )
 
     print_info(f"Pushing LookML to dev workspace: {' '.join(cmd_push)}")
     try:
@@ -164,21 +244,28 @@ def run_looker_deploy_step(state: FlowState) -> FlowState:
     # 2b. Root Duplicate Cleanup Pass: Detect & delete any loose files in root that have views/ or models/ counterparts
     if headers:
         from looker_demo_cli.services.lookml_cleaner import clean_root_duplicate_files
-        print_info(f"Auditing project `{state.looker_project_name}` for orphaned root duplicate files...")
+
+        print_info(f"Auditing project `{looker_project}` for orphaned root duplicate files...")
         clean_res = clean_root_duplicate_files(
-            project_id=state.looker_project_name,
+            project_id=looker_project,
             headers=headers,
             base_url=state.looker_instance_url,
             dry_run=False,
         )
         if clean_res.get("cleaned_files"):
-            print_success(f"Sanitized remote workspace: removed {len(clean_res['cleaned_files'])} duplicate root orphan(s).")
+            print_success(
+                f"Sanitized remote workspace: removed {len(clean_res['cleaned_files'])} duplicate root orphan(s)."
+            )
 
     # 3. LookML Validator Gate
-    print_info(f"Running LookML Validator on project `{state.looker_project_name}`...")
+    print_info(f"Running LookML Validator on project `{looker_project}`...")
     if headers:
         try:
-            r_val = requests.get(f"{state.looker_instance_url}/api/4.0/projects/{state.looker_project_name}/validate", headers=headers, timeout=20)
+            r_val = requests.get(
+                f"{state.looker_instance_url}/api/4.0/projects/{looker_project}/validate",
+                headers=headers,
+                timeout=20,
+            )
             if r_val.status_code == 200:
                 val_data = r_val.json()
                 errors = val_data.get("errors", [])
@@ -202,7 +289,7 @@ def run_looker_deploy_step(state: FlowState) -> FlowState:
 
             sdk = looker_sdk.init40()
             sdk.update_session(models40.WriteApiSession(workspace_id="dev"))
-            val_results = sdk.validate_project(state.looker_project_name)
+            val_results = sdk.validate_project(looker_project)
             if val_results.errors:
                 print_error(f"LookML validation failed with {len(val_results.errors)} error(s):")
                 for err in val_results.errors:
@@ -223,6 +310,7 @@ def run_looker_deploy_step(state: FlowState) -> FlowState:
         dash_files = list(dash_dir.glob("*.dashboard.lookml"))
         if dash_files:
             import yaml
+
             print_info(f"Verifying runtime queries across {len(dash_files)} LookML dashboard(s)...")
             for df in dash_files:
                 try:
@@ -230,7 +318,11 @@ def run_looker_deploy_step(state: FlowState) -> FlowState:
                     parsed = yaml.safe_load(content)
                     dash_list = parsed if isinstance(parsed, list) else [parsed]
                     for dash_obj in dash_list:
-                        dash_filters = {f.get("name"): f.get("default_value") for f in dash_obj.get("filters", []) if f.get("default_value")}
+                        dash_filters = {
+                            f.get("name"): f.get("default_value")
+                            for f in dash_obj.get("filters", [])
+                            if f.get("default_value")
+                        }
                         elements = dash_obj.get("elements", [])
                         print_info(f"Testing {len(elements)} visualization tile queries in `{df.name}`...")
                         for el in elements:
@@ -260,9 +352,13 @@ def run_looker_deploy_step(state: FlowState) -> FlowState:
                                     timeout=15,
                                 )
                                 if resp_q.status_code != 200:
-                                    print_error(f"Dashboard query failed for tile '{title}' ({resp_q.status_code}): {resp_q.text[:200]}")
+                                    print_error(
+                                        f"Dashboard query failed for tile '{title}' ({resp_q.status_code}): {resp_q.text[:200]}"
+                                    )
                                     state.status = "failed"
-                                    state.error_message = f"Dashboard tile '{title}' failed query validation: {resp_q.text[:200]}"
+                                    state.error_message = (
+                                        f"Dashboard tile '{title}' failed query validation: {resp_q.text[:200]}"
+                                    )
                                     return state
                     print_success("All dashboard visualization queries verified successfully (HTTP 200 OK).")
                 except Exception as e:
@@ -275,13 +371,15 @@ def run_looker_deploy_step(state: FlowState) -> FlowState:
     ]
     if active_oauth:
         cmd_deploy.extend(["--oauth-account", active_oauth["instance_name"]])
-    cmd_deploy.extend([
-        "tools",
-        "lookml",
-        "deploy",
-        f"--project={state.looker_project_name}",
-        "--message=Deploy validated LookML models and dashboards",
-    ])
+    cmd_deploy.extend(
+        [
+            "tools",
+            "lookml",
+            "deploy",
+            f"--project={looker_project}",
+            "--message=Deploy validated LookML models and dashboards",
+        ]
+    )
 
     print_info(f"Deploying to production: {' '.join(cmd_deploy)}")
     try:
@@ -300,8 +398,12 @@ def run_looker_deploy_step(state: FlowState) -> FlowState:
         state.error_message = str(e)
         return state
 
-    dash_url = f"{state.looker_instance_url}/dashboards/{state.looker_project_name}::{state.lookml_model_name}_overview"
+    dash_url = f"{state.looker_instance_url}/dashboards/{looker_project}::{lookml_model}_overview"
     state.deployed_dashboard_url = dash_url
+    # Every failure path above sets status="failed"; without this the success
+    # path would leave it at "pending", making success indistinguishable from
+    # a step that never ran.
+    state.status = "completed"
     print_success(f"Deployed to production! Dashboard URL: {dash_url}")
 
     return state

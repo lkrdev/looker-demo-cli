@@ -1,23 +1,22 @@
 from __future__ import annotations
 
 import json
-import os
-from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any
+
 from pydantic import BaseModel
 
 from looker_demo_cli.config import GEMINI_MCP_CONFIG
-from looker_demo_cli.utils.console import print_error, print_info, print_success, print_warning
+from looker_demo_cli.utils.console import print_error, print_warning
 
 
 class MCPStatus(BaseModel):
     server_name: str
     is_configured: bool
-    details: Dict[str, Any] = {}
-    issues: List[str] = []
+    details: dict[str, Any] = {}
+    issues: list[str] = []
 
 
-REQUIRED_MCP_SERVERS = {
+REQUIRED_MCP_SERVERS: dict[str, dict[str, Any]] = {
     "data-designer": {
         "command": "uvx",
         "args": [
@@ -37,19 +36,19 @@ REQUIRED_MCP_SERVERS = {
 }
 
 
-def read_mcp_config() -> Dict[str, Any]:
+def read_mcp_config() -> dict[str, Any]:
     """Read global MCP configuration file."""
     if not GEMINI_MCP_CONFIG.exists():
         return {"mcpServers": {}}
     try:
-        with open(GEMINI_MCP_CONFIG, "r", encoding="utf-8") as f:
+        with open(GEMINI_MCP_CONFIG, encoding="utf-8") as f:
             return json.load(f)
     except Exception as e:
         print_warning(f"Could not read {GEMINI_MCP_CONFIG}: {e}")
         return {"mcpServers": {}}
 
 
-def check_mcp_servers() -> List[MCPStatus]:
+def check_mcp_servers() -> list[MCPStatus]:
     """Check if all required MCP servers are present and properly configured."""
     config = read_mcp_config()
     servers = config.get("mcpServers", {})

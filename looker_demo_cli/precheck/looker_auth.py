@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import os
 import sqlite3
-from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
+
 import requests
 from pydantic import BaseModel
 
@@ -20,19 +20,19 @@ LKR_AUTH_DB = HOME_DIR / ".lkr" / "auth.db"
 class LookerAuthStatus(BaseModel):
     is_authenticated: bool
     auth_method: str = "none"  # "oauth", "api_key", "none"
-    user_name: Optional[str] = None
-    user_email: Optional[str] = None
+    user_name: str | None = None
+    user_email: str | None = None
     instance_url: str = ""
-    oauth_account: Optional[str] = None
-    available_oauth_instances: List[Dict[str, Any]] = []
-    available_connections: List[str] = []
+    oauth_account: str | None = None
+    available_oauth_instances: list[dict[str, Any]] = []
+    available_connections: list[str] = []
     has_default_bigquery_conn: bool = False
-    error_message: Optional[str] = None
+    error_message: str | None = None
 
 
-def get_authenticated_oauth_instances() -> List[Dict[str, Any]]:
+def get_authenticated_oauth_instances() -> list[dict[str, Any]]:
     """Retrieve all authenticated OAuth accounts from ~/.lkr/auth.db."""
-    instances = []
+    instances: list[dict[str, Any]] = []
     if not LKR_AUTH_DB.exists():
         return instances
 
@@ -47,17 +47,19 @@ def get_authenticated_oauth_instances() -> List[Dict[str, Any]]:
             "SELECT id, instance_name, access_token, refresh_token, token_type, expires_at, current_instance, base_url, use_production FROM auth"
         )
         for row in cursor.fetchall():
-            instances.append({
-                "id": row[0],
-                "instance_name": row[1],
-                "access_token": row[2],
-                "refresh_token": row[3],
-                "token_type": row[4],
-                "expires_at": row[5],
-                "is_current": bool(row[6]),
-                "base_url": row[7],
-                "use_production": bool(row[8]),
-            })
+            instances.append(
+                {
+                    "id": row[0],
+                    "instance_name": row[1],
+                    "access_token": row[2],
+                    "refresh_token": row[3],
+                    "token_type": row[4],
+                    "expires_at": row[5],
+                    "is_current": bool(row[6]),
+                    "base_url": row[7],
+                    "use_production": bool(row[8]),
+                }
+            )
     except Exception:
         pass
     return instances
@@ -73,7 +75,7 @@ LKR_OAUTH_CLIENT_PAYLOAD = {
 }
 
 
-def validate_looker_oauth_preflight(instance_url: str) -> Tuple[bool, str]:
+def validate_looker_oauth_preflight(instance_url: str) -> tuple[bool, str]:
     """Run a pre-flight GET check against the Looker instance auth endpoint for the lkr-cli OAuth client."""
     clean_url = instance_url.rstrip("/")
     preflight_url = (
@@ -96,10 +98,10 @@ def validate_looker_oauth_preflight(instance_url: str) -> Tuple[bool, str]:
 
 
 def check_looker_auth(
-    instance_url: Optional[str] = None,
-    client_id: Optional[str] = None,
-    client_secret: Optional[str] = None,
-    preferred_oauth_account: Optional[str] = None,
+    instance_url: str | None = None,
+    client_id: str | None = None,
+    client_secret: str | None = None,
+    preferred_oauth_account: str | None = None,
 ) -> LookerAuthStatus:
     """Verify Looker authentication via OAuth session or API key credentials."""
     oauth_instances = get_authenticated_oauth_instances()
@@ -133,7 +135,11 @@ def check_looker_auth(
             resp_me = requests.get(f"{base_url.rstrip('/')}/api/4.0/user", headers=headers, timeout=6)
             if resp_me.status_code == 200:
                 user_data = resp_me.json()
-                user_name = user_data.get("display_name") or f"{user_data.get('first_name', '')} {user_data.get('last_name', '')}".strip() or "Looker User"
+                user_name = (
+                    user_data.get("display_name")
+                    or f"{user_data.get('first_name', '')} {user_data.get('last_name', '')}".strip()
+                    or "Looker User"
+                )
                 user_email = user_data.get("email") or ""
 
                 # Query database connections
