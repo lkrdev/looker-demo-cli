@@ -185,23 +185,22 @@ def deploy_lookml_project(state: FlowState) -> FlowState:
         except Exception as prov_err:
             print_info(f"SDK project provisioning note: {prov_err}")
 
-    # 1b. Pre-flight Dashboard YAML Validation
-    import yaml
+    # 1b. Pre-flight Dashboard YAML & Visualization Contract Validation
+    from looker_demo_cli.services.validator_service import lint_dashboard_file
 
     dashboard_files = list(state.lookml_output_dir.glob("**/*.dashboard.lookml"))
-    yaml_errors = []
+    preflight_errors = []
     for df in dashboard_files:
-        try:
-            yaml.safe_load(df.read_text(encoding="utf-8"))
-        except yaml.YAMLError as y_err:
-            yaml_errors.append(f"Dashboard YAML syntax error in `{df.name}`: {y_err}")
+        lint_errs = lint_dashboard_file(df)
+        if lint_errs:
+            preflight_errors.extend(lint_errs)
 
-    if yaml_errors:
-        print_error(f"Local pre-push validation detected {len(yaml_errors)} YAML syntax error(s):")
-        for ye in yaml_errors:
-            print_error(f"  • {ye}")
+    if preflight_errors:
+        print_error(f"Local pre-push validation detected {len(preflight_errors)} dashboard issue(s):")
+        for err in preflight_errors:
+            print_error(f"  • {err}")
         state.status = "failed"
-        state.error_message = f"Pre-push dashboard YAML syntax error: {yaml_errors[0]}"
+        state.error_message = f"Pre-push dashboard validation error: {preflight_errors[0]}"
         return state
 
     # 2. Synchronize LookML to Dev Branch via lkr CLI

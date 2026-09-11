@@ -34,7 +34,7 @@ class DashboardTileSpec(BaseModel):
     name: str | None = None
     model: str
     explore: str
-    type: str = "looker_column"  # single_value, looker_area, looker_column, looker_bar, looker_donut_multiples, looker_grid, looker_scatter, looker_line
+    type: str = "looker_column"  # single_value, looker_area, looker_column, looker_bar, looker_pie, looker_grid, looker_scatter, looker_line
     fields: list[str] = Field(default_factory=list)
     pivots: list[str] = Field(default_factory=list)
     filters: dict[str, str] = Field(default_factory=dict)
@@ -43,6 +43,14 @@ class DashboardTileSpec(BaseModel):
     listen: dict[str, str] = Field(default_factory=dict)
     tab_name: str | None = None
     advanced_vis_config: str | None = None
+    show_donut: bool | None = None
+    inner_radius: int | None = None
+    value_labels: str | None = None
+    label_type: str | None = None
+    table_theme: str | None = None
+    show_row_numbers: bool | None = None
+    truncate_text: bool | None = None
+    size_to_fit: bool | None = None
     row: int = 0
     col: int = 0
     width: int = 12
@@ -447,6 +455,22 @@ class LookMLGenerator:
                 lines.append(f"    sorts: [{', '.join(el.sorts)}]")
             if el.limit:
                 lines.append(f"    limit: {el.limit}")
+            if el.value_labels:
+                lines.append(f"    value_labels: {el.value_labels}")
+            if el.label_type:
+                lines.append(f"    label_type: {el.label_type}")
+            if el.show_donut is not None:
+                lines.append(f"    show_donut: {'true' if el.show_donut else 'false'}")
+            if el.inner_radius is not None:
+                lines.append(f"    inner_radius: {el.inner_radius}")
+            if el.table_theme:
+                lines.append(f"    table_theme: {el.table_theme}")
+            if el.show_row_numbers is not None:
+                lines.append(f"    show_row_numbers: {'true' if el.show_row_numbers else 'false'}")
+            if el.truncate_text is not None:
+                lines.append(f"    truncate_text: {'true' if el.truncate_text else 'false'}")
+            if el.size_to_fit is not None:
+                lines.append(f"    size_to_fit: {'true' if el.size_to_fit else 'false'}")
             if el.tab_name:
                 lines.append(f'    tab_name: "{el.tab_name}"')
             if el.advanced_vis_config:
@@ -603,10 +627,14 @@ class LookMLGenerator:
                     title=f"Distribution by {self._format_label(cat_1)}",
                     model=model_name,
                     explore=primary_fact.table_name,
-                    type="looker_donut_multiples",
+                    type="looker_pie",
                     fields=[f"{primary_fact.table_name}.{cat_1}", f"{primary_fact.table_name}.count"],
                     sorts=[f"{primary_fact.table_name}.count desc"],
-                    limit=10,
+                    limit=6,
+                    value_labels="legend",
+                    label_type="labPer",
+                    show_donut=True,
+                    inner_radius=50,
                     tab_name="Executive Pulse",
                     row=4,
                     col=14,
@@ -647,6 +675,10 @@ class LookMLGenerator:
                     ],
                     sorts=[f"{primary_fact.table_name}.count desc"],
                     limit=50,
+                    table_theme="modern",
+                    show_row_numbers=True,
+                    truncate_text=True,
+                    size_to_fit=True,
                     tab_name="Entity Breakdown",
                     row=0,
                     col=12,

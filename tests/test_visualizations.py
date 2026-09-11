@@ -130,3 +130,108 @@ def test_single_value_tiles_omit_advanced_vis_config(generated_dashboard: str) -
             assert "advanced_vis_config" not in tile_block, (
                 f"single_value tile at line {index + 1} must not set advanced_vis_config"
             )
+
+
+@pytest.mark.unit
+def test_default_dashboard_uses_looker_pie_with_donut(generated_dashboard: str) -> None:
+    """Proportional category breakdown uses looker_pie with show_donut: true."""
+    assert "type: looker_pie" in generated_dashboard
+    assert "show_donut: true" in generated_dashboard
+    assert "inner_radius: 50" in generated_dashboard
+    assert "type: looker_donut_multiples" not in generated_dashboard
+
+
+@pytest.mark.unit
+def test_validator_catches_donut_multiples() -> None:
+    from looker_demo_cli.services.validator_service import lint_dashboard_structure
+
+    bad_dash = {
+        "dashboard": "bad_dash",
+        "title": "Bad Dashboard",
+        "elements": [
+            {
+                "title": "Bad Donut",
+                "type": "looker_donut_multiples",
+                "fields": ["orders.category", "orders.count"],
+            }
+        ],
+    }
+    diagnostics = lint_dashboard_structure(bad_dash)
+    assert len(diagnostics) == 1
+    assert "looker_donut_multiples" in diagnostics[0]
+    assert "looker_pie" in diagnostics[0]
+
+
+@pytest.mark.unit
+def test_validator_catches_pie_limit_over_50() -> None:
+    from looker_demo_cli.services.validator_service import lint_dashboard_structure
+
+    bad_pie = {
+        "dashboard": "bad_pie",
+        "title": "Bad Pie",
+        "elements": [
+            {
+                "title": "Overloaded Pie",
+                "type": "looker_pie",
+                "fields": ["orders.sku", "orders.count"],
+                "limit": 100,
+            }
+        ],
+    }
+    diagnostics = lint_dashboard_structure(bad_pie)
+    assert len(diagnostics) == 1
+    assert "limit: 100" in diagnostics[0]
+
+
+@pytest.mark.unit
+def test_validator_catches_formatter_key_in_advanced_vis_config() -> None:
+    from looker_demo_cli.services.validator_service import lint_dashboard_structure
+
+    bad_config = {
+        "dashboard": "bad_adv",
+        "title": "Bad Advanced",
+        "elements": [
+            {
+                "title": "Bar Chart",
+                "type": "looker_bar",
+                "fields": ["orders.category", "orders.total_sales"],
+                "advanced_vis_config": '{"yAxis": [{"labels": {"formatter": "function() {}"}}]}',
+            }
+        ],
+    }
+    diagnostics = lint_dashboard_structure(bad_config)
+    assert len(diagnostics) == 1
+    assert "forbidden `formatter` key" in diagnostics[0]
+
+
+@pytest.mark.unit
+def test_validator_catches_advanced_vis_config_on_unsupported_vis() -> None:
+    from looker_demo_cli.services.validator_service import lint_dashboard_structure
+
+    bad_kpi = {
+        "dashboard": "bad_kpi",
+        "title": "Bad KPI",
+        "elements": [
+            {
+                "title": "KPI Card",
+                "type": "single_value",
+                "fields": ["orders.total_sales"],
+                "advanced_vis_config": '{"chart": {"borderRadius": 8}}',
+            }
+        ],
+    }
+    diagnostics = lint_dashboard_structure(bad_kpi)
+    assert len(diagnostics) == 1
+    assert "unsupported visualization type `single_value`" in diagnostics[0]
+
+
+@pytest.mark.unit
+def test_validator_passes_clean_generated_dashboard(generated_dashboard: str) -> None:
+    import yaml
+
+    from looker_demo_cli.services.validator_service import lint_dashboard_structure
+
+    parsed = yaml.safe_load(generated_dashboard)
+    diagnostics = lint_dashboard_structure(parsed)
+    assert diagnostics == []
+

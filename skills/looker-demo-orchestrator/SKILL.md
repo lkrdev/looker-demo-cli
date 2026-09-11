@@ -317,12 +317,13 @@ subagent:
 
 - **Strict Explore-Grounded Authoring**: Inspects staged `explores/*.explore.lkml` and `views/*.view.lkml` files to discover available dimensions and measures (NEVER invents fields).
 - **Visualization Hub & Decision Rules**: Consults [`looker-visualizations`](../looker-visualizations/SKILL.md) to match data intent to optimal visual archetypes:
-  - **KPI Scorecards & Data Grids**: [`looker-vis-tabular-kpi`](../looker-visualizations/looker-vis-tabular-kpi/SKILL.md) for `single_value` stat banners with change comparisons and sparklines, plus `looker_grid` for audit logs.
+  - **KPI Scorecards & Data Grids**: [`looker-vis-tabular-kpi`](../looker-visualizations/looker-vis-tabular-kpi/SKILL.md) for `single_value` stat banners with change comparisons and sparklines, plus `looker_grid` with `table_theme: modern` for audit logs.
   - **Timelines & Dual-Axis Series**: [`looker-vis-cartesian`](../looker-visualizations/looker-vis-cartesian/SKILL.md) for volume trajectory timelines, ranked horizontal bars, and clustered columns.
-  - **Distributions & Flows**: [`looker-vis-specialty-maps`](../looker-visualizations/looker-vis-specialty-maps/SKILL.md) for donut share breakdowns ($\le 6$ slices), funnels, sankey diagrams, and maps.
-  - **Highcharts Styling (`advanced_vis_config`)**: [`looker-vis-advanced-config`](../looker-visualizations/looker-vis-advanced-config/SKILL.md) for rounded geometry (`borderRadius: 8`, `plotOptions.series.borderRadius: 4`) with strictly valid double-quoted JSON, never raw JavaScript functions or `formatter:` spelling errors.
+  - **Distributions & Flows**: [`looker-vis-specialty-maps`](../looker-visualizations/looker-vis-specialty-maps/SKILL.md) for donut share breakdowns (`type: looker_pie` with `show_donut: true`, `inner_radius: 50`, `limit <= 6`, `value_labels: legend`, `label_type: labPer`; NEVER use `looker_donut_multiples` for single-measure breakdowns), funnels, sankey diagrams, and maps.
+  - **Highcharts Styling (`advanced_vis_config`)**: [`looker-vis-advanced-config`](../looker-visualizations/looker-vis-advanced-config/SKILL.md) for rounded geometry (`borderRadius: 8`, `plotOptions.series.borderRadius: 4`) with strictly valid double-quoted JSON on supported chart types only (never `single_value` or tables), never raw JavaScript functions or `formatter:` spelling errors.
 - **Tabbed Architecture**: Modern 2–4 tab operational command center (e.g. *Executive Overview*, *Operations Deep Dive*, *Alerts & Exceptions*).
 - **Visual Standards**: Universal cross-filtering (use `crossfilter_enabled: true` at dashboard root; NEVER use deprecated root `crossfilter: true`) and double-quoted YAML strings (`title: "..."`).
+- **Pre-Push Visual Linter**: `demo-create lookml deploy` automatically executes static visualization contract validation on all `*.dashboard.lookml` files before pushing to Looker.
 
 ---
 
