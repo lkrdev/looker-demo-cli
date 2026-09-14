@@ -118,12 +118,14 @@ def ensure_gitignore(directory: Path) -> bool:
         return False
 
     prefix = "" if not content or content.endswith("\n") else "\n"
+    directory.mkdir(parents=True, exist_ok=True)
     gitignore_path.write_text(content + prefix + "\n".join(missing) + "\n", encoding="utf-8")
     return True
 
 
 def init_workspace_venv(target_dir: Path, install_self: bool = True) -> tuple[bool, str]:
     """Create a dedicated .venv in target_dir using uv (or venv fallback) and install looker-demo-cli."""
+    target_dir.mkdir(parents=True, exist_ok=True)
     ensure_gitignore(target_dir)
     venv_dir = target_dir / ".venv"
     has_uv = bool(shutil.which("uv"))

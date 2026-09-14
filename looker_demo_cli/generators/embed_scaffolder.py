@@ -101,8 +101,7 @@ VITE_BRAND_NAME={opts.brand_name}
                 content = content.replace("embed_demo::brand_overview", opts.dashboard_id)
                 content = content.replace("embed_demo/order_items", explore_path)
                 content = content.replace("embed_demo", opts.lookml_model_name)
-                if opts.agent_id:
-                    content = content.replace("ea1262d262ab43b1a9bb23152f25c236", opts.agent_id)
+                content = content.replace("ea1262d262ab43b1a9bb23152f25c236", opts.agent_id)
                 constants_file.write_text(content, encoding="utf-8")
 
         print_success(f"Embed demo workspace scaffolded at `{target_dir}`.")

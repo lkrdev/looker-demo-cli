@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import looker_sdk
 from looker_sdk import methods40
-from looker_sdk.rtl import api_settings, auth_session, transport
+from looker_sdk.rtl import api_settings, auth_session, serialize, transport
 
 
 class BearerAuthSession(auth_session.AuthSession):
@@ -16,7 +16,12 @@ class BearerAuthSession(auth_session.AuthSession):
         settings: api_settings.PApiSettings,
         transp: transport.Transport,
     ) -> None:
-        super().__init__(settings, transp, lambda x, y: x, "4.0")
+        super().__init__(
+            settings,
+            transp,
+            lambda data, structure: serialize.deserialize40(data=data, structure=structure),
+            "4.0",
+        )
         self._token = token
 
     def authenticate(self, transport_options: transport.TransportOptions | None = None) -> dict[str, str]:
