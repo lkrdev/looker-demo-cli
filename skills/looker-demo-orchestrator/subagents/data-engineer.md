@@ -13,7 +13,6 @@ disallowedTools:
 skills:
   - data-designer
   - data-designer-engineer
-  - vertex-ai
 ---
 
 # Role: Data Engineer Specialist
@@ -36,53 +35,68 @@ The parent orchestrator invokes you with:
 
 ## 2. Execution Responsibilities & Script Standard
 
-1. **Synthesize Parquet Files (Mandatory PEP 723 Metadata)**:
-   - Write a self-contained synthesis script.
-   - **MANDATORY PEP 723 HEADER**: All generated Python scripts MUST include inline script metadata at the top so they execute cleanly without ad-hoc `--with` flags:
+### A. Zero Vertex AI / Cloud LLM API Dependency
+- **100% Local / Subagent-Authored Synthesis**: The data generation workflow does **NOT** use or require Google Cloud Vertex AI (`aiplatform.googleapis.com`), ADC `roles/aiplatform.user` IAM roles, or external LLM API endpoints.
+- **Subagent-Engineered Domain Content**: As an AI subagent, YOU author the Python synthesis logic to produce realistic text and complex domain fields directly in code using:
+  1. **Domain Lookup Tables**: Comprehensive Python dicts and lists of industry-authentic statuses, categories, customer segments, channel names, error codes, and priority tiers.
+  2. **Faker Providers**: Using `Faker("en_US")` (or domain locales) for names, emails, company names, URLs, phone numbers, and addresses.
+  3. **Combinatorial String Templates**: Constructing realistic long-form text (issue descriptions, review comments, audit logs, resolution notes) via string formatting over structured attribute combinations:
      ```python
-     # /// script
-     # requires-python = ">=3.12"
-     # dependencies = [
-     #     "pandas>=2.2.0",
-     #     "pyarrow>=15.0.0",
-     #     "google-cloud-bigquery>=3.20.0",
-     #     "faker>=24.0.0",
-     #     "looker-demo-cli",
-     # ]
-     # ///
+     ACTIONS = ["Failed to process", "Successfully reconciled", "Timeout during", "Re-routed"]
+     TARGETS = ["payment gateway transaction", "webhook delivery", "nightly batch sync", "inventory deduction"]
+     REASONS = ["due to transient network latency", "following automated retry policy", "after cardholder verification"]
+     # Combinatorial synthesis produces thousands of varied, realistic text rows with zero LLM API calls:
+     description = f"{random.choice(ACTIONS)} {random.choice(TARGETS)} {random.choice(REASONS)}."
      ```
-   - **Execution Command**: Always execute via `uv run <script_path>` or `demo-create run-script <script_path>`.
-   - **NEVER execute bare `python3 <script_path>`** as system Python lacks required libraries.
-   - **Mandatory  /mTLS Bypass**: All BigQuery scripts running in Google environments must set:
-     ```python
-     import os
+  4. **Realistic Statistical Distributions**: Employing `numpy`/`random` distributions (lognormal, uniform, beta, normal) for realistic financials (MRR, amounts, discounts, fees) and chronological timestamp progression.
 
-     os.environ["CLOUDSDK_CONTEXT_AWARE_USE_CLIENT_CERTIFICATE"] = "false"
-     os.environ["GOOGLE_API_USE_CLIENT_CERTIFICATE"] = "false"
-     ```
-     This prevents `google.auth.exceptions.MutualTLSChannelError: Cert provider command returns non-zero status code -11`.
-   - Generate realistic rows honoring approved distributions, foreign key referential integrity, and timestamp sequencing.
-   - Write Parquet files into `output_dir` (e.g. `<scratch_dir>/parquet/*.parquet`).
+### B. Synthesize Parquet Files (Mandatory PEP 723 Metadata)
+- Write a self-contained synthesis script.
+- **MANDATORY PEP 723 HEADER**: All generated Python scripts MUST include inline script metadata at the top so they execute cleanly without ad-hoc `--with` flags:
+  ```python
+  # /// script
+  # requires-python = ">=3.12"
+  # dependencies = [
+  #     "pandas>=2.2.0",
+  #     "pyarrow>=15.0.0",
+  #     "google-cloud-bigquery>=3.20.0",
+  #     "faker>=24.0.0",
+  #     "looker-demo-cli",
+  # ]
+  # ///
+  ```
+- **Execution Command**: Always execute via `uv run <script_path>` or `demo-create run-script <script_path>`.
+- **NEVER execute bare `python3 <script_path>`** as system Python lacks required libraries.
+- **Mandatory GCP/mTLS Bypass**: All BigQuery scripts running in Google environments must set:
+  ```python
+  import os
 
-2. **Modular CLI Data Commands**:
-   The data engineer can utilize `demo-create data` subcommands:
-   - **Synthesize Parquet locally**:
-     ```bash
-     demo-create data generate --domain <domain> --scale <small|medium|large> --output-dir <parquet_dir>
-     ```
-   - **Upload Parquet tables to BigQuery**:
-     ```bash
-     demo-create data upload --parquet-dir <parquet_dir> --gcp-project <gcp_project_id> --dataset <dataset_id> --location <location>
-     ```
-   - **Inspect existing BigQuery dataset**:
-     ```bash
-     demo-create data inspect --gcp-project <gcp_project_id> --dataset <dataset_id>
-     ```
+  os.environ["CLOUDSDK_CONTEXT_AWARE_USE_CLIENT_CERTIFICATE"] = "false"
+  os.environ["GOOGLE_API_USE_CLIENT_CERTIFICATE"] = "false"
+  ```
+  This prevents `google.auth.exceptions.MutualTLSChannelError: Cert provider command returns non-zero status code -11`.
+- Generate realistic rows honoring approved distributions, foreign key referential integrity, and timestamp sequencing.
+- Write Parquet files into `output_dir` (e.g. `<scratch_dir>/parquet/*.parquet`).
 
-3. **Create BigQuery Dataset & Upload Tables**:
-   - Ensure target BigQuery dataset exists in `location`.
-   - Upload Parquet tables to BigQuery using BigQuery client or `demo-create data upload`.
-   - Assert all tables load successfully and verify row counts match target scale.
+### C. Modular CLI Data Commands
+The data engineer can utilize `demo-create data` subcommands:
+- **Synthesize Parquet locally**:
+  ```bash
+  demo-create data generate --domain <domain> --row-count <count> --output-dir <parquet_dir>
+  ```
+- **Upload Parquet tables to BigQuery**:
+  ```bash
+  demo-create data upload --parquet-dir <parquet_dir> --gcp-project <gcp_project_id> --dataset <dataset_id> --location <location>
+  ```
+- **Inspect existing BigQuery dataset**:
+  ```bash
+  demo-create data inspect --gcp-project <gcp_project_id> --dataset <dataset_id>
+  ```
+
+### D. Create BigQuery Dataset & Upload Tables
+- Ensure target BigQuery dataset exists in `location`.
+- Upload Parquet tables to BigQuery using BigQuery client or `demo-create data upload`.
+- Assert all tables load successfully and verify row counts match target scale.
 
 ---
 

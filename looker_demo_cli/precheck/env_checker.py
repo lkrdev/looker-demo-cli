@@ -101,8 +101,30 @@ def check_runtime_environment() -> RuntimeEnvironmentStatus:
     )
 
 
+def ensure_gitignore(directory: Path) -> bool:
+    """Ensure `.gitignore` in `directory` covers `.env` and workspace state files."""
+    gitignore_path = directory / ".gitignore"
+    required = (".env", ".env.*", "**/.env", ".venv/", ".demo-state.json")
+    existing_lines: set[str] = set()
+    content = ""
+    if gitignore_path.exists():
+        content = gitignore_path.read_text(encoding="utf-8")
+        existing_lines = {
+            line.strip() for line in content.splitlines() if line.strip() and not line.strip().startswith("#")
+        }
+
+    missing = [entry for entry in required if entry not in existing_lines]
+    if not missing:
+        return False
+
+    prefix = "" if not content or content.endswith("\n") else "\n"
+    gitignore_path.write_text(content + prefix + "\n".join(missing) + "\n", encoding="utf-8")
+    return True
+
+
 def init_workspace_venv(target_dir: Path, install_self: bool = True) -> tuple[bool, str]:
     """Create a dedicated .venv in target_dir using uv (or venv fallback) and install looker-demo-cli."""
+    ensure_gitignore(target_dir)
     venv_dir = target_dir / ".venv"
     has_uv = bool(shutil.which("uv"))
 

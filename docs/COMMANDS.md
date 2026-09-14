@@ -500,6 +500,7 @@ demo-create embed scaffold [OPTIONS]
 | `--looker-project` | Looker/demo project name |  |
 | `--target-dir` | Directory where the web app will be scaffolded |  |
 | `--dashboard-id` | Looker dashboard ID to embed |  |
+| `--agent-id` | Looker CA Agent ID to embed |  |
 | `--brand-name` | Customer brand display name |  |
 | `--instance` | Looker instance URL |  |
 | `--json` | Emit the result envelope as JSON on stdout |  |

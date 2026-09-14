@@ -34,6 +34,7 @@ def embed_scaffold(
         Path | None, typer.Option("--target-dir", help="Directory where the web app will be scaffolded")
     ] = None,
     dashboard_id: Annotated[str | None, typer.Option("--dashboard-id", help="Looker dashboard ID to embed")] = None,
+    agent_id: Annotated[str | None, typer.Option("--agent-id", help="Looker CA Agent ID to embed")] = None,
     brand_name: Annotated[str | None, typer.Option("--brand-name", help="Customer brand display name")] = None,
     instance_url: Annotated[str | None, typer.Option("--instance", help="Looker instance URL")] = None,
     output_json: Annotated[bool, typer.Option("--json", help="Emit the result envelope as JSON on stdout")] = False,
@@ -49,6 +50,7 @@ def embed_scaffold(
             the CLI.
         target_dir: Where to scaffold the workspace.
         dashboard_id: Looker dashboard to embed on the portal's home view.
+        agent_id: Looker Conversational Analytics Agent ID to embed on /conversational-analytics.
         brand_name: Customer brand display name.
         instance_url: Looker instance URL baked into the generated ``.env``.
         output_json: Emit the JSON envelope on stdout.
@@ -75,6 +77,7 @@ def embed_scaffold(
         )
     inst_url = instance_url or state.looker_instance_url
     dash_id = dashboard_id or state.deployed_dashboard_id or f"{proj_name}::{proj_name}_overview"
+    resolved_agent_id = agent_id or state.ca_agent_id or ""
     b_name = brand_name or proj_name.replace("_", " ").title()
 
     dest = target_dir or (Path.home() / f"looker-embed-{proj_name}")
@@ -88,6 +91,7 @@ def embed_scaffold(
         looker_project_name=proj_name,
         lookml_model_name=state.lookml_model_name or proj_name,
         dashboard_id=dash_id,
+        agent_id=resolved_agent_id,
     )
 
     scaffolded_dir = EmbedScaffolder.scaffold_demo_workspace(opts)
@@ -104,6 +108,7 @@ def embed_scaffold(
             "looker_project": proj_name,
             "brand_name": b_name,
             "dashboard_id": dash_id,
+            "agent_id": resolved_agent_id,
             "instance_url": inst_url,
             "state_file": str(saved_path),
         },
@@ -112,5 +117,6 @@ def embed_scaffold(
     def render(_: CommandResult) -> None:
         print_success(f"External Embed Portal configured at: `{scaffolded_dir}`")
         print_info(f"Updated state saved to `{saved_path}`")
+        print_info(f"To run the portal: cd {scaffolded_dir}/frontend && pnpm install && pnpm dev")
 
     return emit(result, json_output=output_json, human_renderer=render)

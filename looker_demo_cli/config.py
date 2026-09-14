@@ -60,7 +60,6 @@ INTENT_SKILL_DEFINITIONS: dict[str, dict[str, tuple[str, str]]] = {
         "data-designer-architect": ("synthetic-data-generator", "data-designer-architect"),
         "data-designer-engineer": ("synthetic-data-generator", "data-designer-engineer"),
         "data-designer-evaluator": ("synthetic-data-generator", "data-designer-evaluator"),
-        "vertex-ai": ("synthetic-data-generator", "vertex-ai"),
     },
     "lookml": {
         "lkr-code-mode": ("lkr-cli", "lkr-code-mode"),
@@ -86,6 +85,7 @@ INTENT_SKILL_DEFINITIONS: dict[str, dict[str, tuple[str, str]]] = {
     },
     "embed-portal": {
         "looker-demo-orchestrator": ("local_cli", "looker-demo-orchestrator"),
+        "demo-spec": ("local_cli", "demo-spec"),
         "setup-embed-demo": ("looker-embed-demo", "setup-embed-demo"),
         "customize-frontend": ("looker-embed-demo", "customize-frontend"),
         "customize-frontend-branding": ("looker-embed-demo", "customize-frontend-branding"),

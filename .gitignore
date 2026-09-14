@@ -39,3 +39,6 @@ tmp/
 .DS_Store
 .env
 .env.local
+.env.*
+**/.env
+.demo-state.json

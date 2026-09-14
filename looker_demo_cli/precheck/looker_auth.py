@@ -13,6 +13,7 @@ from looker_demo_cli.config import (
     DEFAULT_LOOKER_INSTANCE_URL,
     HOME_DIR,
 )
+from looker_demo_cli.sdk import get_looker_sdk
 
 LKR_AUTH_DB = HOME_DIR / ".lkr" / "auth.db"
 
@@ -130,36 +131,27 @@ def check_looker_auth(
     if target_oauth and target_oauth.get("access_token") and target_oauth.get("base_url"):
         base_url = target_oauth["base_url"]
         token = target_oauth["access_token"]
-        headers = {"Authorization": f"Bearer {token}"}
         try:
-            resp_me = requests.get(f"{base_url.rstrip('/')}/api/4.0/user", headers=headers, timeout=6)
-            if resp_me.status_code == 200:
-                user_data = resp_me.json()
-                user_name = (
-                    user_data.get("display_name")
-                    or f"{user_data.get('first_name', '')} {user_data.get('last_name', '')}".strip()
-                    or "Looker User"
-                )
-                user_email = user_data.get("email") or ""
+            sdk = get_looker_sdk(base_url=base_url, access_token=token)
+            me = sdk.me()
+            user_name = me.display_name or f"{me.first_name or ''} {me.last_name or ''}".strip() or "Looker User"
+            user_email = me.email or ""
 
-                # Query database connections
-                resp_conns = requests.get(f"{base_url.rstrip('/')}/api/4.0/connections", headers=headers, timeout=6)
-                conns = []
-                if resp_conns.status_code == 200:
-                    conns = [c.get("name") for c in resp_conns.json() if c.get("name")]
-                has_default_bq = "default_bigquery_connection" in conns or "sample_bigquery_connection" in conns
+            conns_resp = sdk.all_connections() or []
+            conns = [c.name for c in conns_resp if c.name]
+            has_default_bq = "default_bigquery_connection" in conns or "sample_bigquery_connection" in conns
 
-                return LookerAuthStatus(
-                    is_authenticated=True,
-                    auth_method="oauth",
-                    user_name=user_name,
-                    user_email=user_email,
-                    instance_url=base_url,
-                    oauth_account=target_oauth["instance_name"],
-                    available_oauth_instances=oauth_instances,
-                    available_connections=conns,
-                    has_default_bigquery_conn=has_default_bq,
-                )
+            return LookerAuthStatus(
+                is_authenticated=True,
+                auth_method="oauth",
+                user_name=user_name,
+                user_email=user_email,
+                instance_url=base_url,
+                oauth_account=target_oauth["instance_name"],
+                available_oauth_instances=oauth_instances,
+                available_connections=conns,
+                has_default_bigquery_conn=has_default_bq,
+            )
         except Exception:
             pass
 

@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from typing import Any
 
-import requests
+from looker_sdk import models40
 
+from looker_demo_cli.sdk import get_looker_sdk
 from looker_demo_cli.services.ca_agent_service import (
     generate_default_ca_instructions,
 )
@@ -19,28 +20,23 @@ def extract_golden_queries_from_dashboard_id(
     headers: dict[str, str],
     dashboard_id: str,
 ) -> list[dict[str, Any]]:
-    """Extract query tiles from a deployed Looker dashboard via REST API."""
-    clean_url = instance_url.rstrip("/")
-    endpoint = f"{clean_url}/api/4.0/dashboards/{dashboard_id}"
+    """Extract query tiles from a deployed Looker dashboard via Looker SDK."""
     golden_queries: list[dict[str, Any]] = []
 
     try:
-        resp = requests.get(endpoint, headers=headers, timeout=12)
-        if resp.status_code != 200:
-            print_warning(f"Could not fetch dashboard `{dashboard_id}` ({resp.status_code}): {resp.text[:200]}")
-            return []
-
-        dash = resp.json()
-        elements = dash.get("dashboard_elements") or dash.get("elements") or []
+        sdk = get_looker_sdk(instance_url, headers=headers)
+        dash = sdk.dashboard(dashboard_id)
+        elements = dash.dashboard_elements or []
         for el in elements:
-            title = el.get("title") or "Key Metric"
-            q = el.get("query")
-            if not q and el.get("query_id"):
-                r_q = requests.get(f"{clean_url}/api/4.0/queries/{el['query_id']}", headers=headers, timeout=8)
-                if r_q.status_code == 200:
-                    q = r_q.json()
+            title = el.title or "Key Metric"
+            q = el.query
+            if not q and el.query_id:
+                try:
+                    q = sdk.query(el.query_id)
+                except Exception:
+                    pass
 
-            if q and q.get("model") and q.get("view") and q.get("fields"):
+            if q and q.model and q.view and q.fields:
                 prompt = f"What is the {title.lower()}?"
                 if "monthly" in title.lower() or "trend" in title.lower():
                     prompt = f"Show the monthly breakdown and trajectory for {title.lower()}."
@@ -51,13 +47,13 @@ def extract_golden_queries_from_dashboard_id(
                     {
                         "prompt": prompt,
                         "query": {
-                            "model": q.get("model"),
-                            "view": q.get("view"),
-                            "fields": q.get("fields", []),
-                            "pivots": q.get("pivots", []),
-                            "filters": dict(q.get("filters", {})),
-                            "sorts": q.get("sorts", []),
-                            "limit": str(q.get("limit", "500")),
+                            "model": q.model,
+                            "view": q.view,
+                            "fields": list(q.fields),
+                            "pivots": list(q.pivots or []),
+                            "filters": dict(q.filters or {}),
+                            "sorts": list(q.sorts or []),
+                            "limit": str(q.limit or "500"),
                         },
                     }
                 )
@@ -73,57 +69,50 @@ def register_and_link_golden_queries(
     agent_id: str,
     golden_queries: list[dict[str, Any]],
 ) -> int:
-    """Register golden queries and link them to the Looker CA agent."""
-    clean_url = instance_url.rstrip("/")
+    """Register golden queries and link them to the Looker CA agent via Looker SDK."""
     created_gq_ids: list[str] = []
+    sdk = get_looker_sdk(instance_url, headers=headers)
 
     for idx, gq in enumerate(golden_queries, 1):
         try:
             # 1. Create base query to obtain expanded_share_url
-            r_q = requests.post(
-                f"{clean_url}/api/4.0/queries",
-                json=gq["query"],
-                headers=headers,
-                timeout=10,
+            q_spec = gq["query"]
+            q_data = sdk.create_query(
+                body=models40.WriteQuery(
+                    model=q_spec["model"],
+                    view=q_spec["view"],
+                    fields=q_spec.get("fields"),
+                    pivots=q_spec.get("pivots"),
+                    filters=q_spec.get("filters"),
+                    sorts=q_spec.get("sorts"),
+                    limit=str(q_spec.get("limit", "500")),
+                )
             )
-            if r_q.status_code not in (200, 201):
-                continue
-            q_data = r_q.json()
-            answer_url = q_data.get("expanded_share_url") or q_data.get("share_url")
+            answer_url = q_data.expanded_share_url or q_data.share_url
             if not answer_url:
                 continue
 
             # 2. Create Golden Query
-            r_gq = requests.post(
-                f"{clean_url}/api/4.0/golden_queries",
-                json={
-                    "questions": [gq["prompt"]],
-                    "answer": answer_url,
-                    "is_active": True,
-                },
-                headers=headers,
-                timeout=10,
+            gq_obj = sdk.create_golden_query(
+                body=models40.WriteGoldenQuery(
+                    questions=[gq["prompt"]],
+                    answer=answer_url,
+                    is_active=True,
+                )
             )
-            if r_gq.status_code in (200, 201):
-                gq_id = r_gq.json().get("id")
-                if gq_id is not None:
-                    created_gq_ids.append(str(gq_id))
+            if gq_obj.id is not None:
+                created_gq_ids.append(str(gq_obj.id))
         except Exception as e:
             print_warning(f"Notice while registering golden query {idx}: {e}")
 
     if created_gq_ids:
         try:
-            r_patch = requests.patch(
-                f"{clean_url}/api/4.0/agents/{agent_id}",
-                json={"golden_query_ids": [int(x) for x in created_gq_ids]},
-                headers=headers,
-                timeout=15,
+            sdk.update_agent(
+                agent_id=agent_id,
+                body=models40.WriteAgent(golden_query_ids=[int(x) for x in created_gq_ids]),
             )
-            if r_patch.status_code in (200, 201):
-                print_success(f"Linked {len(created_gq_ids)} Golden Queries to CA Agent `{agent_id}`.")
-                return len(created_gq_ids)
-            else:
-                print_error(f"Failed to link golden queries to agent ({r_patch.status_code}): {r_patch.text[:300]}")
+            print_success(f"Linked {len(created_gq_ids)} Golden Queries to CA Agent `{agent_id}`.")
+            return len(created_gq_ids)
         except Exception as e:
             print_warning(f"Error linking golden queries to agent: {e}")
 
@@ -138,8 +127,7 @@ def provision_ca_agent(
     agent_name: str | None = None,
     custom_instructions: str | None = None,
 ) -> str | None:
-    """Create a Conversational Analytics Agent via Looker REST API."""
-    clean_url = instance_url.rstrip("/")
+    """Create a Conversational Analytics Agent via Looker SDK."""
     name = agent_name or f"{model_name.replace('_', ' ').title()} Assistant"
     instructions = custom_instructions or generate_default_ca_instructions(
         project_name=model_name,
@@ -147,21 +135,20 @@ def provision_ca_agent(
         primary_explore=explore_name,
     )
 
-    payload = {
-        "name": name,
-        "description": f"AI Conversational Analytics Assistant for {model_name}",
-        "sources": [{"model": model_name, "explore": explore_name}],
-        "context": {"instructions": instructions},
-        "code_interpreter": True,
-    }
-
     try:
-        r = requests.post(f"{clean_url}/api/4.0/agents", json=payload, headers=headers, timeout=15)
-        if r.status_code in (200, 201):
-            agent_id = r.json().get("id")
-            print_success(f"Successfully created Conversational Analytics Agent `{name}` (ID: `{agent_id}`).")
-            return str(agent_id)
-        print_error(f"Failed to create CA Agent ({r.status_code}): {r.text[:300]}")
+        sdk = get_looker_sdk(instance_url, headers=headers)
+        agent = sdk.create_agent(
+            body=models40.WriteAgent(
+                name=name,
+                description=f"AI Conversational Analytics Assistant for {model_name}",
+                sources=[models40.Source(model=model_name, explore=explore_name)],
+                context=models40.Context(instructions=instructions),
+                code_interpreter=True,
+            )
+        )
+        if agent.id:
+            print_success(f"Successfully created Conversational Analytics Agent `{name}` (ID: `{agent.id}`).")
+            return str(agent.id)
     except Exception as e:
         print_error(f"Error creating CA Agent: {e}")
     return None

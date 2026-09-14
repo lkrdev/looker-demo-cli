@@ -403,8 +403,9 @@ GATES: Final[tuple[Gate, ...]] = (
         title="Schema co-design, synthesis & BigQuery load",
         requires_human_confirmation=True,
         human_checkpoint=(
-            "Confirm the proposed schema and ERD, the 5-10 row micro-sample preview, and the target row volume "
-            "before any full-volume synthesis or BigQuery load."
+            "MANDATORY: Write out the full proposed schema (tables, columns, types, primary/foreign keys) and "
+            "Mermaid ERD diagram in visible chat text FIRST. Only AFTER rendering the schema in chat, call "
+            "ask_question to confirm user approval before proceeding to micro-sample preview or synthesis."
         ),
         _is_complete=_gate_1_complete,
         _command=_gate_1_command,

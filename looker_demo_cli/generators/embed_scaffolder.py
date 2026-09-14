@@ -8,6 +8,7 @@ from pathlib import Path
 from pydantic import BaseModel
 
 from looker_demo_cli.config import LOOKER_EMBED_DEMO_REPO, SKILLS_CACHE_DIR
+from looker_demo_cli.precheck.env_checker import ensure_gitignore
 from looker_demo_cli.utils.console import print_info, print_success
 
 
@@ -20,6 +21,8 @@ class EmbedConfigOptions(BaseModel):
     looker_project_name: str
     lookml_model_name: str
     dashboard_id: str
+    agent_id: str = ""
+    explore_path: str = ""
     primary_color: str = "#1A73E8"
     accent_color: str = "#4285F4"
 
@@ -65,7 +68,6 @@ class EmbedScaffolder:
             print_info(f"Target directory `{target_dir}` already exists. Reusing existing folder.")
         else:
             print_info(f"Scaffolding fresh embed portal into `{target_dir}`...")
-            # Copy template directory excluding build artifacts and git
             shutil.copytree(
                 source_repo,
                 target_dir,
@@ -74,25 +76,34 @@ class EmbedScaffolder:
                 ),
             )
 
-        # 1. Update .env
-        env_file = target_dir / ".env"
+        explore_path = opts.explore_path or f"{opts.lookml_model_name}/{opts.lookml_model_name}"
         env_content = f"""# Looker Embed Demo Environment
+LOOKER_INSTANCE_URL={opts.looker_instance_url}
 VITE_LOOKER_INSTANCE_URL={opts.looker_instance_url}
 LOOKERSDK_BASE_URL={opts.looker_instance_url}
 LOOKER_PROJECT_NAME={opts.looker_project_name}
 LOOKER_CONNECTION_NAME=default_bigquery_connection
+VITE_DASHBOARD_ID={opts.dashboard_id}
+VITE_CHAT_AGENT_ID={opts.agent_id}
+VITE_EXPLORE_PATH={explore_path}
 VITE_APP_TITLE={opts.brand_title}
 VITE_BRAND_NAME={opts.brand_name}
 """
-        env_file.write_text(env_content, encoding="utf-8")
+        ensure_gitignore(target_dir)
+        (target_dir / ".env").write_text(env_content, encoding="utf-8")
+        if (target_dir / "frontend").exists():
+            (target_dir / "frontend" / ".env").write_text(env_content, encoding="utf-8")
 
-        # 2. Update src/constants.ts if exists
-        constants_file = target_dir / "src" / "constants.ts"
-        if constants_file.exists():
-            content = constants_file.read_text(encoding="utf-8")
-            # Replace dashboard ID and model name
-            content = content.replace("embed_demo", opts.lookml_model_name)
-            constants_file.write_text(content, encoding="utf-8")
+        for rel in ("frontend/src/config/constants.ts", "frontend/src/constants.ts", "src/constants.ts"):
+            constants_file = target_dir / rel
+            if constants_file.exists():
+                content = constants_file.read_text(encoding="utf-8")
+                content = content.replace("embed_demo::brand_overview", opts.dashboard_id)
+                content = content.replace("embed_demo/order_items", explore_path)
+                content = content.replace("embed_demo", opts.lookml_model_name)
+                if opts.agent_id:
+                    content = content.replace("ea1262d262ab43b1a9bb23152f25c236", opts.agent_id)
+                constants_file.write_text(content, encoding="utf-8")
 
         print_success(f"Embed demo workspace scaffolded at `{target_dir}`.")
         return target_dir

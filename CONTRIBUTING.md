@@ -28,6 +28,14 @@ Run the CLI from source without installing it:
 uv run demo-create --help
 ```
 
+Or install the CLI globally in **editable mode** so `demo-create` is on `$PATH`
+across all terminal sessions and fresh demo directories while your local code
+changes take effect immediately:
+
+```bash
+uv tool install --editable .
+```
+
 ---
 
 ## The local gate

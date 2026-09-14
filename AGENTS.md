@@ -23,7 +23,7 @@ gate. It reports:
 | `completed_gates` | Already done. Never redo one. |
 | `current_gate` | Where the build actually is. |
 | `next_command` | **The literal command to run.** Values already known are substituted; anything still needed appears as `<placeholder>`. |
-| `requires_human_confirmation` | **Branch on this.** When `true`, call `ask_question` with the gate's `human_checkpoint` *before* running `next_command`. |
+| `requires_human_confirmation` | **Branch on this.** When `true`, pause and confirm with the user before running `next_command`. **MANDATORY FOR GATE 1 (`gate_1_data`)**: You MUST write out the full proposed schema (dimension/fact tables, columns, datatypes, primary/foreign keys) and Mermaid ERD diagram directly into visible chat text in the SAME turn BEFORE calling `ask_question`. Never ask the user to approve an unseen schema. |
 | `is_complete` | When `true`, the build is finished and `next_actions` is empty. |
 
 Prefer this over recalling the workflow from memory. It is derived from the
@@ -31,11 +31,12 @@ persisted state, so it cannot drift from what has actually happened.
 
 ---
 
-## 2. The two documents that matter
+## 2. The three documents that matter
 
 | Document | Job |
 | :--- | :--- |
 | [`skills/looker-demo-orchestrator/SKILL.md`](skills/looker-demo-orchestrator/SKILL.md) | **The single source of truth for the workflow.** Every gate, what to confirm with the human at each one, when to delegate to a subagent, and the mandatory final delivery report. |
+| [`skills/demo-spec/SKILL.md`](skills/demo-spec/SKILL.md) | **The living technical specification standard.** Protocol for maintaining `SPEC.md` asynchronously across every turn and conversation without chat clutter. |
 | [`docs/COMMANDS.md`](docs/COMMANDS.md) | **Every command, flag, and default** — generated from the implementation by `scripts/gen_docs.py` and enforced by a CI drift test. |
 
 `demo-create status` tells you *where you are*. `SKILL.md` tells you *why each
@@ -54,6 +55,10 @@ invoke it*. Read `SKILL.md` before orchestrating a build.
 > time, pausing wherever `requires_human_confirmation` is `true`.
 
 > [!CAUTION]
+> **Never call `ask_question` for schema approval without printing the schema in chat first.**
+> At Gate 1 (`gate_1_data`), you MUST output the complete proposed relational schema (all tables, columns, types, primary and foreign keys) and a full Mermaid ERD diagram in visible chat text in the EXACT SAME TURN before calling `ask_question`. Calling `ask_question` with an empty chat body or asking the user to approve an unseen schema is strictly forbidden.
+
+> [!CAUTION]
 > **Never silently retarget a different GCP project or dataset.** If a
 > permissions error occurs (`403`, `bigquery.datasets.create`, expired token),
 > **block and prompt the user** to refresh credentials
@@ -67,6 +72,14 @@ invoke it*. Read `SKILL.md` before orchestrating a build.
 - **Kill subagents before any rollback.** Run
   `manage_subagents(Action='kill_all')` before reverting files or restoring a
   snapshot, or a background task will overwrite the restored state.
+- **Maintain `SPEC.md` asynchronously across conversations.** Following the
+  [`demo-spec`](skills/demo-spec/SKILL.md) skill, continuously update
+  `SPEC.md` directly in the project root as architectural decisions, schemas,
+  models, dashboards, and agent configs are established or modified. **Do not
+  print `SPEC.md` to the user in chat every turn**; keep updates quiet unless a
+  significant structural change is made. `DELIVERY_REPORT.md` must always link
+  to `SPEC.md`.
+- **Never create a `.env` file without verifying `.gitignore`.** Whenever creating or updating a `.env` file in any working directory, verify that `.gitignore` exists in that directory and includes `.env` (and `.env.*`) so credentials are never committed.
 - **`ArtifactMetadata` is only for files under `<appDataDir>/brain/<conversation-id>/`.**
   Never pass it when writing workspace files.
 
