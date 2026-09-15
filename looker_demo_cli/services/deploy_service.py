@@ -190,13 +190,13 @@ def deploy_lookml_project(state: FlowState) -> FlowState:
         return state
 
     # 2b. Root Duplicate Cleanup Pass: Detect & delete any loose files in root that have views/ or models/ counterparts
-    if headers:
+    try:
         from looker_demo_cli.services.lookml_cleaner import clean_root_duplicate_files
 
         print_info(f"Auditing project `{looker_project}` for orphaned root duplicate files...")
         clean_res = clean_root_duplicate_files(
             project_id=looker_project,
-            headers=headers,
+            headers=headers or None,
             base_url=state.looker_instance_url,
             dry_run=False,
         )
@@ -204,6 +204,8 @@ def deploy_lookml_project(state: FlowState) -> FlowState:
             print_success(
                 f"Sanitized remote workspace: removed {len(clean_res['cleaned_files'])} duplicate root orphan(s)."
             )
+    except Exception:
+        pass
 
     # 3. LookML Validator Gate
     print_info(f"Running LookML Validator on project `{looker_project}`...")

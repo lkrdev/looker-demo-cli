@@ -30,9 +30,18 @@ def extract_golden_queries_from_dashboard_id(
         for el in elements:
             title = el.title or "Key Metric"
             q = el.query
+            rm = el.result_maker
+            if not q and rm is not None:
+                q = rm.query
+                rm_qid = getattr(rm, "query_id", None)
+                if not q and isinstance(rm_qid, str) and rm_qid:
+                    try:
+                        q = sdk.query(rm_qid)
+                    except Exception:
+                        pass
             if not q and el.query_id:
                 try:
-                    q = sdk.query(el.query_id)
+                    q = sdk.query(str(el.query_id))
                 except Exception:
                     pass
 
@@ -107,9 +116,17 @@ def register_and_link_golden_queries(
 
     if created_gq_ids:
         try:
+            existing_ids: list[int] = []
+            try:
+                existing_agent = sdk.get_agent(agent_id)
+                if existing_agent and existing_agent.golden_query_ids:
+                    existing_ids = [int(x) for x in existing_agent.golden_query_ids]
+            except Exception:
+                pass
+            merged_ids = list(dict.fromkeys(existing_ids + [int(x) for x in created_gq_ids]))
             sdk.update_agent(
                 agent_id=agent_id,
-                body=models40.WriteAgent(golden_query_ids=[int(x) for x in created_gq_ids]),
+                body=models40.WriteAgent(golden_query_ids=merged_ids),
             )
             print_success(f"Linked {len(created_gq_ids)} Golden Queries to CA Agent `{agent_id}`.")
             return len(created_gq_ids)

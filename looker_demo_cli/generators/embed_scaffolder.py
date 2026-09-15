@@ -88,6 +88,8 @@ VITE_CHAT_AGENT_ID={opts.agent_id}
 VITE_EXPLORE_PATH={explore_path}
 VITE_APP_TITLE={opts.brand_title}
 VITE_BRAND_NAME={opts.brand_name}
+VITE_PRIMARY_COLOR={opts.primary_color}
+VITE_ACCENT_COLOR={opts.accent_color}
 """
         ensure_gitignore(target_dir)
         (target_dir / ".env").write_text(env_content, encoding="utf-8")
