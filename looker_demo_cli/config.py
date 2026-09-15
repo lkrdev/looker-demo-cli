@@ -19,7 +19,7 @@ GCLOUD_CONFIG_DIR = HOME_DIR / ".config" / "gcloud"
 GCLOUD_CREDS_DB = GCLOUD_CONFIG_DIR / "credentials.db"
 GCLOUD_CONFIGS_DIR = GCLOUD_CONFIG_DIR / "configurations"
 
-SKILLS_CACHE_DIR = HOME_DIR / ".cache" / "looker-demo-cli" / "skills-repos"
+SKILLS_CACHE_DIR = GEMINI_CONFIG_DIR / "cache" / "skills-repos"
 SYNTHETIC_DATA_GEN_REPO = Path(os.getenv("SYNTHETIC_DATA_GEN_PATH", str(HOME_DIR / "synthetic-data-generator")))
 LOOKER_EMBED_DEMO_REPO = Path(os.getenv("LOOKER_EMBED_DEMO_PATH", str(HOME_DIR / "looker-embed-demo")))
 

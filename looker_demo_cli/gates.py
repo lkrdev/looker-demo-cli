@@ -405,7 +405,9 @@ GATES: Final[tuple[Gate, ...]] = (
         human_checkpoint=(
             "MANDATORY: Write out the full proposed schema (tables, columns, types, primary/foreign keys) and "
             "Mermaid ERD diagram in visible chat text FIRST. Only AFTER rendering the schema in chat, call "
-            "ask_question to confirm user approval before proceeding to micro-sample preview or synthesis."
+            "ask_question to confirm user approval. Once approved, prioritize data-designer MCP tools "
+            "(validate_builder, preview_dataset, generate_dataset, export_to_bigquery) first, falling back to "
+            "demo-create data generate only if data-designer MCP is unavailable."
         ),
         _is_complete=_gate_1_complete,
         _command=_gate_1_command,

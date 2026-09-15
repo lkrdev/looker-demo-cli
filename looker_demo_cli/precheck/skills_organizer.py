@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -91,6 +92,20 @@ def sync_remote_skill_repos(fix: bool = False) -> dict[str, Path]:
     return resolved_repo_paths
 
 
+def _install_skill_copy(src_path: Path, dest_path: Path) -> bool:
+    """Copy a skill folder physically into dest_path, replacing any legacy symlinks."""
+    try:
+        if dest_path.is_symlink():
+            dest_path.unlink()
+        elif dest_path.exists():
+            shutil.rmtree(dest_path)
+        shutil.copytree(src_path, dest_path, dirs_exist_ok=True, symlinks=False)
+        return (dest_path / "SKILL.md").exists()
+    except Exception as e:
+        print_warning(f"Could not copy skill to {dest_path}: {e}")
+        return False
+
+
 def audit_and_organize_skills(fix: bool = False) -> list[SkillInstallStatus]:
     """Audit and organize skills by intent category into ~/.gemini/config/skills/."""
     GEMINI_SKILLS_DIR.mkdir(parents=True, exist_ok=True)
@@ -117,37 +132,20 @@ def audit_and_organize_skills(fix: bool = False) -> list[SkillInstallStatus]:
             flat_target_link = GEMINI_SKILLS_DIR / skill_name
 
             source_exists = src_path.exists() and (src_path / "SKILL.md").exists()
-            link_exists = (target_link.exists() and (target_link / "SKILL.md").exists()) or (
-                flat_target_link.exists() and (flat_target_link / "SKILL.md").exists()
+            link_exists = (
+                target_link.exists()
+                and not target_link.is_symlink()
+                and (target_link / "SKILL.md").exists()
+            ) or (
+                flat_target_link.exists()
+                and not flat_target_link.is_symlink()
+                and (flat_target_link / "SKILL.md").exists()
             )
 
             if fix and source_exists:
-                # Remove legacy category symlink or broken symlink if needed
-                if target_link.is_symlink() or target_link.exists():
-                    try:
-                        if target_link.is_symlink():
-                            target_link.unlink()
-                    except Exception:
-                        pass
-
-                try:
-                    target_link.symlink_to(src_path, target_is_directory=True)
-                    link_exists = True
-                except Exception as e:
-                    print_warning(f"Could not symlink {skill_name} in {category}: {e}")
-
-                # Also symlink at root for flat skill discovery compatibility
-                if flat_target_link.is_symlink() or flat_target_link.exists():
-                    try:
-                        if flat_target_link.is_symlink():
-                            flat_target_link.unlink()
-                    except Exception:
-                        pass
-                if not flat_target_link.exists():
-                    try:
-                        flat_target_link.symlink_to(src_path, target_is_directory=True)
-                    except Exception:
-                        pass
+                copied_cat = _install_skill_copy(src_path, target_link)
+                copied_flat = _install_skill_copy(src_path, flat_target_link)
+                link_exists = copied_cat or copied_flat
 
             results.append(
                 SkillInstallStatus(

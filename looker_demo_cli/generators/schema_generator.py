@@ -278,16 +278,78 @@ def create_dynamic_blueprint_from_name(domain_name: str) -> DomainBlueprint:
     )
 
 
+def _try_data_designer_script(
+    builder_script: Path,
+    row_count: int,
+    output_dir: Path,
+) -> list[LookMLTableSpec] | None:
+    """Attempt to execute a DataDesigner builder script natively if data_designer is installed."""
+    try:
+        import importlib.util
+
+        import data_designer.config as dd  # noqa: F401
+        from data_designer.engine import DataDesignerEngine  # type: ignore[import-untyped]
+
+        spec = importlib.util.spec_from_file_location("dd_builder", builder_script)
+        if spec and spec.loader:
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            if hasattr(mod, "load_config_builder"):
+                builder = mod.load_config_builder()
+                engine = DataDesignerEngine(builder)
+                df = engine.generate(num_records=row_count)
+                t_name = builder_script.stem.replace("_builder", "")
+                p_file = output_dir / f"{t_name}.parquet"
+                output_dir.mkdir(parents=True, exist_ok=True)
+                df.to_parquet(p_file, index=False)
+                schema_fields: dict[str, str] = {}
+                for col_name, dtype in df.dtypes.items():
+                    dtype_str = str(dtype).lower()
+                    if "int" in dtype_str:
+                        schema_fields[str(col_name)] = "INT64"
+                    elif "float" in dtype_str:
+                        schema_fields[str(col_name)] = "FLOAT64"
+                    elif "bool" in dtype_str:
+                        schema_fields[str(col_name)] = "BOOL"
+                    elif "datetime" in dtype_str:
+                        schema_fields[str(col_name)] = "TIMESTAMP"
+                    else:
+                        schema_fields[str(col_name)] = "STRING"
+                return [
+                    LookMLTableSpec(
+                        table_name=t_name,
+                        table_type="fact" if t_name.startswith("fct_") else "dimension",
+                        schema_fields=schema_fields,
+                        primary_key=next(iter(df.columns)) if len(df.columns) > 0 else None,
+                    )
+                ]
+    except Exception:
+        return None
+    return None
+
+
 def generate_domain_dataset(
     target: str | DomainBlueprint,
     output_dir: Path,
     micro_sample_only: bool = False,
+    builder_script: Path | None = None,
+    engine: str = "auto",
 ) -> list[LookMLTableSpec]:
-    """Generate dynamic synthetic dataset from a DomainBlueprint or dynamic domain name."""
+    """Generate dynamic synthetic dataset prioritizing DataDesigner when available, with Python fallback."""
     if isinstance(target, DomainBlueprint):
         blueprint = target
     else:
         blueprint = create_dynamic_blueprint_from_name(target)
+
+    if engine in ("auto", "data-designer") and builder_script and builder_script.exists():
+        row_count = 10 if micro_sample_only else (
+            blueprint.entities[0].row_count if blueprint.entities else 1000
+        )
+        dd_specs = _try_data_designer_script(builder_script, row_count, output_dir)
+        if dd_specs:
+            return dd_specs
+        if engine == "data-designer":
+            raise RuntimeError(f"Data Designer execution failed for `{builder_script}`.")
 
     synthesizer = DynamicDataSynthesizer()
     return synthesizer.synthesize_dataset(

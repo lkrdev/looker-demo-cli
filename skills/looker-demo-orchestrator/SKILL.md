@@ -212,7 +212,9 @@ Your response turn in this phase MUST contain visible Markdown content before ca
 5. **Approval Question**: Only after rendering steps 1–4 in visible chat, call the `ask_question` tool asking the user to approve the schema or request adjustments.
 
 ### Phase 2 — Micro-Sample Synthesis & Preview (Human-in-the-Loop)
-- Synthesize a micro-sample dataset (5–10 realistic sample rows per table).
+- **Execution Priority (Mandatory)**:
+  1. **Priority 1 (Primary)**: Author DataDesigner builder scripts (`data_designer.config`) and execute validation/preview using the `data-designer` MCP tools (`call_mcp_tool(ServerName="data-designer", ToolName="validate_builder", ...)` and `preview_dataset`).
+  2. **Priority 2 (Fallback Only)**: Only if the `data-designer` MCP server is unavailable or fails, fall back to `demo-create data generate --engine fallback` or standard Python scripts.
 - Display Markdown preview tables directly in chat demonstrating:
   - Referential integrity across parent/child IDs.
   - Realistic domain-specific values and categorical distributions.
@@ -226,12 +228,15 @@ Your response turn in this phase MUST contain visible Markdown content before ca
   - **Custom** table-specific sizing
 
 ### Phase 4 — Batch Synthesis & BigQuery Load (Delegate to Subagent)
-- Only after Phases 1–3 are explicitly acknowledged by the user, delegate batch synthesis and BigQuery ingestion to the **[`data-engineer`](subagents/data-engineer.md)** subagent.
-- **Zero Vertex AI Dependency**: The data synthesis pipeline does **NOT** use Vertex AI, Google Cloud AI APIs, or `roles/aiplatform.user` IAM permissions. The subagent authors realistic Python generation scripts using Faker, domain lookup tables, and combinatorial templates.
+- Only after Phases 1–3 are explicitly acknowledged by the user, delegate batch synthesis and BigQuery ingestion to the **[`data-engineer`](subagents/data-engineer.md)** subagent (or run the MCP / CLI commands).
+- **DataDesigner MCP Tools First & Zero Vertex AI Dependency**:
+  - **Priority 1 (Primary)**: Execute batch generation via `data-designer` MCP tools (`validate_builder` ➔ `generate_dataset` ➔ `export_to_bigquery`) or `demo-create data generate --builder-script <path> --engine data-designer`.
+  - **Priority 2 (Fallback Only)**: Only if DataDesigner MCP/runtime is unavailable, fall back to `demo-create data generate --engine fallback`.
+  - It does **NOT** use Vertex AI, Google Cloud AI APIs, or `roles/aiplatform.user` IAM permissions.
 ```yaml
 subagent:
   type: "skills/looker-demo-orchestrator/subagents/data-engineer.md"
-  prompt: "Synthesize full volume Parquet data for {confirmed_scale} rows and upload to BigQuery project {confirmed_gcp_project} dataset {dataset_name}."
+  prompt: "Synthesize full volume Parquet data for {confirmed_scale} rows and upload to BigQuery project {confirmed_gcp_project} dataset {dataset_name} using DataDesigner MCP tools."
   inputs:
     gcp_project_id: "{confirmed_gcp_project}"
     dataset_id: "{dataset_name}"
