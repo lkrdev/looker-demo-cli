@@ -95,7 +95,14 @@ class FakeSynthesizer:
             ],
         )
 
-    def generate(self, target: Any, output_dir: Path, micro_sample_only: bool = False) -> list[Any]:
+    def generate(
+        self,
+        target: Any,
+        output_dir: Path,
+        micro_sample_only: bool = False,
+        builder_script: Path | None = None,
+        engine: str = "auto",
+    ) -> list[Any]:
         self.generate_calls.append((target, Path(output_dir)))
         Path(output_dir).mkdir(parents=True, exist_ok=True)
         if self.write_files:

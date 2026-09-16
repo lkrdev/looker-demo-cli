@@ -55,6 +55,7 @@ The parent orchestrator invokes you with:
      TARGETS = ["payment gateway transaction", "webhook delivery", "nightly batch sync"]
      REASONS = ["due to transient latency", "following automated retry policy", "after cardholder verification"]
 
+
      @dd.custom_column_generator(
          required_columns=["status"],
          side_effect_columns=["incident_summary"],
@@ -89,6 +90,7 @@ The parent orchestrator invokes you with:
 
   import data_designer.config as dd
   import random
+
 
   def load_config_builder() -> dd.DataDesignerConfigBuilder:
       builder = dd.DataDesignerConfigBuilder()

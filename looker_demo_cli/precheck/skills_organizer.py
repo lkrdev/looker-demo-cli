@@ -133,9 +133,7 @@ def audit_and_organize_skills(fix: bool = False) -> list[SkillInstallStatus]:
 
             source_exists = src_path.exists() and (src_path / "SKILL.md").exists()
             link_exists = (
-                target_link.exists()
-                and not target_link.is_symlink()
-                and (target_link / "SKILL.md").exists()
+                target_link.exists() and not target_link.is_symlink() and (target_link / "SKILL.md").exists()
             ) or (
                 flat_target_link.exists()
                 and not flat_target_link.is_symlink()

@@ -342,9 +342,7 @@ def generate_domain_dataset(
         blueprint = create_dynamic_blueprint_from_name(target)
 
     if engine in ("auto", "data-designer") and builder_script and builder_script.exists():
-        row_count = 10 if micro_sample_only else (
-            blueprint.entities[0].row_count if blueprint.entities else 1000
-        )
+        row_count = 10 if micro_sample_only else (blueprint.entities[0].row_count if blueprint.entities else 1000)
         dd_specs = _try_data_designer_script(builder_script, row_count, output_dir)
         if dd_specs:
             return dd_specs
