@@ -30,7 +30,7 @@ Instead of spending days or weeks stitching together synthetic data scripts, deb
 | **Pre-Deployment QA Audit** | Dev branch push, LookML project validator, 100% test execution of all dashboard queries via Looker API, and bounded self-healing (max 3 iterations) | 100% HTTP 200 OK query pass certificate before production release |
 | **Conversational Analytics (CA) Agent** | Auto-generated domain persona and query rules, extraction of dashboard tiles into 1:1 Looker 4.0 Golden Queries with `expanded_share_url` grounding | Live AI Agent in Looker with natural language chat UI |
 | **Gemini Enterprise (GE) Integration** | Automated registration and one-click publishing to connected Gemini Enterprise apps via Looker internal API | Natural language querying across enterprise Gemini apps in minutes |
-| **White-Labeled Embed Portal (Optional)** | Scaffolding of React/Vite application (`looker-embed-demo`), `.env` configuration (`VITE_CHAT_AGENT_ID`), and CSS brand design tokens | Complete web application ready to run (`npm run dev`) |
+| **White-Labeled Embed Portal (Optional)** | Scaffolding of React/Vite application (`looker-embed-demo`), `.env` configuration (`VITE_CHAT_AGENT_ID`), and CSS brand design tokens | Complete web application ready to run (`pnpm install && pnpm dev`) |
 
 ---
 
@@ -57,9 +57,10 @@ graph LR
 
 ### 📄 Inspect a Real Deliverable
 
-Curious what the final output looks like? Inspect a real deliverable produced by a completed run:
+Curious what the final output looks like? Inspect real deliverables produced by a completed run:
 
-👉 **[View Canonical Delivery Report: IoT Trucking Fleet Analytics](examples/DELIVERY_REPORT_EXAMPLE.md)**
+👉 **[View Canonical Technical Spec (SPEC.md): IoT Trucking Fleet Analytics](examples/SPEC_EXAMPLE.md)**  
+👉 **[View Canonical Delivery Report (DELIVERY_REPORT.md): IoT Trucking Fleet Analytics](examples/DELIVERY_REPORT_EXAMPLE.md)**
 
 Key highlights from the report:
 - **BigQuery Summary**: 6 relational tables, 21,675 rows across `dim_vehicles`, `fct_trips`, `fct_sensor_telemetry`, etc.
@@ -75,7 +76,7 @@ Key highlights from the report:
 
 ### 🚀 Mode 1: AI Agent Pair-Programmer (Primary Hero Flow)
 
-Run interactively with your AI coding assistant (Jetski, Claude Code, or AgentAPI) using the **[`looker-demo-orchestrator`](skills/looker-demo-orchestrator/SKILL.md)** skill.
+Run interactively with your AI coding assistant (Antigravity, Claude Code, or AgentAPI) using the **[`looker-demo-orchestrator`](skills/looker-demo-orchestrator/SKILL.md)** skill.
 
 #### Step 1: Install Persistent CLI Tools
 On any fresh machine, bootstrap the environment globally in seconds using `uv`:
@@ -388,8 +389,7 @@ When you run `demo-create pre-check --fix`, skills are automatically pulled from
 │   ├── data-designer/
 │   ├── data-designer-architect/
 │   ├── data-designer-engineer/
-│   ├── data-designer-evaluator/
-│   └── vertex-ai/
+│   └── data-designer-evaluator/
 ├── lookml/
 │   ├── lkr-code-mode/
 │   ├── repo-lookml/
@@ -407,6 +407,7 @@ When you run `demo-create pre-check --fix`, skills are automatically pulled from
 │   └── embed-themes/
 └── embed-portal/
     ├── looker-demo-orchestrator/
+    ├── demo-spec/
     ├── setup-embed-demo/
     ├── customize-frontend/
     ├── customize-frontend-branding/
@@ -414,4 +415,4 @@ When you run `demo-create pre-check --fix`, skills are automatically pulled from
     └── sso-embed/
 ```
 
-This guarantees that any Jetski agent in any directory can discover and execute Looker demo workflows.
+This guarantees that any Antigravity agent in any directory can discover and execute Looker demo workflows.

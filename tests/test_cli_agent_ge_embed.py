@@ -1743,8 +1743,8 @@ def test_agent_golden_queries_json_reports_found_and_linked_counts(
 
 @pytest.mark.characterization
 @pytest.mark.unit
-def test_embed_scaffold_rejects_agent_id_option(invoke, fake_scaffolder, tmp_path):
-    """``--agent-id`` is documented but not implemented."""
+def test_embed_scaffold_accepts_agent_id_option(invoke, fake_scaffolder, tmp_path):
+    """``--agent-id`` is accepted and passed to the scaffolder."""
     result = invoke(
         [
             "embed",
@@ -1758,12 +1758,9 @@ def test_embed_scaffold_rejects_agent_id_option(invoke, fake_scaffolder, tmp_pat
         ]
     )
 
-    # BUG: README.md:318 documents
-    #   `demo-create embed scaffold ... --agent-id 1042 ...`
-    # but embed_scaffold (commands/embed.py) declares no such option, so the
-    # documented invocation fails with a Click usage error.
-    assert result.exit_code == 2
-    assert not fake_scaffolder.captured
+    assert result.exit_code == 0
+    assert len(fake_scaffolder.captured) == 1
+    assert fake_scaffolder.captured[0].agent_id == "1042"
 
 
 @pytest.mark.characterization
@@ -1944,6 +1941,7 @@ def test_embed_scaffold_json_emits_the_envelope(invoke, fake_scaffolder, state_f
         "looker_project": "retail_analytics",
         "brand_name": "Retail Analytics",
         "dashboard_id": "dash-77",
+        "agent_id": "",
         "instance_url": "https://fake.cloud.looker.com",
         "state_file": str(isolated_cwd / STATE_FILE_NAME),
     }

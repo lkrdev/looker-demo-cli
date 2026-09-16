@@ -22,13 +22,12 @@ def introspect_bq_table_specs(
 
     Generates rich LookMLTableSpec objects for LookML modeling.
     """
-    if not credentials:
-        credentials, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
-
-    bq_client = bigquery.Client(project=project_id, credentials=credentials, location=location)
-    dataset_ref = bq_client.dataset(dataset_id)
-
     try:
+        if not credentials:
+            credentials, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
+
+        bq_client = bigquery.Client(project=project_id, credentials=credentials, location=location)
+        dataset_ref = bq_client.dataset(dataset_id)
         tables_list = list(bq_client.list_tables(dataset_ref))
     except Exception as e:
         print_warning(f"Could not list tables in BigQuery dataset `{dataset_id}`: {e}")

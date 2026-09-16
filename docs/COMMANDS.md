@@ -339,6 +339,8 @@ demo-create data generate [OPTIONS]
 | `--domain` | Domain theme name (e.g. supply_chain, trucking_iot) | `logistics_analytics` |
 | `--row-count` | Target fact row count | `1000` |
 | `--output-dir` | Local directory to write Parquet files |  |
+| `--builder-script` | Path to DataDesigner Python builder script |  |
+| `--engine` | Synthesis engine priority: auto, data-designer, or fallback | `auto` |
 | `--upload` | Automatically upload synthesized Parquet tables to BigQuery |  |
 | `--gcp-project` | Target GCP Project ID if uploading |  |
 | `--dataset` | Target BigQuery dataset ID if uploading |  |
@@ -500,6 +502,7 @@ demo-create embed scaffold [OPTIONS]
 | `--looker-project` | Looker/demo project name |  |
 | `--target-dir` | Directory where the web app will be scaffolded |  |
 | `--dashboard-id` | Looker dashboard ID to embed |  |
+| `--agent-id` | Looker CA Agent ID to embed |  |
 | `--brand-name` | Customer brand display name |  |
 | `--instance` | Looker instance URL |  |
 | `--json` | Emit the result envelope as JSON on stdout |  |

@@ -38,6 +38,12 @@ def data_generate(
     output_dir: Annotated[
         Path | None, typer.Option("--output-dir", help="Local directory to write Parquet files")
     ] = None,
+    builder_script: Annotated[
+        Path | None, typer.Option("--builder-script", help="Path to DataDesigner Python builder script")
+    ] = None,
+    engine: Annotated[
+        str, typer.Option("--engine", help="Synthesis engine priority: auto, data-designer, or fallback")
+    ] = "auto",
     upload: Annotated[
         bool, typer.Option("--upload", help="Automatically upload synthesized Parquet tables to BigQuery")
     ] = False,
@@ -56,6 +62,8 @@ def data_generate(
         row_count: Row count applied to every fact table in the blueprint.
         output_dir: Where to write the Parquet files. Defaults to a scratch
             directory under the user's home.
+        builder_script: Optional DataDesigner Python builder script path.
+        engine: Synthesis engine mode (auto prioritizes DataDesigner, fallback uses DynamicDataSynthesizer).
         upload: Also load the generated tables into BigQuery.
         gcp_project: Target Google Cloud project, used only when uploading.
         dataset: Target BigQuery dataset ID. Defaults to the domain name.
@@ -75,7 +83,12 @@ def data_generate(
         if entity.table_type == "fact":
             entity.row_count = row_count
 
-    specs = generate_domain_dataset(target=blueprint, output_dir=target_dir)
+    specs = generate_domain_dataset(
+        target=blueprint,
+        output_dir=target_dir,
+        builder_script=builder_script,
+        engine=engine,
+    )
     table_names = [s.table_name for s in specs]
 
     state.domain_name = domain

@@ -50,6 +50,8 @@ graph TD
 | Component | Execution Mode | Responsibility & Scope |
 |---|---|---|
 | **Parent Orchestrator** | Direct Parent Turn | Interactive co-design gates (`ask_question`), fast CLI subcommands (`demo-create data`, `lookml model`, `lookml optimize`, `lookml deploy`, `agent create`), state machine, and final delivery report. |
+| [`demo-spec`](../demo-spec/SKILL.md) | **Companion Core Skill** | Asynchronously creates and maintains `SPEC.md` as the living technical architecture document across all gates, updating quietly on disk without chat dumping. |
+| [`data-engineer`](subagents/data-engineer.md) | **On-Demand Subagent** | Synthesizes full-volume Parquet datasets via local subagent-authored Python (zero Vertex AI dependency) and loads tables into BigQuery. |
 | [`lookml-snowflake-modeler`](subagents/lookml-snowflake-modeler.md) | **On-Demand Subagent** | Spawned ONLY when schemas contain complex 3NF snowflake structures with Chasm Traps (multiple 1:N children), diamond joins, or require Native Derived Table (NDT) rollups. |
 | [`lookml-dashboard-designer`](subagents/lookml-dashboard-designer.md) | **On-Demand Subagent** | Authors executive tabbed dashboards grounded in staged explores/views using the [`looker-visualizations`](../looker-visualizations/SKILL.md) suite. |
 | [`lookml-qa-validator`](subagents/lookml-qa-validator.md) | **On-Demand Subagent** | Spawned ONLY when `demo-create lookml deploy` encounters validation errors or failing queries; runs up to 3 self-healing loops via `lookml-dashboard-to-query`. |
@@ -60,6 +62,8 @@ graph TD
 > 1. **Subagent Kill-Fence**: Before any file revert, rollback, or manual code restoration, the orchestrator **MUST kill all running subagents** via `manage_subagents(Action='kill_all')` (or `manage_subagents(Action='kill', ConversationIds=[...])`) to prevent background tasks from overwriting restored files.
 > 2. **Headless Directory Snapshots**: In headless environments without Git tracking, `demo-create lookml optimize` automatically snapshots pre-optimization files to `lookml/.backup_pre_opt`. If the user rejects optimization or requests a rollback, execute `demo-create lookml restore --lookml-dir <dir>` to cleanly restore files in 1 command.
 > 3. **Artifact Boundaries**: `ArtifactMetadata` in `write_to_file` is strictly for files inside `<appDataDir>/brain/<conversation-id>/`. For workspace files, never supply `ArtifactMetadata`.
+> 4. **Living `SPEC.md` Quiet Maintenance**: Throughout every conversation and across all gates, the orchestrator quietly maintains `SPEC.md` in the workspace root following [`demo-spec`](../demo-spec/SKILL.md). Never dump `SPEC.md` into chat unless a significant structural change was made. `DELIVERY_REPORT.md` must always link to `SPEC.md`.
+> 5. **Mandatory `.gitignore` Verification for `.env` Files**: Whenever creating or modifying a `.env` file (e.g., Looker API credentials, GCP settings, or Embed Portal environment), confirm that `.gitignore` exists in the working directory and includes `.env` (and `**/.env`) before writing credentials to disk.
 
 ---
 
@@ -199,12 +203,18 @@ graph TD
 > 3. Bypassing visible preview rendering in chat blinds the user and is strictly forbidden.
 
 ### Phase 1 — Schema Proposal & Review (Human-in-the-Loop)
-- Render the relational model (ERD diagram, dimension vs. fact tables, field names, data types, primary keys, and foreign key relationships) directly in chat.
-- Highlight key business metrics (e.g., MRR/ARR, churn rates, NPS, telemetry).
-- Invoke `ask_question` prompting the user for approval or modifications.
+**MANDATORY Single-Turn Message Structure**:
+Your response turn in this phase MUST contain visible Markdown content before calling `ask_question`. Calling `ask_question` with an empty chat body is strictly prohibited. Structure your turn as follows:
+1. **Domain Overview**: 2–3 sentences explaining the scenario, key operational and analytical entities, and business goals.
+2. **Mermaid ERD Diagram**: A full `mermaid` diagram showing entities, primary/foreign keys, and cardinality (e.g. `||--o{`).
+3. **Relational Schema Specification**: Markdown tables listing each table, its columns, data types, key constraints (PK, FK), and business definitions.
+4. **Key Metrics Highlight**: List the primary business and analytics metrics enabled by this schema (e.g., MRR/ARR, churn, latency, conversion).
+5. **Approval Question**: Only after rendering steps 1–4 in visible chat, call the `ask_question` tool asking the user to approve the schema or request adjustments.
 
 ### Phase 2 — Micro-Sample Synthesis & Preview (Human-in-the-Loop)
-- Synthesize a micro-sample dataset (5–10 realistic sample rows per table).
+- **Execution Priority (Mandatory)**:
+  1. **Priority 1 (Primary)**: Author DataDesigner builder scripts (`data_designer.config`) and execute validation/preview using the `data-designer` MCP tools (`call_mcp_tool(ServerName="data-designer", ToolName="validate_builder", ...)` and `preview_dataset`).
+  2. **Priority 2 (Fallback Only)**: Only if the `data-designer` MCP server is unavailable or fails, fall back to `demo-create data generate --engine fallback` or standard Python scripts.
 - Display Markdown preview tables directly in chat demonstrating:
   - Referential integrity across parent/child IDs.
   - Realistic domain-specific values and categorical distributions.
@@ -218,12 +228,15 @@ graph TD
   - **Custom** table-specific sizing
 
 ### Phase 4 — Batch Synthesis & BigQuery Load (Delegate to Subagent)
-- Only after Phases 1–3 are explicitly acknowledged by the user, delegate batch synthesis and BigQuery ingestion to the **[`data-engineer`](subagents/data-engineer.md)** subagent:
-
+- Only after Phases 1–3 are explicitly acknowledged by the user, delegate batch synthesis and BigQuery ingestion to the **[`data-engineer`](subagents/data-engineer.md)** subagent (or run the MCP / CLI commands).
+- **DataDesigner MCP Tools First & Zero Vertex AI Dependency**:
+  - **Priority 1 (Primary)**: Execute batch generation via `data-designer` MCP tools (`validate_builder` ➔ `generate_dataset` ➔ `export_to_bigquery`) or `demo-create data generate --builder-script <path> --engine data-designer`.
+  - **Priority 2 (Fallback Only)**: Only if DataDesigner MCP/runtime is unavailable, fall back to `demo-create data generate --engine fallback`.
+  - It does **NOT** use Vertex AI, Google Cloud AI APIs, or `roles/aiplatform.user` IAM permissions.
 ```yaml
 subagent:
   type: "skills/looker-demo-orchestrator/subagents/data-engineer.md"
-  prompt: "Synthesize full volume Parquet data for {confirmed_scale} rows and upload to BigQuery project {confirmed_gcp_project} dataset {dataset_name}."
+  prompt: "Synthesize full volume Parquet data for {confirmed_scale} rows and upload to BigQuery project {confirmed_gcp_project} dataset {dataset_name} using DataDesigner MCP tools."
   inputs:
     gcp_project_id: "{confirmed_gcp_project}"
     dataset_id: "{dataset_name}"
@@ -504,7 +517,7 @@ The subagent:
 1. Clones/scaffolds `looker-embed-demo`.
 2. Configures `.env` with `VITE_LOOKER_HOST`, `VITE_DEFAULT_DASHBOARD_ID`, and `VITE_CHAT_AGENT_ID`.
 3. Customizes `src/constants.ts` and CSS variables in `src/styles.css`.
-4. Runs `npm run build` or `vite build` to verify clean compilation.
+4. Installs dependencies (`pnpm install` or `npm install`) in `frontend/` and runs `pnpm build` (or `npm run build`) to verify clean compilation.
 
 ---
 
@@ -513,6 +526,9 @@ The subagent:
 Upon completing the demo creation pipeline (production deployment, plus optional CA Agent or Embed Portal steps), the Parent Orchestrator **MUST synthesize all subagent outputs and emit a comprehensive Executive Delivery Report**.
 
 The report must be emitted directly in chat as the final deliverable and saved to the project directory as `DELIVERY_REPORT.md` (or artifact).
+
+> [!IMPORTANT]
+> **Mandatory Link to `SPEC.md`**: The delivery report **MUST** prominently link to `[SPEC.md](SPEC.md)` in its Quick Access Links table. `SPEC.md` serves as the project's living architectural and technical specification, continuously updated in the background across all turns and conversations via [`demo-spec`](../demo-spec/SKILL.md).
 
 ### Mandatory Report Structure & Template:
 
@@ -533,6 +549,7 @@ The report must be emitted directly in chat as the final deliverable and saved t
 
 | Asset | Direct URL / Access Path | Description |
 | :--- | :--- | :--- |
+| **Technical Architecture Spec** | [SPEC.md](SPEC.md) | Living technical specification, relational schema & modeling architecture |
 | **Executive Dashboard** | [{dashboard_title}]({looker_instance_url}/dashboards/{lookml_model_name}::{dashboard_name}) | {tabs_count}-tab executive command center with cross-filtering |
 | **Conversational Analytics Agent** | [{agent_name}]({looker_instance_url}/conversational-analytics/agents/{ca_agent_id}) | AI Data Agent with {gq_count} pre-seeded Golden Queries *(if provisioned)* |
 | **{Primary Explore} Explore** | [Explore: {Primary Explore Label}]({looker_instance_url}/explore/{lookml_model_name}/{primary_explore}) | Primary domain entity, metrics & dimension analysis |
@@ -628,11 +645,22 @@ In strict compliance with the **Looker Demo Orchestrator** pre-deployment gate, 
 - **Capabilities**: Full natural language synthesis over `{lookml_model_name}`, golden query semantic routing, and code interpretation within Gemini Enterprise apps.
 
 *(If external embed portal was scaffolded)*:
-- **Workspace Directory**: `{embed_workspace_dir}`
-- **Local Dev Command**: `npm run dev`
-- **Dashboard Embedded**: `{deployed_dashboard_id}`
-- **Chat Agent Connected**: `{ca_agent_id}`
-- **Build Status**: Verified 0 TypeScript / compilation errors
+- **Workspace Directory**: `{embed_workspace_dir}` (Full-stack: `frontend/` React 19 + TypeScript + Vite 6 + TanStack Router, `backend/` FastAPI + Cookieless Embed SSO)
+- **Local Dev Command**: `cd {embed_workspace_dir}/frontend && pnpm install && pnpm dev` (or `./start.sh` from portal root)
+- **Portal Views & Navigation (`customize-frontend-looker-config`)**:
+  - **Home Hub (`/`)**: Hero header (`{portal_hub_title}`), Live Operational/Financial Summary KPI cards, Live Operational Ticker (streaming events), AI Strategic Executive Briefing.
+  - **Embedded Dashboard (`/dashboard`)**: `{deployed_dashboard_id}` with universal date filters (`{dashboard_date_filter_names}`).
+  - **Embedded AI Assistant (`/conversational-analytics`)**: Connected CA Agent `{ca_agent_id}`.
+  - **Embedded Explorer (`/explore`)**: Grounded in `{explore_path}`.
+- **Branding & CSS Theming (`customize-frontend-branding` & `customize-frontend-theme`)**:
+  - Brand Header Name: `{brand_name}` (in `Sidebar.tsx` & `constants.ts`)
+  - Primary HSL Palette: `--color-primary-raw: {primary_hsl};`
+  - Typography: `--font-heading: 'Outfit'`, `--font-sans: 'Inter'`
+  - Dark Mode: Native `html.dark` surface tokens
+  - Looker Themes (`embed-themes`): `<Brand>_Light` & `<Brand>_Dark`
+- **Role-Based Access Control (`ROLE_PERMISSIONS`)**:
+  - Simple User (`viewer`) vs Advanced User (`explorer`) profiles with group assignment `{group_id}`.
+- **Build Status**: Verified 0 TypeScript / compilation errors via `pnpm run build`.
 ```
 
 ---

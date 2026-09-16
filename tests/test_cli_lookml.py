@@ -1520,7 +1520,7 @@ def test_deploy_end_to_end_with_stubbed_oauth_http_and_shell(
         rsps.add(responses.GET, f"{base_url}/api/4.0/lookml_models/retail_demo", json={}, status=200)
         rsps.add(responses.GET, f"{base_url}/api/4.0/projects/retail_demo/files", json=[], status=200)
         rsps.add(
-            responses.GET,
+            responses.POST,
             f"{base_url}/api/4.0/projects/retail_demo/validate",
             json={"errors": []},
             status=200,
@@ -1576,7 +1576,7 @@ def test_deploy_validator_errors_exit_non_zero(
         rsps.add(responses.GET, f"{base_url}/api/4.0/lookml_models/retail_demo", json={}, status=200)
         rsps.add(responses.GET, f"{base_url}/api/4.0/projects/retail_demo/files", json=[], status=200)
         rsps.add(
-            responses.GET,
+            responses.POST,
             f"{base_url}/api/4.0/projects/retail_demo/validate",
             json={"errors": [{"file_path": "views/users.view.lkml", "line_number": 4, "message": "Unknown field"}]},
             status=200,
@@ -1615,7 +1615,7 @@ def test_deploy_validator_errors_json_envelope(
         rsps.add(responses.GET, f"{base_url}/api/4.0/lookml_models/retail_demo", json={}, status=200)
         rsps.add(responses.GET, f"{base_url}/api/4.0/projects/retail_demo/files", json=[], status=200)
         rsps.add(
-            responses.GET,
+            responses.POST,
             f"{base_url}/api/4.0/projects/retail_demo/validate",
             json={"errors": [{"file_path": "views/users.view.lkml", "line_number": 4, "message": "Unknown field"}]},
             status=200,

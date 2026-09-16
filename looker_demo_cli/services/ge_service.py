@@ -51,12 +51,24 @@ def get_looker_auth_context(
         }
         return headers, base_url
 
-    # Fallback to env base URL if present
+    # Fallback to env base URL / API key auth if present
     base_url = (instance_url or os.getenv("LOOKERSDK_BASE_URL") or "").rstrip("/")
     headers = {
         "Content-Type": "application/json",
         "Accept": "application/json",
     }
+    if base_url and os.getenv("LOOKERSDK_CLIENT_ID") and os.getenv("LOOKERSDK_CLIENT_SECRET"):
+        try:
+            from looker_sdk.rtl import transport
+
+            from looker_demo_cli.sdk import get_looker_sdk
+
+            sdk = get_looker_sdk(base_url)
+            auth_headers = sdk.auth.authenticate(transport.TransportOptions())
+            if "Authorization" in auth_headers:
+                headers["Authorization"] = auth_headers["Authorization"]
+        except Exception:
+            pass
     return headers, base_url
 
 

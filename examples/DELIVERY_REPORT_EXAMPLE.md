@@ -14,12 +14,14 @@
 
 | Asset | Direct URL / Access Path | Description |
 | :--- | :--- | :--- |
+| **Technical Architecture Spec** | [SPEC.md](SPEC.md) | Full technical specification, relational schema & modeling architecture |
 | **Executive Dashboard** | [IoT Fleet Telemetry & Trucking Analytics](https://analytics.company.com/dashboards/trucking_iot_analytics::trucking_iot_analytics) | 3-tab executive command center with cross-filtering |
 | **Conversational Analytics Agent** | [Trucking Fleet IoT Assistant](https://analytics.company.com/conversational-analytics/agents/ca_agent_38f92a10b) | AI Data Agent with 7 pre-seeded Golden Queries |
 | **Fleet Trips Explore** | [Explore: Fleet Trips & Operations](https://analytics.company.com/explore/trucking_iot_analytics/fct_trips) | Primary dispatch, payload, fuel & safety analysis |
 | **IoT Telemetry Explore** | [Explore: IoT Sensor Telemetry Stream](https://analytics.company.com/explore/trucking_iot_analytics/fct_sensor_telemetry) | Sub-second powertrain, temperature & pressure vitals |
 | **Diagnostics & Alerts Explore** | [Explore: Vehicle Diagnostics & Alerts](https://analytics.company.com/explore/trucking_iot_analytics/fct_vehicle_alerts) | DTC fault codes, predictive maintenance & severity |
 | **Fleet Inventory Explore** | [Explore: Fleet Asset Inventory](https://analytics.company.com/explore/trucking_iot_analytics/dim_vehicles) | Commercial trucks master specs & NDT rollups |
+| **External Embed Portal** | [Trucking Telematics Portal](http://localhost:8008) | Standalone React 19 + Vite 6 + FastAPI SSO embedded portal |
 
 ---
 
@@ -150,3 +152,34 @@ The Conversational Analytics agent has been deployed and published to **Gemini E
 - **GE GCP Location**: `global`
 - **GE Engine ID**: `gemini-enterprise-app-48291`
 - **Capabilities**: Full natural language synthesis over `trucking_iot_analytics` models, golden query semantic routing, and code interpretation within Gemini Enterprise apps.
+
+---
+
+## 8. External Embed Portal Status
+
+The standalone React 19 + TypeScript + Vite 6 + FastAPI SSO portal has been customized and verified:
+
+- **Workspace Directory**: `embed-portal/` (`frontend/` React 19 + Vite 6 + TanStack Router, `backend/` FastAPI + Cookieless SSO Auth)
+- **Local Dev Command**: `cd embed-portal/frontend && pnpm install && pnpm dev`
+- **Portal Routes & Views (`customize-frontend-looker-config`)**:
+  - **`/` (Home Executive Hub)**:
+    - *Hero Banner*: `Fleet Telematics Platform` badge, headline *Executive Telematics Command Hub*, operational subhead.
+    - *Live Operational Summary*: 3 primary KPI cards (`Total Completed Trips`, `Active Fleet Trucks`, `Average Fuel per Trip`).
+    - *Live Operational Ticker*: Simulated real-time vehicle event stream with category filters (`All Stream`, `Dispatches`, `Telemetry`, `Alerts`).
+    - *AI Strategic Executive Briefing*: Executive summary card analyzing fleet fuel efficiency and safety corridors.
+  - **`/dashboard` (Executive Dashboard View)**:
+    - Embedded Dashboard: `VITE_DASHBOARD_ID=trucking_iot_analytics::trucking_iot_analytics`
+    - Date Filters: `VITE_DASHBOARD_DATE_FILTER_NAMES=Date Range,Date`
+  - **`/conversational-analytics` (AI Assistant View)**:
+    - Embedded Conversational Analytics Agent: `VITE_CHAT_AGENT_ID=ca_agent_38f92a10b`
+  - **`/explore` (Query Explorer View)**:
+    - Embedded Explore: `VITE_EXPLORE_PATH=trucking_iot_analytics/fct_trips`
+- **Branding & CSS Theme Tokens (`customize-frontend-branding` & `customize-frontend-theme`)**:
+  - Brand Header Name: `Trucking Telematics` (in `Sidebar.tsx` and `DEFAULT_BRAND`)
+  - Primary HSL Palette: `--color-primary-raw: 217, 89%, 43%;` (`#0b57d0`)
+  - Typography: Heading `--font-heading: 'Outfit'`, Body `--font-sans: 'Inter'`
+  - Dark Mode: Native dark mode enabled (`html.dark`)
+  - Looker Brand Themes (`embed-themes`): `Trucking_Telematics_Light` & `Trucking_Telematics_Dark`
+- **Role-Based Access Control (`ROLE_PERMISSIONS`)**:
+  - Simple User (`viewer`) vs Advanced User (`explorer`) profiles assigned to shared Looker group `["8"]`.
+- **Build Verification**: Verified 0 TypeScript or JSX compilation errors via `pnpm run build`.

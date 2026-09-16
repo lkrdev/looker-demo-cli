@@ -50,19 +50,32 @@ The parent orchestrator invokes you with:
      --target-dir <target_dir>
    ```
    Or manually clone `looker-embed-demo` and initialize dependencies.
-2. **Inject Environment & Routes**:
-   - Configure `.env`:
+2. **Configure Looker Embed Variables (`customize-frontend-looker-config`)**:
+   - In `<target_dir>/frontend/.env` (and root `.env`):
      ```env
-     VITE_LOOKER_HOST=<looker_instance_url>
-     VITE_DEFAULT_DASHBOARD_ID=<dashboard_id>
+     LOOKER_INSTANCE_URL=<looker_instance_url>
+     VITE_LOOKER_INSTANCE_URL=<looker_instance_url>
+     VITE_DASHBOARD_ID=<dashboard_id>
      VITE_CHAT_AGENT_ID=<ca_agent_id>
+     VITE_EXPLORE_PATH=<lookml_model_name>/<primary_explore>
+     VITE_DASHBOARD_DATE_FILTER_NAMES=Date Range,Date
+     VITE_APP_TITLE="<brand_name> Intelligence Portal"
+     VITE_BRAND_NAME="<brand_name>"
      ```
-   - Update `src/constants.ts` with brand navigation routes and dashboard IDs.
-3. **Customize Branding & CSS Theme**:
-   - Update application header title and brand name in navigation.
-   - Update CSS design tokens in `src/styles.css` (primary brand color, border radius, card shadows).
-4. **Compile & Verify Build**:
-   - Run `npm run build` or `vite build` to verify zero TypeScript or bundle compilation errors.
+   - In `<target_dir>/frontend/src/config/constants.ts`:
+     - Update `DASHBOARD_ID`, `CHAT_AGENT_ID`, and `EXPLORE_PATH`.
+     - Update `DEFAULT_BRAND` and `BRAND_OPTIONS`.
+     - Verify `ROUTE_BREADCRUMB_MAPPINGS` and `ROLE_PERMISSIONS`.
+3. **Customize Branding & Header (`customize-frontend-branding`)**:
+   - In `frontend/src/components/layout/Sidebar.tsx`: Update brand title and user badges.
+   - In `frontend/src/components/layout/Navbar.tsx`: Ensure root breadcrumb label matches workspace identity.
+   - In `frontend/src/components/layout/LookerLogo.tsx`: Replace SVG path or reference `/brand-logo.png`.
+4. **Customize CSS Theme Tokens (`customize-frontend-theme`)**:
+   - In `frontend/src/styles.css`: Update `:root` HSL color tokens (`--color-primary-raw`, `--color-primary-hover-raw`, `--color-accent-raw`).
+   - Confirm dark mode variables under `html.dark`.
+5. **Install Dependencies & Verify Build**:
+   - In `<target_dir>/frontend`, run `pnpm install` (or `npm install`) to install `node_modules`.
+   - Run `pnpm run build` (or `npm run build`) to verify zero TypeScript or JSX compilation errors.
 
 ---
 
@@ -77,7 +90,7 @@ Return a structured JSON payload to the parent orchestrator:
   "dashboard_embedded": "1042",
   "chat_agent_configured": "1042",
   "build_verified": true,
-  "local_dev_command": "npm run dev",
+  "local_dev_command": "cd <target_dir>/frontend && pnpm install && pnpm dev",
   "error": null
 }
 ```

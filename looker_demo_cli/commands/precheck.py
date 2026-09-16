@@ -21,6 +21,7 @@ from looker_demo_cli.output import CommandResult, ErrorDetail, emit
 from looker_demo_cli.precheck.env_checker import (
     RuntimeEnvironmentStatus,
     check_runtime_environment,
+    ensure_gitignore,
     init_workspace_venv,
 )
 from looker_demo_cli.precheck.gcp_auth import (
@@ -174,6 +175,9 @@ def _audit_runtime_environment(fix: bool) -> RuntimeEnvironmentStatus:
     Returns:
         The (possibly post-remediation) runtime status.
     """
+    if fix or (Path.cwd() / ".env").exists():
+        if ensure_gitignore(Path.cwd()):
+            print_info("Verified `.gitignore` covers `.env` and workspace files.")
     env_status = check_runtime_environment()
     if fix and not env_status.is_virtualenv:
         print_info("Fix flag enabled: initializing local workspace virtual environment...")

@@ -1522,3 +1522,20 @@ def test_env_group_with_no_subcommand_shows_help(invoke) -> None:
     assert "Usage:" in result.output
     assert "init" in result.output
     assert "info" in result.output
+
+
+def test_ensure_gitignore_creates_and_updates_gitignore(tmp_path: Path) -> None:
+    """``ensure_gitignore`` creates or appends required `.env` entries idempotently."""
+    from looker_demo_cli.precheck.env_checker import ensure_gitignore
+
+    assert ensure_gitignore(tmp_path) is True
+    gitignore = tmp_path / ".gitignore"
+    assert gitignore.exists()
+    content = gitignore.read_text(encoding="utf-8")
+    assert ".env" in content
+    assert "**/.env" in content
+    assert ".venv/" in content
+    assert ".demo-state.json" in content
+
+    # Second call is idempotent
+    assert ensure_gitignore(tmp_path) is False

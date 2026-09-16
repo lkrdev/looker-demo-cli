@@ -234,4 +234,3 @@ def test_validator_passes_clean_generated_dashboard(generated_dashboard: str) ->
     parsed = yaml.safe_load(generated_dashboard)
     diagnostics = lint_dashboard_structure(parsed)
     assert diagnostics == []
-

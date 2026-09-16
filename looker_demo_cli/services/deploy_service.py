@@ -13,7 +13,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-import requests
+from looker_sdk import models40
 
 from looker_demo_cli.config import (
     DEFAULT_LOOKER_CLIENT_ID,
@@ -21,6 +21,7 @@ from looker_demo_cli.config import (
     DEFAULT_LOOKER_INSTANCE_URL,
 )
 from looker_demo_cli.precheck.looker_auth import get_authenticated_oauth_instances
+from looker_demo_cli.sdk import get_looker_sdk
 from looker_demo_cli.state import FlowState
 from looker_demo_cli.utils.console import print_banner, print_error, print_info, print_success
 
@@ -101,89 +102,37 @@ def deploy_lookml_project(state: FlowState) -> FlowState:
     if active_oauth and active_oauth.get("access_token"):
         headers = {"Authorization": f"Bearer {active_oauth['access_token']}"}
 
+    access_token = active_oauth.get("access_token") if active_oauth else None
+    sdk = get_looker_sdk(base_url=state.looker_instance_url, access_token=access_token)
+
     # 1. Provision Looker project & register LookML model if needed
-    if headers:
+    try:
+        sdk.update_session(models40.WriteApiSession(workspace_id="dev"))
+
         try:
-            # Set dev workspace
-            requests.patch(
-                f"{state.looker_instance_url}/api/4.0/session",
-                json={"workspace_id": "dev"},
-                headers=headers,
-                timeout=10,
+            sdk.project(looker_project)
+        except Exception:
+            print_info(f"Creating Looker project `{looker_project}`...")
+            sdk.create_project(models40.WriteProject(name=looker_project))
+            sdk.update_project(
+                project_id=looker_project,
+                body=models40.WriteProject(git_remote_url=None, git_service_name="bare"),
             )
 
-            # Check / Create project
-            r_proj = requests.get(
-                f"{state.looker_instance_url}/api/4.0/projects/{looker_project}", headers=headers, timeout=10
-            )
-            if r_proj.status_code != 200:
-                print_info(f"Creating Looker project `{looker_project}` via OAuth REST API...")
-                requests.post(
-                    f"{state.looker_instance_url}/api/4.0/projects",
-                    json={"name": looker_project},
-                    headers=headers,
-                    timeout=10,
-                )
-                requests.patch(
-                    f"{state.looker_instance_url}/api/4.0/projects/{looker_project}",
-                    json={"git_remote_url": None, "git_service_name": "bare"},
-                    headers=headers,
-                    timeout=10,
-                )
-
-            # Check / Create model
-            r_mod = requests.get(
-                f"{state.looker_instance_url}/api/4.0/lookml_models/{lookml_model}",
-                headers=headers,
-                timeout=10,
-            )
-            if r_mod.status_code != 200:
-                print_info(f"Registering LookML model `{lookml_model}` via OAuth REST API...")
-                requests.post(
-                    f"{state.looker_instance_url}/api/4.0/lookml_models",
-                    json={
-                        "name": lookml_model,
-                        "project_name": looker_project,
-                        "allowed_db_connection_names": [connection_name],
-                        "unlimited_db_connections": False,
-                    },
-                    headers=headers,
-                    timeout=10,
-                )
-        except Exception as prov_err:
-            print_info(f"OAuth project provisioning note: {prov_err}")
-    else:
         try:
-            import looker_sdk
-            from looker_sdk import models40
-
-            sdk = looker_sdk.init40()
-            sdk.update_session(models40.WriteApiSession(workspace_id="dev"))
-
-            try:
-                sdk.project(looker_project)
-            except Exception:
-                print_info(f"Creating Looker project `{looker_project}`...")
-                sdk.create_project(models40.WriteProject(name=looker_project))
-                sdk.update_project(
-                    project_id=looker_project,
-                    body=models40.WriteProject(git_remote_url=None, git_service_name="bare"),
+            sdk.lookml_model(lookml_model)
+        except Exception:
+            print_info(f"Registering LookML model `{lookml_model}`...")
+            sdk.create_lookml_model(
+                models40.WriteLookmlModel(
+                    name=lookml_model,
+                    project_name=looker_project,
+                    allowed_db_connection_names=[connection_name],
+                    unlimited_db_connections=False,
                 )
-
-            try:
-                sdk.lookml_model(lookml_model)
-            except Exception:
-                print_info(f"Registering LookML model `{lookml_model}`...")
-                sdk.create_lookml_model(
-                    models40.WriteLookmlModel(
-                        name=lookml_model,
-                        project_name=looker_project,
-                        allowed_db_connection_names=[connection_name],
-                        unlimited_db_connections=False,
-                    )
-                )
-        except Exception as prov_err:
-            print_info(f"SDK project provisioning note: {prov_err}")
+            )
+    except Exception as prov_err:
+        print_info(f"Project provisioning note: {prov_err}")
 
     # 1b. Pre-flight Dashboard YAML & Visualization Contract Validation
     from looker_demo_cli.services.validator_service import lint_dashboard_file
@@ -241,13 +190,13 @@ def deploy_lookml_project(state: FlowState) -> FlowState:
         return state
 
     # 2b. Root Duplicate Cleanup Pass: Detect & delete any loose files in root that have views/ or models/ counterparts
-    if headers:
+    try:
         from looker_demo_cli.services.lookml_cleaner import clean_root_duplicate_files
 
         print_info(f"Auditing project `{looker_project}` for orphaned root duplicate files...")
         clean_res = clean_root_duplicate_files(
             project_id=looker_project,
-            headers=headers,
+            headers=headers or None,
             base_url=state.looker_instance_url,
             dry_run=False,
         )
@@ -255,57 +204,31 @@ def deploy_lookml_project(state: FlowState) -> FlowState:
             print_success(
                 f"Sanitized remote workspace: removed {len(clean_res['cleaned_files'])} duplicate root orphan(s)."
             )
+    except Exception:
+        pass
 
     # 3. LookML Validator Gate
     print_info(f"Running LookML Validator on project `{looker_project}`...")
-    if headers:
-        try:
-            r_val = requests.get(
-                f"{state.looker_instance_url}/api/4.0/projects/{looker_project}/validate",
-                headers=headers,
-                timeout=20,
-            )
-            if r_val.status_code == 200:
-                val_data = r_val.json()
-                errors = val_data.get("errors", [])
-                if errors:
-                    print_error(f"LookML validation failed with {len(errors)} error(s):")
-                    for err in errors:
-                        print_error(f" - [{err.get('file_path')}:{err.get('line_number')}] {err.get('message')}")
-                    state.status = "failed"
-                    state.error_message = f"LookML validation failed: {len(errors)} errors"
-                    return state
-                print_success("LookML validator passed cleanly with 0 errors.")
-        except Exception as val_err:
-            print_error(f"Error during LookML validation: {val_err}")
+    try:
+        sdk.update_session(models40.WriteApiSession(workspace_id="dev"))
+        val_results = sdk.validate_project(looker_project)
+        if val_results.errors:
+            print_error(f"LookML validation failed with {len(val_results.errors)} error(s):")
+            for proj_err in val_results.errors:
+                print_error(f" - [{proj_err.file_path}:{proj_err.line_number}] {proj_err.message}")
             state.status = "failed"
-            state.error_message = str(val_err)
+            state.error_message = f"LookML validation failed: {len(val_results.errors)} errors"
             return state
-    else:
-        try:
-            import looker_sdk
-            from looker_sdk import models40
-
-            sdk = looker_sdk.init40()
-            sdk.update_session(models40.WriteApiSession(workspace_id="dev"))
-            val_results = sdk.validate_project(looker_project)
-            if val_results.errors:
-                print_error(f"LookML validation failed with {len(val_results.errors)} error(s):")
-                for err in val_results.errors:
-                    print_error(f" - [{err.file_path}:{err.line_number}] {err.message}")
-                state.status = "failed"
-                state.error_message = f"LookML validation failed: {len(val_results.errors)} errors"
-                return state
-            print_success("LookML validator passed cleanly with 0 errors.")
-        except Exception as val_err:
-            print_error(f"Error during LookML validation: {val_err}")
-            state.status = "failed"
-            state.error_message = str(val_err)
-            return state
+        print_success("LookML validator passed cleanly with 0 errors.")
+    except Exception as val_err:
+        print_error(f"Error during LookML validation: {val_err}")
+        state.status = "failed"
+        state.error_message = str(val_err)
+        return state
 
     # 4. Exhaustive Dashboard Tile Query Verification Gate
     dash_dir = state.lookml_output_dir / "dashboards"
-    if dash_dir.exists() and headers:
+    if dash_dir.exists():
         dash_files = list(dash_dir.glob("*.dashboard.lookml"))
         if dash_files:
             import yaml
@@ -336,28 +259,22 @@ def deploy_lookml_project(state: FlowState) -> FlowState:
                                 if filter_name in dash_filters and target_field not in filters:
                                     filters[target_field] = dash_filters[filter_name]
                             if model and explore and fields:
-                                q_body = {
-                                    "model": model,
-                                    "view": explore,
-                                    "fields": fields,
-                                    "pivots": pivots,
-                                    "filters": filters,
-                                    "limit": "5",
-                                }
-                                resp_q = requests.post(
-                                    f"{state.looker_instance_url}/api/4.0/queries/run/json",
-                                    json=q_body,
-                                    headers=headers,
-                                    timeout=15,
-                                )
-                                if resp_q.status_code != 200:
-                                    print_error(
-                                        f"Dashboard query failed for tile '{title}' ({resp_q.status_code}): {resp_q.text[:200]}"
+                                try:
+                                    sdk.run_inline_query(
+                                        result_format="json",
+                                        body=models40.WriteQuery(
+                                            model=model,
+                                            view=explore,
+                                            fields=fields,
+                                            pivots=pivots,
+                                            filters=filters,
+                                            limit="5",
+                                        ),
                                     )
+                                except Exception as q_err:
+                                    print_error(f"Dashboard query failed for tile '{title}': {q_err}")
                                     state.status = "failed"
-                                    state.error_message = (
-                                        f"Dashboard tile '{title}' failed query validation: {resp_q.text[:200]}"
-                                    )
+                                    state.error_message = f"Dashboard tile '{title}' failed query validation: {q_err}"
                                     return state
                     print_success("All dashboard visualization queries verified successfully (HTTP 200 OK).")
                 except Exception as e:
