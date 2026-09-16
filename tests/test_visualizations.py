@@ -27,6 +27,7 @@ VISUALIZATION_SKILLS = [
     "looker-vis-tabular-kpi",
     "looker-vis-specialty-maps",
     "looker-vis-advanced-config",
+    "lookml-filtered-measures",
 ]
 
 #: Strings that must never ship in a published skill.
@@ -229,8 +230,131 @@ def test_validator_catches_advanced_vis_config_on_unsupported_vis() -> None:
 def test_validator_passes_clean_generated_dashboard(generated_dashboard: str) -> None:
     import yaml
 
-    from looker_demo_cli.services.validator_service import lint_dashboard_structure
+    from looker_demo_cli.services.validator_service import lint_dashboard_structure, lint_dashboard_warnings
 
     parsed = yaml.safe_load(generated_dashboard)
     diagnostics = lint_dashboard_structure(parsed)
     assert diagnostics == []
+    warnings = lint_dashboard_warnings(parsed)
+    assert warnings == []
+
+
+@pytest.mark.unit
+def test_generated_dashboard_includes_executive_polish_defaults(generated_dashboard: str) -> None:
+    """Default dashboard includes theme-inheriting text headers, centered legends, dual-axis, and transparent grids."""
+    assert "type: text" in generated_dashboard
+    assert "title_text:" in generated_dashboard
+    assert "subtitle_text:" in generated_dashboard
+    assert "legend_position: center" in generated_dashboard
+    assert "table_theme: transparent" in generated_dashboard
+    assert "series_cell_visualizations:" in generated_dashboard
+    assert "y_axis_combined: false" in generated_dashboard
+    assert "y_axis_unpinned: true" in generated_dashboard
+
+
+@pytest.mark.unit
+def test_validator_warns_on_non_centered_legends_and_non_transparent_grids() -> None:
+    from looker_demo_cli.services.validator_service import lint_dashboard_warnings
+
+    unpolished_dash = {
+        "dashboard": "unpolished",
+        "title": "Unpolished Dashboard",
+        "elements": [
+            {
+                "title": "Hero Banner",
+                "type": "text",
+                "body_text": '<div style="background: linear-gradient(90deg, #000, #333); color: #fff;">Banner</div>',
+            },
+            {
+                "title": "Right Legend Chart",
+                "type": "looker_area",
+                "legend_position": "right",
+            },
+            {
+                "title": "White Grid",
+                "type": "looker_grid",
+                "table_theme": "white",
+            },
+        ],
+    }
+    warnings = lint_dashboard_warnings(unpolished_dash)
+    assert len(warnings) == 3
+    assert any("hardcoded HTML background/gradient" in w for w in warnings)
+    assert any("legend_position: right" in w for w in warnings)
+    assert any("table_theme: white" in w for w in warnings)
+
+
+@pytest.mark.unit
+def test_filtered_measure_auditor_catches_zero_row_literals_and_passes_valid_expressions(tmp_path: Path) -> None:
+    import pandas as pd
+
+    from looker_demo_cli.services.validator_service import validate_filtered_measures_in_lookml
+
+    # 1. Create a local Parquet dataset with realistic descriptive literals
+    parquet_dir = tmp_path / "scratch"
+    parquet_dir.mkdir(parents=True)
+    df = pd.DataFrame(
+        {
+            "request_id": ["r1", "r2", "r3", "r4"],
+            "status_class": ["2xx Success", "4xx Client Error", "4xx Client Error", "5xx Server Error"],
+            "http_status_code": [200, 404, 429, 503],
+        }
+    )
+    df.to_parquet(parquet_dir / "fct_api_requests.parquet")
+
+    # 2. Write a LookML view containing both broken shorthand filters and valid Looker expressions
+    lookml_dir = tmp_path / "lookml"
+    views_dir = lookml_dir / "views"
+    views_dir.mkdir(parents=True)
+
+    view_lkml = """
+    view: fct_api_requests {
+      sql_table_name: `proj.dataset.fct_api_requests` ;;
+
+      dimension: status_class {
+        type: string
+        sql: ${TABLE}.status_class ;;
+      }
+
+      dimension: http_status_code {
+        type: number
+        sql: ${TABLE}.http_status_code ;;
+      }
+
+      measure: bad_shorthand_2xx {
+        type: count
+        filters: [status_class: "2xx"]
+      }
+
+      measure: valid_exact_2xx {
+        type: count
+        filters: [status_class: "2xx Success"]
+      }
+
+      measure: valid_wildcard_2xx {
+        type: count
+        filters: [status_class: "2xx%"]
+      }
+
+      measure: valid_negation_4xx_excl_429 {
+        type: count
+        filters: [status_class: "4xx Client Error", http_status_code: "-429"]
+      }
+
+      measure: valid_or_list_5xx {
+        type: count
+        filters: [http_status_code: "500, 502, 503, 504"]
+      }
+    }
+    """
+    (views_dir / "fct_api_requests.view.lkml").write_text(view_lkml, encoding="utf-8")
+
+    errors = validate_filtered_measures_in_lookml(
+        lookml_dir=lookml_dir,
+        parquet_dirs=[parquet_dir],
+    )
+
+    assert len(errors) == 1
+    assert "bad_shorthand_2xx" in errors[0]
+    assert 'status_class: "2xx"' in errors[0]
+    assert "2xx Success" in errors[0]

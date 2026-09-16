@@ -30,11 +30,11 @@ class DashboardTabSpec(BaseModel):
 
 
 class DashboardTileSpec(BaseModel):
-    title: str
+    title: str = ""
     name: str | None = None
-    model: str
-    explore: str
-    type: str = "looker_column"  # single_value, looker_area, looker_column, looker_bar, looker_pie, looker_grid, looker_scatter, looker_line
+    model: str | None = None
+    explore: str | None = None
+    type: str = "looker_column"  # text, single_value, looker_area, looker_column, looker_bar, looker_pie, looker_grid, looker_scatter, looker_line
     fields: list[str] = Field(default_factory=list)
     pivots: list[str] = Field(default_factory=list)
     filters: dict[str, str] = Field(default_factory=dict)
@@ -42,15 +42,27 @@ class DashboardTileSpec(BaseModel):
     limit: int | None = None
     listen: dict[str, str] = Field(default_factory=dict)
     tab_name: str | None = None
+    title_text: str | None = None
+    subtitle_text: str | None = None
+    body_text: str | None = None
+    single_value_title: str | None = None
+    show_comparison: bool | None = None
+    comparison_type: str | None = None
+    comparison_label: str | None = None
+    legend_position: str | None = None
+    y_axis_combined: bool | None = None
+    y_axis_unpinned: bool | None = None
     advanced_vis_config: str | None = None
     show_donut: bool | None = None
     inner_radius: int | None = None
     value_labels: str | None = None
     label_type: str | None = None
     table_theme: str | None = None
+    show_view_names: bool | None = None
     show_row_numbers: bool | None = None
     truncate_text: bool | None = None
     size_to_fit: bool | None = None
+    series_cell_visualizations: dict[str, Any] | None = None
     row: int = 0
     col: int = 0
     width: int = 12
@@ -438,7 +450,33 @@ class LookMLGenerator:
 
         lines.append("  elements:")
         for el in spec.elements:
-            tile_name = el.name or el.title
+            tile_name = el.name or el.title or el.title_text or "tile"
+            if el.type == "text":
+                lines.extend(
+                    [
+                        f'  - name: "{tile_name}"',
+                        "    type: text",
+                    ]
+                )
+                if el.title_text is not None:
+                    lines.append(f'    title_text: "{el.title_text}"')
+                if el.subtitle_text is not None:
+                    lines.append(f'    subtitle_text: "{el.subtitle_text}"')
+                if el.body_text is not None:
+                    lines.append(f'    body_text: "{el.body_text}"')
+                if el.tab_name:
+                    lines.append(f'    tab_name: "{el.tab_name}"')
+                lines.extend(
+                    [
+                        f"    row: {el.row}",
+                        f"    col: {el.col}",
+                        f"    width: {el.width}",
+                        f"    height: {el.height}",
+                        "",
+                    ]
+                )
+                continue
+
             lines.extend(
                 [
                     f'  - title: "{el.title}"',
@@ -455,6 +493,20 @@ class LookMLGenerator:
                 lines.append(f"    sorts: [{', '.join(el.sorts)}]")
             if el.limit:
                 lines.append(f"    limit: {el.limit}")
+            if el.single_value_title:
+                lines.append(f'    single_value_title: "{el.single_value_title}"')
+            if el.show_comparison is not None:
+                lines.append(f"    show_comparison: {'true' if el.show_comparison else 'false'}")
+            if el.comparison_type:
+                lines.append(f"    comparison_type: {el.comparison_type}")
+            if el.comparison_label:
+                lines.append(f'    comparison_label: "{el.comparison_label}"')
+            if el.legend_position:
+                lines.append(f"    legend_position: {el.legend_position}")
+            if el.y_axis_combined is not None:
+                lines.append(f"    y_axis_combined: {'true' if el.y_axis_combined else 'false'}")
+            if el.y_axis_unpinned is not None:
+                lines.append(f"    y_axis_unpinned: {'true' if el.y_axis_unpinned else 'false'}")
             if el.value_labels:
                 lines.append(f"    value_labels: {el.value_labels}")
             if el.label_type:
@@ -465,12 +517,22 @@ class LookMLGenerator:
                 lines.append(f"    inner_radius: {el.inner_radius}")
             if el.table_theme:
                 lines.append(f"    table_theme: {el.table_theme}")
+            if el.show_view_names is not None:
+                lines.append(f"    show_view_names: {'true' if el.show_view_names else 'false'}")
             if el.show_row_numbers is not None:
                 lines.append(f"    show_row_numbers: {'true' if el.show_row_numbers else 'false'}")
             if el.truncate_text is not None:
                 lines.append(f"    truncate_text: {'true' if el.truncate_text else 'false'}")
             if el.size_to_fit is not None:
                 lines.append(f"    size_to_fit: {'true' if el.size_to_fit else 'false'}")
+            if el.series_cell_visualizations:
+                lines.append("    series_cell_visualizations:")
+                for field_key, cfg in el.series_cell_visualizations.items():
+                    lines.append(f"      {field_key}:")
+                    if isinstance(cfg, dict):
+                        for k, v in cfg.items():
+                            val_str = "true" if v is True else ("false" if v is False else str(v))
+                            lines.append(f"        {k}: {val_str}")
             if el.tab_name:
                 lines.append(f'    tab_name: "{el.tab_name}"')
             if el.advanced_vis_config:
@@ -492,7 +554,7 @@ class LookMLGenerator:
         return "\n".join(lines)
 
     def generate_default_dashboard_lkml(self, model_name: str, tables: list[LookMLTableSpec]) -> str:
-        """Generate a flexible dynamic LookML dashboard adapted to the available tables."""
+        """Generate an Executive-Polished dynamic LookML dashboard adapted to the available tables."""
         fact_tables = [t for t in tables if t.table_type == "fact"] or tables
         primary_fact = fact_tables[0]
         dim_tables = [t for t in tables if t.table_type == "dimension" and t.table_name != primary_fact.table_name]
@@ -556,64 +618,106 @@ class LookMLGenerator:
             filters.append(DashboardFilterSpec(name="Date Range", title="Date Range", default_value="365 days"))
             listen_map = {"Date Range": date_filter_target}
 
-        elements = [
+        primary_metric_field = (
+            f"{primary_fact.table_name}.total_{kpi_1}" if kpi_1 != "count" else f"{primary_fact.table_name}.count"
+        )
+        secondary_metric_field = (
+            f"{primary_fact.table_name}.average_{kpi_2}" if kpi_2 != "count" else f"{primary_fact.table_name}.count"
+        )
+        volume_field = f"{primary_fact.table_name}.count"
+
+        elements: list[DashboardTileSpec] = [
+            # Tab 1: Executive Pulse Section Header (Theme-Inheriting Typography)
             DashboardTileSpec(
-                title=f"Total {self._format_label(kpi_1)}",
-                model=model_name,
-                explore=primary_fact.table_name,
-                type="single_value",
-                fields=[f"{primary_fact.table_name}.total_{kpi_1 if kpi_1 != 'count' else 'count'}"],
+                name="executive_pulse_header",
+                type="text",
+                title_text=f"{title_display} — Executive Pulse",
+                subtitle_text="Headline operational KPIs, dual-axis volume trajectory, and proportional distribution",
                 tab_name="Executive Pulse",
                 row=0,
                 col=0,
-                width=6,
+                width=24,
+                height=2,
+            ),
+            DashboardTileSpec(
+                title=f"Total {self._format_label(kpi_1)}",
+                single_value_title=f"Total {self._format_label(kpi_1)}",
+                model=model_name,
+                explore=primary_fact.table_name,
+                type="single_value",
+                fields=[primary_metric_field],
+                tab_name="Executive Pulse",
+                row=2,
+                col=0,
+                width=8,
                 height=4,
                 listen=listen_map,
             ),
             DashboardTileSpec(
                 title=f"Average {self._format_label(kpi_2)}",
+                single_value_title=f"Average {self._format_label(kpi_2)}",
                 model=model_name,
                 explore=primary_fact.table_name,
                 type="single_value",
-                fields=[f"{primary_fact.table_name}.average_{kpi_2 if kpi_2 != 'count' else 'count'}"],
+                fields=[secondary_metric_field],
                 tab_name="Executive Pulse",
-                row=0,
-                col=6,
-                width=6,
+                row=2,
+                col=8,
+                width=8,
                 height=4,
                 listen=listen_map,
             ),
             DashboardTileSpec(
                 title=f"Total {self._format_label(primary_fact.table_name)} Volume",
+                single_value_title=f"Total {self._format_label(primary_fact.table_name)} Volume",
                 model=model_name,
                 explore=primary_fact.table_name,
                 type="single_value",
-                fields=[f"{primary_fact.table_name}.count"],
+                fields=[volume_field],
                 tab_name="Executive Pulse",
-                row=0,
-                col=12,
-                width=6,
+                row=2,
+                col=16,
+                width=8,
                 height=4,
                 listen=listen_map,
             ),
         ]
 
         if month_timeline:
+            # Dual-Axis Timeline with Independent Y-Axis Ranges & Explicit Numeric Label Formatting
+            timeline_fields = [month_timeline, primary_metric_field]
+            if primary_metric_field != volume_field:
+                timeline_fields.append(volume_field)
+                dual_axis_config = (
+                    '{"chart": {"borderRadius": 8}, '
+                    '"legend": {"align": "center", "verticalAlign": "bottom"}, '
+                    f'"yAxis": [{{"title": {{"text": "{self._format_label(kpi_1)}"}}, "labels": {{"format": "${{value:,.0f}}"}}}}, '
+                    '{"title": {"text": "Volume Count"}, "opposite": true, "labels": {"format": "{value:,.0f}"}}]}'
+                )
+                is_dual = True
+            else:
+                dual_axis_config = (
+                    '{"chart": {"borderRadius": 8}, '
+                    '"legend": {"align": "center", "verticalAlign": "bottom"}, '
+                    '"yAxis": [{"title": {"text": "Volume Count"}, "labels": {"format": "{value:,.0f}"}}]}'
+                )
+                is_dual = False
+
             elements.append(
                 DashboardTileSpec(
-                    title=f"Monthly {self._format_label(kpi_1)} Trajectory",
+                    title=f"Monthly {self._format_label(kpi_1)} & Volume Trajectory",
                     model=model_name,
                     explore=primary_fact.table_name,
                     type="looker_area",
-                    fields=[
-                        month_timeline,
-                        f"{primary_fact.table_name}.total_{kpi_1 if kpi_1 != 'count' else 'count'}",
-                    ],
+                    fields=timeline_fields,
                     sorts=[f"{month_timeline} asc"],
                     limit=500,
+                    legend_position="center",
+                    y_axis_combined=False if is_dual else None,
+                    y_axis_unpinned=True if is_dual else None,
                     tab_name="Executive Pulse",
-                    advanced_vis_config='{"chart": {"borderRadius": 8}}',
-                    row=4,
+                    advanced_vis_config=dual_axis_config,
+                    row=6,
                     col=0,
                     width=14,
                     height=8,
@@ -628,19 +732,33 @@ class LookMLGenerator:
                     model=model_name,
                     explore=primary_fact.table_name,
                     type="looker_pie",
-                    fields=[f"{primary_fact.table_name}.{cat_1}", f"{primary_fact.table_name}.count"],
-                    sorts=[f"{primary_fact.table_name}.count desc"],
+                    fields=[f"{primary_fact.table_name}.{cat_1}", volume_field],
+                    sorts=[f"{volume_field} desc"],
                     limit=6,
+                    legend_position="center",
                     value_labels="legend",
                     label_type="labPer",
                     show_donut=True,
                     inner_radius=50,
                     tab_name="Executive Pulse",
-                    row=4,
-                    col=14,
-                    width=10,
+                    advanced_vis_config='{"chart": {"borderRadius": 8}, "legend": {"align": "center", "verticalAlign": "bottom"}}',
+                    row=6 if month_timeline else 2,
+                    col=14 if month_timeline else 0,
+                    width=10 if month_timeline else 24,
                     height=8,
                     listen=listen_map,
+                ),
+                # Tab 2: Entity Breakdown Section Header
+                DashboardTileSpec(
+                    name="entity_breakdown_header",
+                    type="text",
+                    title_text=f"{title_display} — Entity & Segment Breakdown",
+                    subtitle_text="Comparative performance across categorical segments and transparent audit grid",
+                    tab_name="Entity Breakdown",
+                    row=0,
+                    col=0,
+                    width=24,
+                    height=2,
                 ),
                 DashboardTileSpec(
                     title=f"Performance by {self._format_label(cat_2)}",
@@ -649,14 +767,15 @@ class LookMLGenerator:
                     type="looker_bar",
                     fields=[
                         f"{primary_fact.table_name}.{cat_2}",
-                        f"{primary_fact.table_name}.total_{kpi_1 if kpi_1 != 'count' else 'count'}",
-                        f"{primary_fact.table_name}.count",
+                        primary_metric_field,
+                        volume_field,
                     ],
-                    sorts=[f"{primary_fact.table_name}.total_{kpi_1 if kpi_1 != 'count' else 'count'} desc"],
+                    sorts=[f"{primary_metric_field} desc"],
                     limit=15,
+                    legend_position="center",
                     tab_name="Entity Breakdown",
-                    advanced_vis_config='{"chart": {"borderRadius": 8}, "plotOptions": {"series": {"borderRadius": 4}}}',
-                    row=0,
+                    advanced_vis_config='{"chart": {"borderRadius": 8}, "legend": {"align": "center", "verticalAlign": "bottom"}, "plotOptions": {"series": {"borderRadius": 4}}}',
+                    row=2,
                     col=0,
                     width=12,
                     height=8,
@@ -669,34 +788,49 @@ class LookMLGenerator:
                     type="looker_grid",
                     fields=[
                         f"{primary_fact.table_name}.{cat_1}",
-                        f"{primary_fact.table_name}.count",
-                        f"{primary_fact.table_name}.total_{kpi_1 if kpi_1 != 'count' else 'count'}",
-                        f"{primary_fact.table_name}.average_{kpi_2 if kpi_2 != 'count' else 'count'}",
+                        volume_field,
+                        primary_metric_field,
+                        secondary_metric_field,
                     ],
-                    sorts=[f"{primary_fact.table_name}.count desc"],
+                    sorts=[f"{volume_field} desc"],
                     limit=50,
-                    table_theme="modern",
+                    table_theme="transparent",
+                    show_view_names=False,
                     show_row_numbers=True,
                     truncate_text=True,
                     size_to_fit=True,
+                    series_cell_visualizations={volume_field: {"is_active": True}},
                     tab_name="Entity Breakdown",
-                    row=0,
+                    row=2,
                     col=12,
                     width=12,
                     height=8,
                     listen=listen_map,
+                ),
+                # Tab 3: Operational Health Section Header
+                DashboardTileSpec(
+                    name="operational_health_header",
+                    type="text",
+                    title_text=f"{title_display} — Operational Health & Diagnostics",
+                    subtitle_text="Systemic volume concentration, throughput metrics, and diagnostic breakdown",
+                    tab_name="Operational Health",
+                    row=0,
+                    col=0,
+                    width=24,
+                    height=2,
                 ),
                 DashboardTileSpec(
                     title=f"Volume Concentration by {self._format_label(cat_1)}",
                     model=model_name,
                     explore=primary_fact.table_name,
                     type="looker_column",
-                    fields=[f"{primary_fact.table_name}.{cat_1}", f"{primary_fact.table_name}.count"],
-                    sorts=[f"{primary_fact.table_name}.count desc"],
+                    fields=[f"{primary_fact.table_name}.{cat_1}", volume_field],
+                    sorts=[f"{volume_field} desc"],
                     limit=20,
+                    legend_position="center",
                     tab_name="Operational Health",
-                    advanced_vis_config='{"chart": {"borderRadius": 8}, "plotOptions": {"series": {"borderRadius": 4}}}',
-                    row=0,
+                    advanced_vis_config='{"chart": {"borderRadius": 8}, "legend": {"align": "center", "verticalAlign": "bottom"}, "plotOptions": {"series": {"borderRadius": 4}}}',
+                    row=2,
                     col=0,
                     width=24,
                     height=8,

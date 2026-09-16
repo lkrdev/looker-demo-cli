@@ -77,6 +77,7 @@ INTENT_SKILL_DEFINITIONS: dict[str, dict[str, tuple[str, str]]] = {
         "lookml-tests": ("looker-embed-demo", "lookml-tests"),
         "embed-themes": ("looker-embed-demo", "embed-themes"),
         "lookml-snowflake-modeler": ("local_cli", "lookml-snowflake-modeler"),
+        "lookml-filtered-measures": ("local_cli", "lookml-filtered-measures"),
         "looker-visualizations": ("local_cli", "looker-visualizations"),
         "looker-vis-cartesian": ("local_cli", "looker-visualizations/looker-vis-cartesian"),
         "looker-vis-tabular-kpi": ("local_cli", "looker-visualizations/looker-vis-tabular-kpi"),

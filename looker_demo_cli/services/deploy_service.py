@@ -23,7 +23,7 @@ from looker_demo_cli.config import (
 from looker_demo_cli.precheck.looker_auth import get_authenticated_oauth_instances
 from looker_demo_cli.sdk import get_looker_sdk
 from looker_demo_cli.state import FlowState
-from looker_demo_cli.utils.console import print_banner, print_error, print_info, print_success
+from looker_demo_cli.utils.console import print_banner, print_error, print_info, print_success, print_warning
 
 
 def deploy_lookml_project(state: FlowState) -> FlowState:
@@ -134,22 +134,43 @@ def deploy_lookml_project(state: FlowState) -> FlowState:
     except Exception as prov_err:
         print_info(f"Project provisioning note: {prov_err}")
 
-    # 1b. Pre-flight Dashboard YAML & Visualization Contract Validation
-    from looker_demo_cli.services.validator_service import lint_dashboard_file
+    # 1b. Pre-flight Dashboard YAML, Visualization Contract & Filtered Measure Validation
+    from looker_demo_cli.services.validator_service import (
+        lint_dashboard_file,
+        lint_dashboard_file_warnings,
+        validate_filtered_measures_in_lookml,
+    )
 
     dashboard_files = list(state.lookml_output_dir.glob("**/*.dashboard.lookml"))
     preflight_errors = []
+    preflight_warnings = []
     for df in dashboard_files:
         lint_errs = lint_dashboard_file(df)
         if lint_errs:
             preflight_errors.extend(lint_errs)
+        lint_warns = lint_dashboard_file_warnings(df)
+        if lint_warns:
+            preflight_warnings.extend(lint_warns)
+
+    if preflight_warnings:
+        print_warning(f"Local pre-push audit noted {len(preflight_warnings)} dashboard polish recommendation(s):")
+        for warn in preflight_warnings:
+            print_warning(f"  • {warn}")
+
+    # Validate filtered measure literals against Parquet / BigQuery data
+    fm_errors = validate_filtered_measures_in_lookml(
+        lookml_dir=state.lookml_output_dir,
+        gcp_project=state.gcp_project_id,
+    )
+    if fm_errors:
+        preflight_errors.extend(fm_errors)
 
     if preflight_errors:
-        print_error(f"Local pre-push validation detected {len(preflight_errors)} dashboard issue(s):")
+        print_error(f"Local pre-push validation detected {len(preflight_errors)} LookML issue(s):")
         for err in preflight_errors:
             print_error(f"  • {err}")
         state.status = "failed"
-        state.error_message = f"Pre-push dashboard validation error: {preflight_errors[0]}"
+        state.error_message = f"Pre-push LookML validation error: {preflight_errors[0]}"
         return state
 
     # 2. Synchronize LookML to Dev Branch via lkr CLI

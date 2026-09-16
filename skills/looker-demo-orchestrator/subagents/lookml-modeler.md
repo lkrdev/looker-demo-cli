@@ -17,6 +17,7 @@ skills:
   - lookml-explore
   - lookml-model
   - lookml-fields
+  - lookml-filtered-measures
 ---
 
 # Role: General LookML Semantic Modeler (Front-Door Triage)
@@ -96,6 +97,7 @@ Evaluate the `table_specs` relational graph:
    - Explicit `label:` and `description:` on EVERY dimension, dimension group, and measure.
    - Built-in Google Cloud performance: `suggestable: no` on PKs, FKs, UUIDs, and timestamps.
    - Formatted primary metrics (`type: sum`, `type: average`, `type: count_distinct`) with `value_format_name:` (e.g. `usd_0`, `percent_2`, `decimal_1`).
+   - **Mandatory `SELECT DISTINCT` Grounding for Filtered Measures ([`lookml-filtered-measures`](../../lookml-filtered-measures/SKILL.md))**: Before authoring any `filters: [dim: "val"]` block inside a measure, you **MUST** inspect the actual distinct values in the local Parquet file or run `SELECT DISTINCT dim FROM table` in BigQuery. Never guess shorthand filter literals (`"2xx"`, `"active"`). For derived ratio measures (`type: number`), always guard against division by zero using `SAFE_DIVIDE(${num}, NULLIF(${den}, 0))`.
    - Drill fields (`drill_fields: [...]`) on primary measures.
    - Clean Title Case labels (e.g. `label: "Order Created Date"`).
 
