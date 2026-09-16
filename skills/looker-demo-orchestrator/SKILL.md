@@ -25,20 +25,24 @@ graph TD
     Phase1 -->|Co-Design Phase 2| Phase2["Orchestrator: Micro-Sample Preview<br/>(5-10 Sample Rows in Chat)"]
     Phase2 --> Gate1{"Human Gate 1: Scale & Volume Confirmation<br/>(ask_question)"}
     Gate1 -->|Fast-Path CLI| GenBQ["Orchestrator: Batch Synthesis & BQ Upload<br/>(demo-create data generate + upload)"]
-    GenBQ --> ModelCLI["Gate 2: Semantic Modeling<br/>(demo-create lookml model)"]
+    GenBQ --> ModelCLI["Gate 2A: Semantic Modeling & SELECT DISTINCT Grounding<br/>(demo-create lookml model + lookml-filtered-measures)"]
     ModelCLI --> SnowflakeBranch{"Is Schema 3NF Snowflake<br/>with Chasm Traps?"}
-    SnowflakeBranch -->|Yes: Spawn On-Demand Subagent| S_Snowflake["On-Demand Subagent: lookml-snowflake-modeler<br/>(NDT Rollups & Chasm Trap Elimination)"]
-    SnowflakeBranch -->|No: Standard Star Schema| CleanRoot["Gate 3A: Clean Root Orphan Duplicates<br/>(demo-create lookml clean-root)"]
-    S_Snowflake --> CleanRoot
+    SnowflakeBranch -->|Yes: Spawn Subagent| S_Snowflake["Subagent: lookml-snowflake-modeler<br/>(NDT Rollups & Chasm Trap Elimination)"]
+    SnowflakeBranch -->|No: Standard Star Schema| DashDesign["Gate 2B: Mandatory Dashboard Polish<br/>(lookml-dashboard-designer 3-Pass Protocol)"]
+    S_Snowflake --> DashDesign
+    DashDesign --> CleanRoot["Gate 3A: Clean Root Orphan Duplicates<br/>(demo-create lookml clean-root)"]
     CleanRoot --> GateOpt{"Gate 3B: Run Performance Optimizer?<br/>(Guarded ask_question)"}
     GateOpt -->|Yes: Confirmed| OptCLI["Orchestrator: Performance Optimizer<br/>(demo-create lookml optimize --backup)"]
-    GateOpt -->|No: Skipped| DeployCLI["Gate 3C: Pre-Deployment QA & Release<br/>(demo-create lookml deploy)"]
+    GateOpt -->|No: Skipped| DeployCLI["Gate 3C: Pre-Deployment QA & Release<br/>(demo-create lookml deploy + Filtered Measure Auditor)"]
     OptCLI --> DeployCLI
     DeployCLI --> QAStatus{"LookML & Query Validation<br/>Passed 100%?"}
-    QAStatus -->|Fail: Spawn On-Demand Subagent| S_QA["On-Demand Subagent: lookml-qa-validator<br/>(Max 3 Self-Healing Loops)"]
+    QAStatus -->|Fail: Spawn Subagent| S_QA["Subagent: lookml-qa-validator<br/>(Max 3 Self-Healing Loops)"]
     S_QA -->|Certified Ready| DeployProd["Orchestrator: Production Release<br/>(lkr tools lookml deploy)"]
     QAStatus -->|Pass 100%| DeployProd
-    DeployProd --> GateCA{"Human Gate 4: Provision CA Agent?<br/>(ask_question)"}
+    DeployProd --> GateCritique{"Gate 3D: Post-Deploy Screenshot Critique<br/>(ask_question: Approve or Share Screenshot)"}
+    GateCritique -->|User Shares Screenshot| Pass3Refine["Pass 3 Visual Critique & Refinement<br/>(view_file -> Refine LookML -> Redeploy)"]
+    Pass3Refine --> GateCritique
+    GateCritique -->|Approved| GateCA{"Human Gate 4: Provision CA Agent?<br/>(ask_question)"}
     GateCA -->|Yes| CA_CLI["Orchestrator: CA Agent & Golden Queries<br/>(demo-create agent create)"]
     GateCA -->|No| DeliveryReport["Orchestrator: Final Delivery Report<br/>(DELIVERY_REPORT.md)"]
     CA_CLI --> GateGE{"Human Gate 5: Publish to Gemini Enterprise?<br/>(ask_question)"}
@@ -49,11 +53,12 @@ graph TD
 
 | Component | Execution Mode | Responsibility & Scope |
 |---|---|---|
-| **Parent Orchestrator** | Direct Parent Turn | Interactive co-design gates (`ask_question`), fast CLI subcommands (`demo-create data`, `lookml model`, `lookml optimize`, `lookml deploy`, `agent create`), state machine, and final delivery report. |
+| **Parent Orchestrator** | Direct Parent Turn | Interactive co-design gates (`ask_question`), fast CLI subcommands (`demo-create data`, `lookml model`, `lookml optimize`, `lookml deploy`, `agent create`), state machine, post-deploy screenshot critique loop, and final delivery report. |
 | [`demo-spec`](../demo-spec/SKILL.md) | **Companion Core Skill** | Asynchronously creates and maintains `SPEC.md` as the living technical architecture document across all gates, updating quietly on disk without chat dumping. |
+| [`lookml-filtered-measures`](../lookml-filtered-measures/SKILL.md) | **Companion Core Skill** | Enforces mandatory `SELECT DISTINCT` grounding before writing any `filters: [...]` in LookML measures, preventing `0`/`NULL` ratios. |
 | [`data-engineer`](subagents/data-engineer.md) | **On-Demand Subagent** | Synthesizes full-volume Parquet datasets via local subagent-authored Python (zero Vertex AI dependency) and loads tables into BigQuery. |
 | [`lookml-snowflake-modeler`](subagents/lookml-snowflake-modeler.md) | **On-Demand Subagent** | Spawned ONLY when schemas contain complex 3NF snowflake structures with Chasm Traps (multiple 1:N children), diamond joins, or require Native Derived Table (NDT) rollups. |
-| [`lookml-dashboard-designer`](subagents/lookml-dashboard-designer.md) | **On-Demand Subagent** | Authors executive tabbed dashboards grounded in staged explores/views using the [`looker-visualizations`](../looker-visualizations/SKILL.md) suite. |
+| [`lookml-dashboard-designer`](subagents/lookml-dashboard-designer.md) | **Mandatory Gate 2 Subagent** | Executes the 3-Pass Executive Dashboard Polish protocol (theme-inheriting `type: text` headers, centered legends, independent dual-axis formatting, transparent grids, and screenshot critique). |
 | [`lookml-qa-validator`](subagents/lookml-qa-validator.md) | **On-Demand Subagent** | Spawned ONLY when `demo-create lookml deploy` encounters validation errors or failing queries; runs up to 3 self-healing loops via `lookml-dashboard-to-query`. |
 | [`embed-portal-engineer`](subagents/embed-portal-engineer.md) | **On-Demand Subagent** | Spawned ONLY if external embed demo portal is requested by user. |
 
@@ -284,14 +289,14 @@ create_lookml_model(body={
 
 ## 4. LookML Quality Standards & 4-Stage Semantic Pipeline
 
-### A. Semantic Modeling & Triage (Delegate to Modeler Subagent)
+### A. Semantic Modeling, Triage & Filtered Measure Grounding (Delegate to Modeler Subagent)
 
 Delegate semantic modeling to the front-door **[`lookml-modeler`](subagents/lookml-modeler.md)** subagent:
 
 ```yaml
 subagent:
   type: "skills/looker-demo-orchestrator/subagents/lookml-modeler.md"
-  prompt: "Model LookML views, explores, and measures for {project_name}. If normalized 3NF structures with Chasm Traps or diamond joins exist, delegate to lookml-snowflake-modeler."
+  prompt: "Model LookML views, explores, and measures for {project_name}. Enforce mandatory SELECT DISTINCT grounding via lookml-filtered-measures before writing any filters: [...] blocks. If normalized 3NF structures with Chasm Traps or diamond joins exist, delegate to lookml-snowflake-modeler."
   inputs:
     project_name: "{looker_project_name}"
     connection_name: "{looker_connection_name}"
@@ -303,6 +308,7 @@ subagent:
 - **Triage Protocol**:
   - **Existing BigQuery Dataset & Knowledge Catalog**: If modeling from an existing dataset (`dataset_id` provided or running `demo-create lookml model --dataset <id>`), introspect BigQuery table schema, primary/foreign key constraints (`INFORMATION_SCHEMA.TABLE_CONSTRAINTS`), and Google Cloud Data Catalog / Dataplex metadata (`@bigquery` entry group). If the `knowledge-catalog` MCP server is installed, invoke it to retrieve business glossaries and column tags to enrich LookML descriptions.
   - **Standard / Star Schemas**: `lookml-modeler` writes `.view.lkml`, primary keys, formatted measures (`usd_0`, `percent_2`, `decimal_1`), drill fields, and `.explore.lkml` directly.
+  - **Mandatory `SELECT DISTINCT` Grounding ([`lookml-filtered-measures`](../lookml-filtered-measures/SKILL.md))**: Never guess categorical filter strings (e.g., `"2xx"`, `"active"`). Before writing any `filters: [...]` block inside a measure, inspect the actual distinct values in the local Parquet file or run `SELECT DISTINCT` against BigQuery so filtered measures and derived ratios (`SAFE_DIVIDE(${num}, NULLIF(${den}, 0))`) never evaluate to `0` or `NULL`.
   - **Normalized 3NF / Snowflake Schemas**: If multiple 1:N child collections or diamond joins are detected, hand off to **[`lookml-snowflake-modeler`](subagents/lookml-snowflake-modeler.md)**:
     - Runs `schema_graph_analyzer.py` on the schema DAG.
     - Sets Explore Base Views on leaf event facts ($d_{\text{in}} = 0$).
@@ -312,14 +318,14 @@ subagent:
 
 ---
 
-### B. Executive Tabbed Dashboard Authoring (Delegate to Dashboard Designer Subagent)
+### B. Mandatory Executive Dashboard Polish (Delegate to Dashboard Designer Subagent)
 
-Delegate dashboard creation to the dedicated **[`lookml-dashboard-designer`](subagents/lookml-dashboard-designer.md)** subagent, powered by the **[`looker-visualizations`](../looker-visualizations/SKILL.md)** suite:
+After `demo-create lookml model` scaffolds the baseline LookML project, **automatically delegate dashboard polish and domain customization** to the **[`lookml-dashboard-designer`](subagents/lookml-dashboard-designer.md)** subagent executing the **3-Pass Iterative Design & Screenshot Critique Protocol**:
 
 ```yaml
 subagent:
   type: "skills/looker-demo-orchestrator/subagents/lookml-dashboard-designer.md"
-  prompt: "Author pixel-perfect, executive-ready tabbed dashboard for {project_name} grounded strictly in staged explores and views. Use looker-visualizations suite (looker-vis-cartesian, looker-vis-tabular-kpi, looker-vis-specialty-maps, looker-vis-advanced-config) to select optimal chart archetypes, enforce query shape constraints, and apply valid Highcharts advanced_vis_config styling. Include KPI stat banners, dual-axis timelines, cross-filtering, and popovers."
+  prompt: "Execute the 3-Pass Executive Dashboard Polish protocol for {project_name} grounded strictly in staged explores and views. Enforce: (1) Theme-inheriting type: text section headers (no hardcoded HTML background gradients), (2) Centered legends (legend_position: center), (3) Dual-axis charts with independent value ranges (y_axis_combined: false, y_axis_unpinned: true) and explicit numeric axis label formatting, and (4) Transparent data grids (table_theme: transparent) with inline cell visualizations."
   inputs:
     project_name: "{looker_project_name}"
     model_name: "{looker_model_name}"
@@ -328,15 +334,14 @@ subagent:
     domain_theme: "{domain_theme}"
 ```
 
-- **Strict Explore-Grounded Authoring**: Inspects staged `explores/*.explore.lkml` and `views/*.view.lkml` files to discover available dimensions and measures (NEVER invents fields).
-- **Visualization Hub & Decision Rules**: Consults [`looker-visualizations`](../looker-visualizations/SKILL.md) to match data intent to optimal visual archetypes:
-  - **KPI Scorecards & Data Grids**: [`looker-vis-tabular-kpi`](../looker-visualizations/looker-vis-tabular-kpi/SKILL.md) for `single_value` stat banners with change comparisons and sparklines, plus `looker_grid` with `table_theme: modern` for audit logs.
-  - **Timelines & Dual-Axis Series**: [`looker-vis-cartesian`](../looker-visualizations/looker-vis-cartesian/SKILL.md) for volume trajectory timelines, ranked horizontal bars, and clustered columns.
-  - **Distributions & Flows**: [`looker-vis-specialty-maps`](../looker-visualizations/looker-vis-specialty-maps/SKILL.md) for donut share breakdowns (`type: looker_pie` with `show_donut: true`, `inner_radius: 50`, `limit <= 6`, `value_labels: legend`, `label_type: labPer`; NEVER use `looker_donut_multiples` for single-measure breakdowns), funnels, sankey diagrams, and maps.
-  - **Highcharts Styling (`advanced_vis_config`)**: [`looker-vis-advanced-config`](../looker-visualizations/looker-vis-advanced-config/SKILL.md) for rounded geometry (`borderRadius: 8`, `plotOptions.series.borderRadius: 4`) with strictly valid double-quoted JSON on supported chart types only (never `single_value` or tables), never raw JavaScript functions or `formatter:` spelling errors.
-- **Tabbed Architecture**: Modern 2–4 tab operational command center (e.g. *Executive Overview*, *Operations Deep Dive*, *Alerts & Exceptions*).
-- **Visual Standards**: Universal cross-filtering (use `crossfilter_enabled: true` at dashboard root; NEVER use deprecated root `crossfilter: true`) and double-quoted YAML strings (`title: "..."`).
-- **Pre-Push Visual Linter**: `demo-create lookml deploy` automatically executes static visualization contract validation on all `*.dashboard.lookml` files before pushing to Looker.
+- **Pass 1 (Explore-Grounded Architecture & Distinct Value Discovery)**: Inspects staged `explores/*.explore.lkml` and `views/*.view.lkml` files (never invents fields) and runs `SELECT DISTINCT` on categorical dimensions used in custom `series_colors:` so color keys match exact data literals.
+- **Pass 2 (Executive Visual Polish Standards)**:
+  - **Theme-Inheriting Section Headers**: Native `type: text` tiles (`row: 0, width: 24, height: 2`) at the top of each tab using `title_text` and `subtitle_text` without hardcoded HTML background gradients or fixed hex text colors.
+  - **KPI Scorecards**: `single_value` stat banners (`row: 2, height: 4`) with `single_value_title` and change comparisons (`show_comparison: true`). Never attach `advanced_vis_config` to `single_value` tiles.
+  - **Centered Legends**: Every chart with a legend (`looker_area`, `looker_column`, `looker_bar`, `looker_line`, `looker_pie`) explicitly sets `legend_position: center` and `"legend": {"align": "center", "verticalAlign": "bottom"}` in `advanced_vis_config`.
+  - **Independent Dual-Axis Ranges & Numeric Formatting**: Dual-axis charts set `y_axis_combined: false`, `y_axis_unpinned: true`, and map series to independent left/right axes with explicit numeric format strings (`"${value:,.0f}"`, `"{value:,.0f}"`, `"{value:.1f} ms"`, `"{value:.1f}%"`).
+  - **Transparent Data Grids**: `looker_grid` tiles set `table_theme: transparent`, `show_view_names: false`, and inline `series_cell_visualizations` bars on primary measures.
+- **Pre-Push Visual & Filtered Measure Auditor**: `demo-create lookml deploy` automatically executes static visualization contract checks, Executive Polish warnings, and the **Filtered Measure Distinct-Value Auditor** against local Parquet/BigQuery before pushing to Looker.
 
 ---
 
@@ -376,11 +381,11 @@ subagent:
 ### D. Mandatory Pre-Deployment Validation Gate (CLI Fast-Path with On-Demand QA Healing)
 
 1. **Direct Fast-Path Deploy & Query Test**:
-   Execute dev push, project validator, and dashboard query verification directly in the parent session:
+   Execute pre-flight filtered measure audit, dev push, project validator, and dashboard query verification directly in the parent session:
    ```bash
    demo-create lookml deploy --looker-project <looker_project_name> --lookml-dir <lookml_dir> --looker-account <oauth_account>
    ```
-   If all LookML checks and dashboard query tests return 100% HTTP 200 OK, the CLI automatically deploys to production and updates state.
+   If all LookML checks, filtered measure distinct-value checks, and dashboard query tests return 100% HTTP 200 OK, the CLI automatically deploys to production and outputs the live dashboard URL.
 
 2. **On-Demand QA Healing Subagent (Triggered ONLY on Validation / Query Failure)**:
    If validation fails or any dashboard query encounters an error, spawn the **[`lookml-qa-validator`](subagents/lookml-qa-validator.md)** subagent:
@@ -414,6 +419,23 @@ graph LR
 > ```bash
 > lkr --oauth-account=<oauth_account> tools lookml deploy --project=<project_name>
 > ```
+
+---
+
+### E. Interactive Post-Deploy Screenshot Critique Checkpoint (Pass 3 Visual Critique)
+
+Immediately after `demo-create lookml deploy` succeeds and outputs the live Looker dashboard URL, the orchestrator **MUST present the URL in chat and pause with `ask_question`** before advancing to Gate 4 (`gate_4_agent`):
+
+- **Question**: "The dashboard is live at `{deployed_dashboard_url}`. Would you like to share a screenshot of the rendered dashboard for visual layout critique & Pass 3 refinement, or approve as-is?"
+- **Options**:
+  - `(Recommended) Approve dashboard layout as-is and proceed to Gate 4 (Conversational Analytics Agent)`
+  - `I will share/upload a screenshot in chat for visual critique and refinement`
+
+**If the user shares a screenshot path or image**:
+1. Inspect the rendered image via `view_file`.
+2. Audit typography hierarchy, axis label spacing, legend alignment, dual-axis balance, and color contrast.
+3. Apply targeted LookML adjustments to `dashboards/*.dashboard.lookml` (via direct edit or `lookml-dashboard-designer`).
+4. Re-deploy via `demo-create lookml deploy` and confirm visual satisfaction before advancing to Gate 4.
 
 ---
 

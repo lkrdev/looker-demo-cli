@@ -427,11 +427,13 @@ GATES: Final[tuple[Gate, ...]] = (
     Gate(
         number=3,
         id="gate_3_deploy",
-        title="Optimization, validation & production release",
+        title="Dashboard polish, optimization, validation & production release",
         requires_human_confirmation=True,
         human_checkpoint=(
-            "Confirm whether to run the LookML performance optimizer (datagroup caching, partition pruning, "
-            "foreign key hiding) before validation and the production release."
+            "MANDATORY: Ensure lookml-dashboard-designer has applied the 3-Pass Executive Polish protocol "
+            "(theme-inheriting text headers, centered legends, dual-axis formatting, transparent grids) and all "
+            "filtered measures are grounded via SELECT DISTINCT (lookml-filtered-measures). Then call ask_question "
+            "to confirm whether to run the LookML performance optimizer before validation and production release."
         ),
         _is_complete=_gate_3_complete,
         _command=_gate_3_command,
@@ -439,10 +441,12 @@ GATES: Final[tuple[Gate, ...]] = (
     Gate(
         number=4,
         id="gate_4_agent",
-        title="Conversational Analytics agent grounding",
+        title="Post-deploy screenshot critique & Conversational Analytics agent grounding",
         requires_human_confirmation=True,
         human_checkpoint=(
-            "Confirm that a Conversational Analytics agent should be provisioned for the deployed model and "
+            "MANDATORY POST-DEPLOY CRITIQUE: First, present the live deployed_dashboard_url in chat and call "
+            "ask_question inviting the user to share a screenshot for Pass 3 visual critique/refinement or approve "
+            "the dashboard as-is. Once approved, confirm whether to provision a Conversational Analytics agent "
             "grounded with golden queries extracted from the dashboard tiles."
         ),
         _is_complete=_gate_4_complete,
