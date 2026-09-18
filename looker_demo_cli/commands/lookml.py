@@ -198,7 +198,7 @@ def lookml_model(
         },
         warnings=warnings,
     ).add_next_action(
-        "Validate and deploy the generated LookML to Looker",
+        "FIRST iterate on the draft `.dashboard.lookml` using `looker-visualizations` skills (1. Audit Highcharts `series_types` — use `column`/`line`/`area`, NEVER `looker_column`; 2. Inject `advanced_vis_config` geometry/transparent surface/tooltips; 3. Convert pies to donuts with curated palettes; 4. Upgrade grids to `table_theme: transparent` with in-cell data bars), THEN validate and deploy to Looker",
         f"demo-create lookml deploy --looker-project {proj_name} --lookml-dir {out_dir}",
         gate=3,
         requires_human_confirmation=True,
@@ -210,6 +210,10 @@ def lookml_model(
         print_success(f"Generated {len(written)} LookML files in `{out_dir}`:")
         for f in written:
             console.print(f"  • {f.relative_to(out_dir)}")
+        print_info(
+            "NOTE: The generated `.dashboard.lookml` is a RAW SCAFFOLDING DRAFT. "
+            "Consult `looker-visualizations` skills to apply the 3-Pass Executive Polish before running `lookml deploy`."
+        )
         print_info(f"Updated state saved to `{saved_path}`")
 
     return emit(result, json_output=output_json, human_renderer=render)

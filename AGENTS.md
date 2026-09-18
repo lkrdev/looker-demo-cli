@@ -65,6 +65,14 @@ invoke it*. Read `SKILL.md` before orchestrating a build.
 > (`gcloud auth application-default login`) or grant the required role. A
 > fallback project is never the right recovery.
 
+> [!CAUTION]
+> **Never treat `demo-create lookml model` dashboard output as finished or rely solely on HTTP 200 query validation — ALWAYS trigger `looker-visualizations` skills before Gate 3 (`deploy`).**
+> The CLI's built-in dashboard generator produces raw functional scaffolding only, and Looker's `validate_project` / `run_inline_query` (`HTTP 200 OK`) only checks LookML and SQL syntax — NOT client-side Highcharts rendering (e.g., `series_types: { ...: looker_column }` passes SQL/LookML validation with `HTTP 200 OK` yet crashes Highcharts in the browser because Highcharts requires bare `column`). Between Gate 2 (`lookml model`) and Gate 3 (`lookml deploy`), and whenever iterating on any `.dashboard.lookml` file, you **MUST** consult the visualization skills ([`looker-visualizations`](skills/looker-visualizations/SKILL.md), [`looker-vis-advanced-config`](skills/looker-visualizations/looker-vis-advanced-config/SKILL.md), [`looker-vis-cartesian`](skills/looker-visualizations/looker-vis-cartesian/SKILL.md), [`looker-vis-tabular-kpi`](skills/looker-visualizations/looker-vis-tabular-kpi/SKILL.md), [`looker-vis-specialty-maps`](skills/looker-visualizations/looker-vis-specialty-maps/SKILL.md)) and apply the 4 default polish rules:
+> 1. **Audit chart types and `series_types` against Highcharts specs** (avoid invalid wrapper names like `looker_column` inside `series_types`; use bare Highcharts types `column`, `line`, `area`, `bar`, `scatter`).
+> 2. **Inject modern geometry tokens via `advanced_vis_config`** (rounded bar corners `borderRadius: 4`, chart `borderRadius: 8`, transparent chart surfaces `"backgroundColor": "transparent"`, and shadow `tooltip`).
+> 3. **Convert default pie charts to donuts** (`type: looker_pie`, `show_donut: true`, `inner_radius: 50`) with curated palettes.
+> 4. **Upgrade tables to `table_theme: transparent`** with in-cell data bars (`series_cell_visualizations`).
+
 - **Branch on exit codes, not prose.** `3` auth · `4` missing config · `5`
   remote API · `6` validation · `7` state file · `2` usage error.
 - **Use `--json`** on any command whose result you intend to parse. stdout

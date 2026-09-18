@@ -61,9 +61,12 @@ Here are the most critical LookML parameters used in cartesian dashboard element
   label_density: 25             # Value label density (1 - 50)
 
   # --- Series Type Mixing & Styling ---
+  # CRITICAL HIGHCHARTS RULE: Inside `series_types:`, ALWAYS use bare Highcharts names
+  # (`column`, `bar`, `line`, `area`, `scatter`) — NEVER Looker wrapper names like `looker_column`!
+  # `series_types: { ...: looker_column }` passes LookML/SQL validation (HTTP 200 OK) but crashes Highcharts in the browser.
   series_types:
-    orders.total_revenue: area  # Render total_revenue as area while others remain line
-    orders.order_count: line
+    orders.total_revenue: area  # Render total_revenue as area while others remain line/column
+    orders.order_count: column
   series_colors:
     orders.total_revenue: "#4285F4"
     orders.order_count: "#EA4335"

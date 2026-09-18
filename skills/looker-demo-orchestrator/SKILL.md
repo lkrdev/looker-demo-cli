@@ -305,14 +305,32 @@ subagent:
 
 ---
 
-### B. Mandatory Executive Dashboard Polish (Delegate to Dashboard Designer Subagent)
+### B. Mandatory Executive Dashboard Polish (Always Trigger `looker-visualizations` Skills Before Gate 3)
 
-After `demo-create lookml model` scaffolds the baseline LookML project, **automatically delegate dashboard polish and domain customization** to the **[`lookml-dashboard-designer`](subagents/lookml-dashboard-designer.md)** subagent executing the **3-Pass Iterative Design & Screenshot Critique Protocol**:
+> [!CAUTION]
+> ### 🛑 Why You Must NEVER Skip Dashboard Polish Between Gate 2 and Gate 3
+> Guard against three classic failure modes whenever generating or iterating on a LookML dashboard:
+> 1. **Never Over-Rely on the CLI's Built-In Templates (`demo-create lookml model`)**: The CLI generator only synthesizes a **raw scaffolding draft** (`.dashboard.lookml`), NOT a finished product. Never deploy the raw CLI draft without first opening the dashboard file and applying domain-specific visual polish using the `looker-visualizations` skill suite.
+> 2. **Never Mistake `HTTP 200 OK` Query Validation for Frontend Highcharts Validity**: Looker's `validate_project` and `run_inline_query` (`HTTP 200 OK`) only check LookML and SQL syntax — they do **NOT** validate client-side JavaScript/Highcharts configurations! For example, `series_types: { ...: looker_column }` is syntactically valid YAML/LookML and passes query validation, but **crashes Highcharts in the browser** because Highcharts expects bare `'column'`, `'line'`, `'area'`, `'bar'`, or `'scatter'` inside `series_types`, not Looker's internal `looker_column` wrapper.
+> 3. **Never Rush Past the 3-Pass Executive Polish Protocol**: Between Gate 2 (`lookml model`) and Gate 3 (`lookml deploy`), you **MUST** pause to open the generated `.dashboard.lookml` file, consult the visualization skills ([`looker-visualizations`](../looker-visualizations/SKILL.md), [`looker-vis-advanced-config`](../looker-visualizations/looker-vis-advanced-config/SKILL.md), [`looker-vis-cartesian`](../looker-visualizations/looker-vis-cartesian/SKILL.md), [`looker-vis-tabular-kpi`](../looker-visualizations/looker-vis-tabular-kpi/SKILL.md), [`looker-vis-specialty-maps`](../looker-visualizations/looker-vis-specialty-maps/SKILL.md)), and rewrite the tiles with modern tokens before deployment.
+
+#### What MUST Happen by Default on Every Newly Generated or Iterated LookML Dashboard:
+1. **Audit Chart Types & `series_types` Against Highcharts Specs**:
+   - Element root `type:` uses Looker wrapper names (`looker_column`, `looker_bar`, `looker_line`, `looker_area`, `looker_pie`, `looker_grid`, `single_value`).
+   - Inside `series_types:` (for mixed/combo Cartesian series), **ALWAYS use bare Highcharts series names** (`column`, `bar`, `line`, `area`, `scatter`) — **NEVER** `looker_column`, `looker_line`, or `looker_area`.
+2. **Inject Modern Geometry Tokens via `advanced_vis_config`**:
+   - Apply rounded bar/column corners (`"plotOptions": {"series": {"borderRadius": 4}}`), rounded container geometry and transparent chart surfaces (`"chart": {"backgroundColor": "transparent", "borderRadius": 8}`), and elevated shadow tooltips (`"tooltip": {"borderRadius": 8, "shadow": true}`).
+3. **Convert Default Pie Charts to Donuts with Curated Palettes**:
+   - Configure all `looker_pie` tiles with `show_donut: true`, `inner_radius: 50`, `legend_position: center`, and curated `series_colors:` / Highcharts `"colors": [...]` palettes grounded in `SELECT DISTINCT` data literals.
+4. **Upgrade Tables to `transparent` Theme with In-Cell Data Bars**:
+   - Configure all `looker_grid` tiles with `table_theme: transparent`, `show_view_names: false`, `show_row_numbers: true`, `truncate_text: true`, `size_to_fit: true`, and `series_cell_visualizations` data bars on primary numeric measures.
+
+After `demo-create lookml model` scaffolds the baseline LookML project, **automatically trigger the `looker-visualizations` skills** (either directly or via the **[`lookml-dashboard-designer`](subagents/lookml-dashboard-designer.md)** subagent) executing the **3-Pass Iterative Design & Screenshot Critique Protocol**:
 
 ```yaml
 subagent:
   type: "skills/looker-demo-orchestrator/subagents/lookml-dashboard-designer.md"
-  prompt: "Execute the 3-Pass Executive Dashboard Polish protocol for {project_name} grounded strictly in staged explores and views. Enforce: (1) Theme-inheriting type: text section headers (no hardcoded HTML background gradients), (2) Centered legends (legend_position: center), (3) Dual-axis charts with independent value ranges (y_axis_combined: false, y_axis_unpinned: true) and explicit numeric axis label formatting, and (4) Transparent data grids (table_theme: transparent) with inline cell visualizations."
+  prompt: "Execute the 3-Pass Executive Dashboard Polish protocol for {project_name} using looker-visualizations, looker-vis-advanced-config, looker-vis-cartesian, looker-vis-tabular-kpi, and looker-vis-specialty-maps. Enforce: (1) Audit series_types against Highcharts specs (use bare 'column'/'line'/'area', NEVER 'looker_column'), (2) Inject modern geometry tokens via advanced_vis_config (rounded bar corners borderRadius: 4, transparent chart backgroundColor, shadow tooltips), (3) Convert default pie charts to donuts (show_donut: true, inner_radius: 50) with curated palettes, (4) Upgrade looker_grid tables to table_theme: transparent with series_cell_visualizations data bars, (5) Theme-inheriting type: text section headers, centered legends (legend_position: center), and independent dual-axis formatting."
   inputs:
     project_name: "{looker_project_name}"
     model_name: "{looker_model_name}"
@@ -323,12 +341,14 @@ subagent:
 
 - **Pass 1 (Explore-Grounded Architecture & Distinct Value Discovery)**: Inspects staged `explores/*.explore.lkml` and `views/*.view.lkml` files (never invents fields) and runs `SELECT DISTINCT` on categorical dimensions used in custom `series_colors:` so color keys match exact data literals.
 - **Pass 2 (Executive Visual Polish Standards)**:
+  - **Highcharts `series_types` Audit**: Verifies all `series_types:` entries use bare Highcharts identifiers (`column`, `line`, `area`, `bar`, `scatter`) and never `looker_*` wrapper names.
   - **Theme-Inheriting Section Headers**: Native `type: text` tiles (`row: 0, width: 24, height: 2`) at the top of each tab using `title_text` and `subtitle_text` without hardcoded HTML background gradients or fixed hex text colors.
   - **KPI Scorecards**: `single_value` stat banners (`row: 2, height: 4`) with `single_value_title` and change comparisons (`show_comparison: true`). Never attach `advanced_vis_config` to `single_value` tiles.
   - **Centered Legends**: Every chart with a legend (`looker_area`, `looker_column`, `looker_bar`, `looker_line`, `looker_pie`) explicitly sets `legend_position: center` and `"legend": {"align": "center", "verticalAlign": "bottom"}` in `advanced_vis_config`.
   - **Independent Dual-Axis Ranges & Numeric Formatting**: Dual-axis charts set `y_axis_combined: false`, `y_axis_unpinned: true`, and map series to independent left/right axes with explicit numeric format strings (`"${value:,.0f}"`, `"{value:,.0f}"`, `"{value:.1f} ms"`, `"{value:.1f}%"`).
+  - **Donut Charts with Curated Palettes**: All `looker_pie` tiles set `show_donut: true`, `inner_radius: 50`, and curated color arrays.
   - **Transparent Data Grids**: `looker_grid` tiles set `table_theme: transparent`, `show_view_names: false`, and inline `series_cell_visualizations` bars on primary measures.
-- **Pre-Push Visual & Filtered Measure Auditor**: `demo-create lookml deploy` automatically executes static visualization contract checks, Executive Polish warnings, and the **Filtered Measure Distinct-Value Auditor** against local Parquet/BigQuery before pushing to Looker.
+- **Pre-Push Visual & Filtered Measure Auditor**: `demo-create lookml deploy` automatically executes static Highcharts `series_types` contract checks, Executive Polish warnings, and the **Filtered Measure Distinct-Value Auditor** against local Parquet/BigQuery before pushing to Looker.
 
 ---
 

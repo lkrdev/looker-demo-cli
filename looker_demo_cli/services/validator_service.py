@@ -52,6 +52,27 @@ CHART_TYPES_WITH_LEGENDS = {
     "looker_pie",
 }
 
+VALID_HIGHCHARTS_SERIES_TYPES = {
+    "column",
+    "bar",
+    "line",
+    "area",
+    "scatter",
+    "spline",
+    "areaspline",
+}
+
+BARE_HIGHCHARTS_ROOT_TYPES = {
+    "column": "looker_column",
+    "bar": "looker_bar",
+    "line": "looker_line",
+    "area": "looker_area",
+    "scatter": "looker_scatter",
+    "pie": "looker_pie",
+    "donut": "looker_pie",
+    "grid": "looker_grid",
+}
+
 
 def _check_forbidden_formatter_keys(obj: Any) -> bool:
     """Recursively search for forbidden 'formatter' keys in parsed Highcharts config."""
@@ -72,7 +93,7 @@ def lint_dashboard_structure(
     parsed: Any,
     file_name: str = "dashboard.lookml",
 ) -> list[str]:
-    """Audit parsed dashboard dictionary/list for hard Looker contract violations.
+    """Audit parsed dashboard dictionary/list for hard Looker & Highcharts contract violations.
 
     Args:
         parsed: YAML-parsed dictionary or list of dashboards.
@@ -103,9 +124,33 @@ def lint_dashboard_structure(
                 continue
 
             title = el.get("title") or el.get("name") or "Unnamed Tile"
-            vis_type = el.get("type", "looker_column")
+            vis_type = str(el.get("type", "looker_column")).strip()
             limit = el.get("limit")
             adv_config = el.get("advanced_vis_config")
+            series_types = el.get("series_types")
+
+            # 1b. Root `type` vs bare Highcharts name check
+            if vis_type in BARE_HIGHCHARTS_ROOT_TYPES:
+                expected_root = BARE_HIGHCHARTS_ROOT_TYPES[vis_type]
+                diagnostics.append(
+                    f"Tile '{title}' in `{file_name}` uses bare Highcharts `type: {vis_type}` at the element root. "
+                    f"Element root `type` requires Looker's wrapper `{expected_root}` (use bare `{vis_type}` ONLY inside `series_types`)."
+                )
+
+            # 1c. Highcharts `series_types` contract check (prevents client-side crash from `looker_column` etc.)
+            if isinstance(series_types, dict):
+                for s_key, s_val in series_types.items():
+                    s_val_str = str(s_val).strip()
+                    if s_val_str.startswith("looker_") or s_val_str not in VALID_HIGHCHARTS_SERIES_TYPES:
+                        suggested = s_val_str.replace("looker_", "")
+                        if suggested not in VALID_HIGHCHARTS_SERIES_TYPES:
+                            suggested = "column"
+                        diagnostics.append(
+                            f"Tile '{title}' in `{file_name}` sets `series_types[{s_key!r}]: {s_val_str}`. "
+                            f"Looker's validator only checks SQL/LookML syntax, but `series_types` is passed directly to "
+                            f"Highcharts in the browser and crashes if given `{s_val_str}`. "
+                            f"Use bare Highcharts series names (`{suggested}`, `column`, `line`, `area`, `bar`, `scatter`)."
+                        )
 
             # 2. looker_donut_multiples check
             if vis_type == "looker_donut_multiples":
@@ -157,12 +202,14 @@ def lint_dashboard_warnings(
     parsed: Any,
     file_name: str = "dashboard.lookml",
 ) -> list[str]:
-    """Audit parsed dashboard dictionary/list for non-blocking Executive Polish warnings.
+    """Audit parsed dashboard dictionary/list for Executive Polish warnings (`looker-visualizations` standards).
 
-    Checks:
-    1. Legend centering on cartesian/pie charts (`legend_position: center`).
-    2. Transparent table theme on data grids (`table_theme: transparent`).
-    3. Absence of hardcoded HTML color banners/gradients in `type: text` tiles.
+    Checks the 4 mandatory default dashboard polish standards:
+    1. Centered legends (`legend_position: center`) and valid Highcharts series configurations.
+    2. Modern geometry tokens via `advanced_vis_config` (rounded bar corners `borderRadius`, transparent chart surface, tooltips).
+    3. Default pie charts converted to donuts (`show_donut: true`, `inner_radius: 50`) with curated palettes.
+    4. Tables upgraded to `table_theme: transparent` with in-cell data bars (`series_cell_visualizations`).
+    5. Absence of hardcoded HTML color banners/gradients in `type: text` tiles.
 
     Args:
         parsed: YAML-parsed dictionary or list of dashboards.
@@ -185,26 +232,49 @@ def lint_dashboard_warnings(
 
             title = el.get("title") or el.get("name") or el.get("title_text") or "Unnamed Tile"
             vis_type = el.get("type", "looker_column")
+            adv_config = el.get("advanced_vis_config")
 
-            # 1. Centered legend check
+            # 1. Centered legend & advanced_vis_config modern geometry tokens check
             if vis_type in CHART_TYPES_WITH_LEGENDS:
                 legend_pos = el.get("legend_position")
                 if legend_pos and str(legend_pos).lower() in ("left", "right"):
                     warnings.append(
                         f"Tile '{title}' in `{file_name}` sets `legend_position: {legend_pos}`. "
-                        f"Executive polish standard recommends `legend_position: center`."
+                        f"Executive polish standard (`looker-visualizations`) recommends `legend_position: center`."
+                    )
+                if not adv_config:
+                    warnings.append(
+                        f"Chart tile '{title}' (`{vis_type}`) in `{file_name}` is missing `advanced_vis_config`. "
+                        f"Apply `looker-vis-advanced-config` tokens (`borderRadius`, transparent `backgroundColor`, shadow `tooltip`)."
+                    )
+                elif "borderRadius" not in str(adv_config):
+                    warnings.append(
+                        f"Chart tile '{title}' (`{vis_type}`) in `{file_name}` is missing rounded `borderRadius` geometry in `advanced_vis_config`."
                     )
 
-            # 2. Transparent table theme check
+            # 2. Pie-to-Donut conversion check
+            if vis_type == "looker_pie":
+                if not el.get("show_donut") or not el.get("inner_radius"):
+                    warnings.append(
+                        f"Pie tile '{title}' in `{file_name}` is not configured as a donut. "
+                        f"Per `looker-vis-specialty-maps`, convert default pie charts to donuts (`show_donut: true`, `inner_radius: 50`) with curated palettes."
+                    )
+
+            # 3. Transparent table theme & in-cell data bars check
             if vis_type == "looker_grid":
                 theme = el.get("table_theme")
-                if theme and str(theme).lower() != "transparent":
+                if not theme or str(theme).lower() != "transparent":
                     warnings.append(
-                        f"Grid tile '{title}' in `{file_name}` sets `table_theme: {theme}`. "
-                        f"Executive polish standard recommends `table_theme: transparent`."
+                        f"Grid tile '{title}' in `{file_name}` sets `table_theme: {theme or 'default'}`. "
+                        f"Per `looker-vis-tabular-kpi`, upgrade tables to `table_theme: transparent`."
+                    )
+                if not el.get("series_cell_visualizations"):
+                    warnings.append(
+                        f"Grid tile '{title}' in `{file_name}` is missing `series_cell_visualizations`. "
+                        f"Per `looker-vis-tabular-kpi`, include in-cell data bars on primary numeric measures."
                     )
 
-            # 3. Theme-inheriting text headers (no hardcoded HTML background gradients/colors)
+            # 4. Theme-inheriting text headers (no hardcoded HTML background gradients/colors)
             if vis_type == "text" or "body_text" in el:
                 body = str(el.get("body_text") or "")
                 title_txt = str(el.get("title_text") or "")

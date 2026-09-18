@@ -366,9 +366,14 @@ def generate_domain_dataset(
 
         dag_synth = ModularDAGSynthesizer(output_dir=output_dir)
         if builder_script and builder_script.exists():
+            fact_row_count = next(
+                (e.row_count for e in blueprint.entities if getattr(e, "table_type", "") == "fact"),
+                None,
+            )
             res = dag_synth.synthesize_from_script(
                 script_path=builder_script,
                 blueprint=blueprint,
+                target_fact_rows=fact_row_count,
                 validate=True,
                 write_parquet=write_parquet,
             )

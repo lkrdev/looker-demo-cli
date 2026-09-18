@@ -431,10 +431,16 @@ GATES: Final[tuple[Gate, ...]] = (
         title="Dashboard polish, optimization, validation & production release",
         requires_human_confirmation=True,
         human_checkpoint=(
-            "MANDATORY: Ensure lookml-dashboard-designer has applied the 3-Pass Executive Polish protocol "
-            "(theme-inheriting text headers, centered legends, dual-axis formatting, transparent grids) and all "
-            "filtered measures are grounded via SELECT DISTINCT (lookml-filtered-measures). Then call ask_question "
-            "to confirm whether to run the LookML performance optimizer before validation and production release."
+            "MANDATORY: Never treat `demo-create lookml model` dashboard output as finished or rely solely on HTTP 200 "
+            "query validation. Before running `lookml deploy`, open the generated `.dashboard.lookml` and apply the "
+            "3-Pass Executive Polish protocol using the `looker-visualizations` skills (`looker-visualizations`, "
+            "`looker-vis-advanced-config`, `looker-vis-cartesian`, `looker-vis-tabular-kpi`, `looker-vis-specialty-maps`): "
+            "(1) Audit chart & `series_types` against Highcharts specs (use bare `column`, `line`, `area`, `bar`, `scatter` "
+            "— NEVER `looker_column`), (2) Inject modern geometry tokens via `advanced_vis_config` (`borderRadius`, "
+            "`\"backgroundColor\": \"transparent\"`, shadow tooltips), (3) Convert default pie charts to donuts "
+            "(`show_donut: true`, `inner_radius: 50`) with curated palettes, (4) Upgrade tables to `table_theme: transparent` "
+            "with in-cell data bars (`series_cell_visualizations`), and ground all filtered measures via `SELECT DISTINCT`. "
+            "Then call `ask_question` to confirm whether to run the LookML performance optimizer before production release."
         ),
         _is_complete=_gate_3_complete,
         _command=_gate_3_command,

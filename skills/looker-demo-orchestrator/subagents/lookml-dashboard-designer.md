@@ -46,6 +46,13 @@ The parent orchestrator invokes you with:
 > - Always use `crossfilter_enabled: true` at the dashboard root level.
 
 > [!CAUTION]
+> **STRICT HIGHCHARTS `series_types` RULE (PREVENTS BROWSER CRASHES)**
+> - Element root `type:` uses Looker wrapper names (`looker_column`, `looker_bar`, `looker_line`, `looker_area`, `looker_pie`, `looker_grid`, `single_value`).
+> - Inside `series_types:` (which overrides individual series on mixed/combo Cartesian charts), **Looker passes the string directly to Highcharts**.
+> - **NEVER use `looker_column`, `looker_line`, `looker_area`, or `looker_bar` inside `series_types:`!** Doing so passes LookML/SQL syntax validation (`HTTP 200 OK`) yet crashes Highcharts in the browser.
+> - **ALWAYS use bare Highcharts series names inside `series_types:`**: `column`, `line`, `area`, `bar`, `scatter`.
+
+> [!CAUTION]
 > **MANDATORY DOUBLE-QUOTED STRINGS FOR TITLES & LABELS (YAML SAFETY RULE)**
 > In LookML dashboard YAML definitions, unquoted colons followed by a space (e.g. `title: Daily Spend: Cost vs Tokens`) break YAML parsing with `yaml.scanner.ScannerError: mapping values are not allowed here`.
 > **ALL string attributes MUST be explicitly enclosed in double quotes**:
@@ -76,9 +83,30 @@ The parent orchestrator invokes you with:
 
 ---
 
-### Pass 2: Executive Visual Polish Standards
+### Pass 2: Executive Visual Polish Standards (The 4 Mandatory Default Rules)
 
-1. **Theme-Inheriting Typography Section Headers (Zero Hardcoded HTML Color Banners)**:
+Every newly generated or iterated LookML dashboard MUST apply these 4 default upgrades from the `looker-visualizations` suite:
+
+1. **Audit Chart Types & `series_types` Against Highcharts Specs ([`looker-vis-cartesian`](../../looker-visualizations/looker-vis-cartesian/SKILL.md))**:
+   - Ensure element root `type` uses Looker wrappers (`looker_column`, `looker_area`, `looker_line`, `looker_bar`, `looker_pie`, `looker_grid`, `single_value`).
+   - Ensure `series_types:` uses **bare Highcharts names ONLY** (`column`, `line`, `area`, `bar`, `scatter`) — never `looker_column`.
+
+2. **Inject Modern Geometry Tokens via `advanced_vis_config` ([`looker-vis-advanced-config`](../../looker-visualizations/looker-vis-advanced-config/SKILL.md))**:
+   - Apply rounded container & bar corners, transparent chart surfaces, and shadow tooltips on every Cartesian and Pie/Donut tile:
+     - `"chart": { "backgroundColor": "transparent", "borderRadius": 8 }`
+     - `"plotOptions": { "series": { "borderRadius": 4 } }`
+     - `"tooltip": { "borderRadius": 8, "shadow": true }`
+     - `"legend": { "align": "center", "verticalAlign": "bottom" }`
+   - **Strict JSON Rule**: Never use JavaScript function callbacks (`formatter: function()`). Use string `format` templates or Looker's declarative `formatters` array.
+
+3. **Convert Default Pie Charts to Donuts with Curated Palettes ([`looker-vis-specialty-maps`](../../looker-visualizations/looker-vis-specialty-maps/SKILL.md))**:
+   - Configure all `looker_pie` tiles with `show_donut: true`, `inner_radius: 50`, `legend_position: center`, `value_labels: legend`, `label_type: labPer`, and curated `series_colors:` / Highcharts `"colors"` arrays.
+
+4. **Upgrade Tables to `transparent` Theme with In-Cell Data Bars ([`looker-vis-tabular-kpi`](../../looker-visualizations/looker-vis-tabular-kpi/SKILL.md))**:
+   - Configure all `looker_grid` tables with `table_theme: transparent` (instead of `white` or `modern`) so grids blend cleanly into any host or Looker background surface.
+   - Set `show_view_names: false`, `show_row_numbers: true`, `truncate_text: true`, `size_to_fit: true`, and attach inline cell bar visualizations (`series_cell_visualizations`) on the primary numeric measures.
+
+5. **Theme-Inheriting Typography Section Headers (Zero Hardcoded HTML Color Banners)**:
    - **Never use HTML `<div>` banners with hardcoded background gradients (`background: linear-gradient(...)`) or fixed hex text colors (`#FFFFFF`)** that clash with Looker's light/dark embed themes.
    - Place native LookML `type: text` header tiles (`row: 0`, `col: 0`, `width: 24`, `height: 2`) at the top of each tab using `title_text` and `subtitle_text` so typography inherits the active Looker theme colors seamlessly:
      ```lookml
@@ -93,32 +121,26 @@ The parent orchestrator invokes you with:
        height: 2
      ```
 
-2. **KPI Stat Scorecards with Comparisons**:
+6. **KPI Stat Scorecards with Comparisons**:
    - Place 3 or 4 `single_value` tiles (`row: 2`, `height: 4`) directly beneath each tab's header.
    - Configure `single_value_title` and, where applicable, secondary comparison metrics (`show_comparison: true`, `comparison_type: value` or `change_percentage`).
    - **NEVER attach `advanced_vis_config` to `single_value` tiles.**
 
-3. **Always Center Legends (`legend_position: center`)**:
-   - Every chart with a legend (`looker_area`, `looker_column`, `looker_bar`, `looker_line`, `looker_pie`) **MUST** explicitly set:
-     - `legend_position: center` in LookML
-     - `"legend": {"align": "center", "verticalAlign": "bottom"}` inside `advanced_vis_config`.
-   - Never use `left` or `right` legend alignment.
-
-4. **Independent Dual-Axis Value Ranges & Explicit Numeric Axis Label Formatting**:
-   - Any dual-axis visualization (`y_axis_combined: false`, `y_axis_unpinned: true`) **MUST** map series to separate left (`yAxis: 0`) and right (`yAxis: 1`, `"opposite": true`) axes fixed to their own independent value ranges.
-   - Explicitly format numeric axis labels in `advanced_vis_config`:
-     - Currency: `"labels": { "format": "${value:,.0f}" }`
-     - Counts / Volume: `"labels": { "format": "{value:,.0f}" }`
-     - Latency / Duration: `"labels": { "format": "{value:.1f} ms" }`
-     - Percentages: `"labels": { "format": "{value:.1f}%" }`
-   - Example Dual-Axis `advanced_vis_config`:
+7. **Always Center Legends & Configure Independent Dual-Axis Ranges**:
+   - Every chart with a legend (`looker_area`, `looker_column`, `looker_bar`, `looker_line`, `looker_pie`) **MUST** explicitly set `legend_position: center` and `"legend": {"align": "center", "verticalAlign": "bottom"}` inside `advanced_vis_config`.
+   - Any dual-axis visualization (`y_axis_combined: false`, `y_axis_unpinned: true`) **MUST** map series to separate left (`yAxis: 0`) and right (`yAxis: 1`, `"opposite": true`) axes with explicit numeric axis label formatting (`"${value:,.0f}"`, `"{value:,.0f}"`, `"{value:.1f} ms"`, `"{value:.1f}%"`):
      ```lookml
      y_axis_combined: false
      y_axis_unpinned: true
      legend_position: center
+     series_types:
+       orders.total_revenue: area
+       orders.count: column
      advanced_vis_config: |
        {
-         "chart": { "borderRadius": 8 },
+         "chart": { "backgroundColor": "transparent", "borderRadius": 8 },
+         "plotOptions": { "series": { "borderRadius": 4 } },
+         "tooltip": { "borderRadius": 8, "shadow": true },
          "legend": { "align": "center", "verticalAlign": "bottom" },
          "yAxis": [
            {
@@ -134,24 +156,17 @@ The parent orchestrator invokes you with:
        }
      ```
 
-5. **Highcharts `advanced_vis_config` Aesthetics ([`looker-vis-advanced-config`](../../looker-visualizations/looker-vis-advanced-config/SKILL.md))**:
-   - Apply rounded geometry (`"chart": {"borderRadius": 8}`, `"plotOptions": {"series": {"borderRadius": 4}}`) and shadow tooltips (`"tooltip": {"borderRadius": 8, "shadow": true}`).
-   - On benchmark/SLA charts, include target `plotLines` or `plotBands`.
-   - **Strict JSON Rule**: Never use JavaScript function callbacks (`formatter: function()`). Use string `format` templates or Looker's declarative `formatters` array.
-
-6. **Transparent Data Grids (`table_theme: transparent`)**:
-   - Configure all `looker_grid` tables with `table_theme: transparent` (instead of `white` or `modern`) so grids blend cleanly into any host or Looker background surface.
-   - Set `show_view_names: false`, `show_row_numbers: true`, `truncate_text: true`, `size_to_fit: true`, and attach inline cell bar visualizations (`series_cell_visualizations`) on the primary numeric measure.
-
 ---
 
 ### Pass 3: Pre-Flight Linter Audit & Post-Deploy Screenshot Critique
 1. **Pre-Flight Linter Audit**:
    - Verify every tile against the **Executive UI Quality Checklist**:
      - [x] `crossfilter_enabled: true` at root (no deprecated `crossfilter: true`).
+     - [x] All `series_types:` entries use bare Highcharts names (`column`, `line`, `area`, `bar`, `scatter`) — zero `looker_*` names inside `series_types`.
      - [x] All titles/labels double-quoted; 0 periods in tile `name:` attributes.
      - [x] Theme-inheriting `type: text` headers at `row: 0` on every tab (0 hardcoded HTML color banners).
-     - [x] `legend_position: center` on all cartesian and pie charts.
+     - [x] `legend_position: center` and modern `advanced_vis_config` tokens (`borderRadius`, `"backgroundColor": "transparent"`, `tooltip`) on all cartesian and pie charts.
+     - [x] Default pie charts converted to donuts (`show_donut: true`, `inner_radius: 50`) with curated palettes.
      - [x] Independent dual-axis value ranges (`y_axis_combined: false`, `y_axis_unpinned: true`) with explicit numeric label `format` strings.
      - [x] `table_theme: transparent` and `series_cell_visualizations` on all `looker_grid` tiles.
      - [x] No `advanced_vis_config` on `single_value` or `looker_grid` tiles.
