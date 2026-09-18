@@ -23,17 +23,17 @@ SKILLS_CACHE_DIR = GEMINI_CONFIG_DIR / "cache" / "skills-repos"
 SYNTHETIC_DATA_GEN_REPO = Path(os.getenv("SYNTHETIC_DATA_GEN_PATH", str(HOME_DIR / "synthetic-data-generator")))
 LOOKER_EMBED_DEMO_REPO = Path(os.getenv("LOOKER_EMBED_DEMO_PATH", str(HOME_DIR / "looker-embed-demo")))
 
+# Deprecated DataDesigner / A/B testing skills actively pruned during pre-check --fix
+DEPRECATED_SKILLS: tuple[str, ...] = (
+    "data-designer",
+    "data-designer-architect",
+    "data-designer-engineer",
+    "data-designer-evaluator",
+    "vertex-ai",
+)
+
 # Remote Repositories for Automatic Skill Syncing
 SKILL_GIT_REPOSITORIES: dict[str, dict[str, Any]] = {
-    "synthetic-data-generator": {
-        "urls": [
-            "https://github.com/lkrdev/synthetic-data-generator.git",
-            "https://github.com/LukaFontanilla/synthetic-data-generator.git",
-        ],
-        "skills_subpath": "skills",
-        "env_var": "SYNTHETIC_DATA_GEN_PATH",
-        "local_default": HOME_DIR / "synthetic-data-generator",
-    },
     "looker-embed-demo": {
         "urls": [
             "https://github.com/lkrdev/looker-embed-demo.git",
@@ -57,10 +57,6 @@ SKILL_GIT_REPOSITORIES: dict[str, dict[str, Any]] = {
 INTENT_SKILL_DEFINITIONS: dict[str, dict[str, tuple[str, str]]] = {
     "data-design": {
         "synthetic-data-authoring": ("local_cli", "synthetic-data-authoring"),
-        "data-designer": ("local_cli", "data-designer"),
-        "data-designer-architect": ("local_cli", "data-designer-architect"),
-        "data-designer-engineer": ("local_cli", "data-designer-engineer"),
-        "data-designer-evaluator": ("local_cli", "data-designer-evaluator"),
         "bigquery-metadata": ("local_cli", "bigquery-metadata"),
         "knowledge-catalog-metadata": ("local_cli", "knowledge-catalog-metadata"),
     },

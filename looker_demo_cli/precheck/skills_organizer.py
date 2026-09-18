@@ -8,6 +8,7 @@ from pathlib import Path
 from pydantic import BaseModel
 
 from looker_demo_cli.config import (
+    DEPRECATED_SKILLS,
     GEMINI_SKILLS_DIR,
     INTENT_SKILL_DEFINITIONS,
     SKILL_GIT_REPOSITORIES,
@@ -106,9 +107,37 @@ def _install_skill_copy(src_path: Path, dest_path: Path) -> bool:
         return False
 
 
+def prune_deprecated_skills(skills_dir: Path | None = None) -> list[str]:
+    """Remove deprecated A/B testing skills (`data-designer*`, `vertex-ai`) from ~/.gemini/config/skills/."""
+    base_dir = skills_dir or GEMINI_SKILLS_DIR
+    pruned: list[str] = []
+    if not base_dir.exists():
+        return pruned
+
+    search_dirs = [base_dir] + [base_dir / cat for cat in INTENT_SKILL_DEFINITIONS]
+    for d in search_dirs:
+        if not d.exists():
+            continue
+        for dep_name in DEPRECATED_SKILLS:
+            target = d / dep_name
+            try:
+                if target.is_symlink() or target.is_file():
+                    target.unlink()
+                    pruned.append(str(target))
+                elif target.exists() and target.is_dir():
+                    shutil.rmtree(target)
+                    pruned.append(str(target))
+            except Exception as e:
+                print_warning(f"Could not prune deprecated skill `{target}`: {e}")
+
+    return pruned
+
+
 def audit_and_organize_skills(fix: bool = False) -> list[SkillInstallStatus]:
     """Audit and organize skills by intent category into ~/.gemini/config/skills/."""
     GEMINI_SKILLS_DIR.mkdir(parents=True, exist_ok=True)
+    if fix:
+        prune_deprecated_skills(GEMINI_SKILLS_DIR)
 
     repo_paths = sync_remote_skill_repos(fix=fix)
     local_cli_root = Path(__file__).resolve().parent.parent.parent

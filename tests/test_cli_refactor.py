@@ -53,15 +53,14 @@ def test_deprecated_mcp_servers_are_pruned_on_patch(tmp_path: Path, monkeypatch:
     assert all(s.is_configured and s.details.get("mode") == "cli_skill" for s in post_statuses)
 
 
-def test_all_cli_skills_are_bundled_and_registered() -> None:
-    """All CLI-only skills including synthetic-data-authoring must exist locally in skills/ and map to local_cli."""
+def test_all_cli_skills_are_bundled_and_registered(tmp_path: Path) -> None:
+    """All CLI-only skills including synthetic-data-authoring must exist locally in skills/, map to local_cli, and prune deprecated skills."""
+    from looker_demo_cli.config import DEPRECATED_SKILLS
+    from looker_demo_cli.precheck.skills_organizer import prune_deprecated_skills
+
     repo_root = Path(__file__).resolve().parent.parent
     expected_skills = [
         "synthetic-data-authoring",
-        "data-designer",
-        "data-designer-architect",
-        "data-designer-engineer",
-        "data-designer-evaluator",
         "bigquery-metadata",
         "knowledge-catalog-metadata",
     ]
@@ -70,6 +69,18 @@ def test_all_cli_skills_are_bundled_and_registered() -> None:
         skill_file = repo_root / "skills" / skill_name / "SKILL.md"
         assert skill_file.exists(), f"Missing bundled skill file: {skill_file}"
         assert data_design_defs.get(skill_name) == ("local_cli", skill_name)
+
+    for deprecated in DEPRECATED_SKILLS:
+        assert not (repo_root / "skills" / deprecated).exists(), f"Deprecated skill still in repo: {deprecated}"
+        assert deprecated not in data_design_defs
+        fake_skill = tmp_path / deprecated
+        fake_skill.mkdir(parents=True, exist_ok=True)
+        (fake_skill / "SKILL.md").write_text("# legacy", encoding="utf-8")
+
+    pruned = prune_deprecated_skills(tmp_path)
+    assert {Path(p).name for p in pruned} == set(DEPRECATED_SKILLS)
+    for deprecated in DEPRECATED_SKILLS:
+        assert not (tmp_path / deprecated).exists()
 
 
 def test_data_engineer_subagent_exists_and_disallows_mcp() -> None:

@@ -115,7 +115,7 @@ Immediately after installation, the agent **MUST run**:
 ```bash
 demo-create pre-check --fix
 ```
-This guarantees all pinned dependencies, global agent CLI skills (`bigquery-metadata`, `knowledge-catalog-metadata`, `data-designer*`), and active pruning of deprecated MCP servers (`data-designer`, `bigquery`, `knowledge-catalog`) from `~/.gemini/config/mcp_config.json` are completed before executing any other commands.
+This guarantees all pinned dependencies, global agent CLI skills (`synthetic-data-authoring`, `bigquery-metadata`, `knowledge-catalog-metadata`), active pruning of deprecated skills (`data-designer*`, `vertex-ai`), and pruning of deprecated MCP servers (`data-designer`, `bigquery`, `knowledge-catalog`) from `~/.gemini/config/mcp_config.json` are completed before executing any other commands.
 
 ---
 
@@ -276,14 +276,29 @@ create_lookml_model(body={
 
 ## 4. LookML Quality Standards & 4-Stage Semantic Pipeline
 
-### A. Semantic Modeling, Triage & Filtered Measure Grounding (Delegate to Modeler Subagent)
+### A. Semantic Modeling, Triage & Filtered Measure Grounding (CLI-First + On-Demand `lookml-snowflake-modeler`)
 
-Delegate semantic modeling to the front-door **[`lookml-modeler`](subagents/lookml-modeler.md)** subagent:
+1. **Fast-Path CLI Scaffolding & Metadata Introspection (Parent Orchestrator)**:
+   - At the start of Gate 2 (`gate_2_model`), execute `bigquery-metadata` (`bq query` on `INFORMATION_SCHEMA` / `bq show`) and `knowledge-catalog-metadata` (`gcloud dataplex`) via CLI to populate `SPEC.md` under `## Data Dictionary & Semantic Context` (including primary/foreign keys, null/distinct ratios, low-cardinality `suggestions`, and PII `access_grant` directives). Never invoke MCP servers.
+   - Run `demo-create lookml model` directly in the parent session:
+     ```bash
+     demo-create lookml model \
+       --looker-project "${LOOKER_PROJECT}" \
+       --dataset "${DATASET}" \
+       --connection "${CONNECTION}" \
+       --gcp-project "${PROJECT_ID}"
+     ```
+   - **Mandatory `SELECT DISTINCT` Grounding ([`lookml-filtered-measures`](../lookml-filtered-measures/SKILL.md))**: Never guess categorical filter strings (e.g., `"2xx"`, `"active"`). Before writing any `filters: [...]` block inside a measure, inspect the actual distinct values in the local Parquet file or run `SELECT DISTINCT` against BigQuery so filtered measures and derived ratios (`SAFE_DIVIDE(${num}, NULLIF(${den}, 0))`) never evaluate to `0` or `NULL`.
+   - **Mandatory Field Standards**: Explicit `label:` and `description:` parameters on EVERY dimension, dimension group, and measure (Title Case, e.g. `label: "Monthly Recurring Revenue"`).
+
+2. **Conditional Subagent Delegation (`lookml-snowflake-modeler` — Spawned ONLY for 3NF / Chasm Traps)**:
+   - If the schema is a standard Star schema ($D_1 \to F \leftarrow D_2$ with no `1:N` child fanout traps), proceed directly to **Gate 2B (Mandatory Executive Dashboard Polish)** without spawning a modeling subagent.
+   - If the schema contains normalized **3NF / Snowflake structures with Chasm Traps** (multiple `1:N` child collections hanging off a parent entity) or **diamond role-playing joins**, spawn the **[`lookml-snowflake-modeler`](subagents/lookml-snowflake-modeler.md)** subagent:
 
 ```yaml
 subagent:
-  type: "skills/looker-demo-orchestrator/subagents/lookml-modeler.md"
-  prompt: "Model LookML views, explores, and measures for {project_name}. Enforce mandatory SELECT DISTINCT grounding via lookml-filtered-measures before writing any filters: [...] blocks. If normalized 3NF structures with Chasm Traps or diamond joins exist, delegate to lookml-snowflake-modeler."
+  type: "skills/looker-demo-orchestrator/subagents/lookml-snowflake-modeler.md"
+  prompt: "Eliminate Chasm Traps and model 3NF snowflake relationships for {project_name}. Run schema_graph_analyzer.py, set Explore Base Views on leaf event facts, pre-aggregate child 1:N collections into Native Derived Tables (NDTs) joined one_to_one onto the parent Explore, and resolve diamond joins with role-playing aliases."
   inputs:
     project_name: "{looker_project_name}"
     connection_name: "{looker_connection_name}"
@@ -291,17 +306,6 @@ subagent:
     table_specs: "{extracted_table_specs}"
     domain_metrics: "{domain_metrics_list}"
 ```
-
-- **Triage Protocol**:
-  - **CLI Metadata Introspection (`bigquery-metadata` & `knowledge-catalog-metadata`)**: At the start of Gate 2 (`gate_2_model`), execute `bigquery-metadata` (`bq query` on `INFORMATION_SCHEMA` / `bq show`) and `knowledge-catalog-metadata` (`gcloud dataplex`) via CLI to populate `SPEC.md` under `## Data Dictionary & Semantic Context` (including primary/foreign keys, null/distinct ratios, low-cardinality `suggestions`, and PII `access_grant` directives). Use `SPEC.md` alongside `demo-create lookml model --dataset <id>` (Python SDK fallback) to enrich LookML descriptions and join paths. Never invoke MCP servers.
-  - **Standard / Star Schemas**: `lookml-modeler` writes `.view.lkml`, primary keys, formatted measures (`usd_0`, `percent_2`, `decimal_1`), drill fields, and `.explore.lkml` directly.
-  - **Mandatory `SELECT DISTINCT` Grounding ([`lookml-filtered-measures`](../lookml-filtered-measures/SKILL.md))**: Never guess categorical filter strings (e.g., `"2xx"`, `"active"`). Before writing any `filters: [...]` block inside a measure, inspect the actual distinct values in the local Parquet file or run `SELECT DISTINCT` against BigQuery so filtered measures and derived ratios (`SAFE_DIVIDE(${num}, NULLIF(${den}, 0))`) never evaluate to `0` or `NULL`.
-  - **Normalized 3NF / Snowflake Schemas**: If multiple 1:N child collections or diamond joins are detected, hand off to **[`lookml-snowflake-modeler`](subagents/lookml-snowflake-modeler.md)**:
-    - Runs `schema_graph_analyzer.py` on the schema DAG.
-    - Sets Explore Base Views on leaf event facts ($d_{\text{in}} = 0$).
-    - Pre-aggregates child collections into **Native Derived Tables (NDTs)** and joins them **`relationship: one_to_one`** onto the parent Explore (eliminates Chasm Traps).
-    - Resolves diamond joins with role-playing aliases (`from: users`) and explicit `view_label:` headers.
-- **Mandatory Field Standards**: Explicit `label:` and `description:` parameters on EVERY dimension, dimension group, and measure (Title Case, e.g. `label: "Monthly Recurring Revenue"`).
 
 ---
 
@@ -446,22 +450,22 @@ Immediately after `demo-create lookml deploy` succeeds and outputs the live Look
 
 ---
 
-## 5. Provision Conversational Analytics Data Agent & Gemini Enterprise (GE) Publishing (Delegate to Subagent)
+## 5. Provision Conversational Analytics Data Agent & Gemini Enterprise (GE) Publishing (CLI Fast-Path)
 
 > [!IMPORTANT]
-> **Conditional Subagent Trigger**:
-> The **[`ca-agent-provisioner`](subagents/ca-agent-provisioner.md)** subagent is **ONLY spawned if the user explicitly confirms CA Agent creation** in the interactive gate below.
+> **CLI-First Execution (`demo-create agent`)**:
+> Once the user confirms Gate 4 (`gate_4_agent`) and Gate 5 (`gate_5_publish`), the **Parent Orchestrator** executes `demo-create agent create` and `demo-create agent publish` directly via the CLI fast-path.
 
 > [!CAUTION]
 > ### 🛑 Strict Sequential Gate Isolation: NEVER Bundle CA, GE, and Embed Gates
 > The orchestrator **MUST present each post-deployment gate sequentially in its own discrete step**:
-> 1. **Phase 1: LookML Model & Dashboard Deployed to Production**
+> 1. **Phase 1: LookML Model & Dashboard Deployed to Production (+ Pass 3 Screenshot Critique)**
 > 2. **Phase 2: CA Agent Confirmation Gate** (`ask_question`)
 > 3. **Phase 3: GE Verification & Publishing Gate** (`ask_question`, if CA Agent created)
 > 4. **Phase 4: External Embed Portal Gate** (`ask_question`, ONLY after Looker assets, CA Agent, and GE status are completely finished)
 > Under NO circumstances may the agent bundle these questions into a single multi-question modal.
 
-### A. Interactive CA Agent Confirmation Gate (Parent Orchestrator)
+### A. Interactive CA Agent Confirmation Gate (Gate 4 — Parent Orchestrator)
 Prompt the user via `ask_question`:
 - **Question**: "Would you like to provision a Looker Conversational Analytics (CA) Agent for the `{model_name}` model?"
 - **Options**:
@@ -469,8 +473,16 @@ Prompt the user via `ask_question`:
   - `Provide custom system instructions before provisioning`
   - `Skip Conversational Analytics Agent creation`
 
-### B. Interactive Gemini Enterprise (GE) Verification & Publishing Gate (Parent Orchestrator)
-If CA Agent creation is selected, the orchestrator/CLI checks Looker GE settings via `GET /api/4.0/gemini_enablement`:
+If confirmed, execute the Gate 4 command directly in the parent session:
+```bash
+demo-create agent create \
+  --model "${LOOKER_PROJECT}" \
+  --explore "${PRIMARY_EXPLORE}" \
+  --dashboards-dir "${LOOKML_DIR}/dashboards"
+```
+
+### B. Interactive Gemini Enterprise (GE) Verification & Publishing Gate (Gate 5 — Parent Orchestrator)
+If CA Agent creation is completed, check Looker GE settings (`demo-create ge status` or `GET /api/4.0/gemini_enablement`):
 
 - **Case 1: GE is already configured** (`ai_ge_project_id`, `ai_ge_instance_id`, `ai_ge_location` populated):
   - Displays the active GE app ID, location, and GCP project.
@@ -481,34 +493,19 @@ If CA Agent creation is selected, the orchestrator/CLI checks Looker GE settings
     - `Skip Gemini Enterprise publishing (internal Looker only)`
 
 - **Case 2: GE is not configured** (or user requested reconfigure):
-  - Automatically queries active GCP project for available GE apps via Discovery Engine API / `gcloud`.
-  - Prompts user to select from discovered GE apps (or enter custom App ID / Region).
-  - Updates Looker settings via `PATCH /api/4.0/gemini_enablement` sending the full payload with `ai_ge_publish_enabled: true`.
-  - Grants `roles/discoveryengine.admin` to the Looker SA email via `gcloud projects add-iam-policy-binding`.
-  - Confirms the Looker SA has a Gemini Enterprise license before proceeding to publish.
+  - Run `demo-create ge configure --gcp-project <PROJECT_ID>` to discover available GE apps, update Looker settings via `PATCH /api/4.0/gemini_enablement`, and grant `roles/discoveryengine.admin` to the Looker Service Account.
 
-### C. Procedural Delegation: `ca-agent-provisioner` Subagent
-Once confirmed, delegate Golden Query extraction, agent creation, and GE publishing to **[`ca-agent-provisioner`](subagents/ca-agent-provisioner.md)**:
-
-```yaml
-subagent:
-  type: "skills/looker-demo-orchestrator/subagents/ca-agent-provisioner.md"
-  prompt: "Provision Looker CA Agent for model {lookml_model_name} on explore {primary_explore}, extract dashboard tile golden queries, and publish to Gemini Enterprise if confirmed."
-  inputs:
-    project_name: "{looker_project_name}"
-    model_name: "{lookml_model_name}"
-    primary_explore: "{primary_explore}"
-    oauth_account: "{oauth_account}"
-    dashboard_files: ["dashboards/*.dashboard.lookml"]
-    system_instructions: "{system_instructions_or_default_template}"
-    publish_ge: "{publish_ge_boolean}"
+Once confirmed, publish the agent directly via the Gate 5 command:
+```bash
+demo-create agent publish --agent-id "${CA_AGENT_ID}"
 ```
 
-The subagent follows the strict Looker 4.0 Golden Query rules:
+### C. Looker 4.0 Golden Query & Re-Publishing Guarantees
+`demo-create agent create` and `demo-create agent publish` enforce the strict Looker 4.0 Golden Query rules:
 1. `create_agent(body={...})` with persona, query patterns, and domain rules.
 2. For each dashboard tile: `create_query` $\to$ get `expanded_share_url` $\to$ `create_golden_query` with exactly **ONE question** $\to$ `update_agent` linking all IDs.
 3. If `publish_ge: true`: executes `POST /api/4.0/internal/agents/{agent_id}/publish` with body `{}` and verifies publication state via `GET /api/4.0/internal/agents/{agent_id}` with automatic retries (up to 3 attempts).
-4. **Re-Publishing Guarantee**: If any LookML self-healing or dashboard corrections occurred during QA validation, the orchestrator/subagent **MUST re-extract golden queries, update the agent, and re-publish to GE** so that the agent is guaranteed to be operational in Gemini Enterprise.
+4. **Re-Publishing Guarantee**: If any LookML self-healing or dashboard corrections occurred during QA validation, the orchestrator **MUST re-run `demo-create agent create` and `demo-create agent publish`** so that the agent is guaranteed to be operational in Gemini Enterprise.
 
 ---
 
