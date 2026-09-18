@@ -94,6 +94,5 @@ uv tool install looker-demo-cli
 demo-create pre-check --fix
 ```
 
-`pre-check --fix` synchronizes pinned dependencies, MCP servers, and global
-agent skills. Run it before anything else. If it exits `3`, authentication is
+`pre-check --fix` synchronizes pinned dependencies, actively prunes deprecated MCP servers (`data-designer`, `bigquery`, `knowledge-catalog`), and installs global agent CLI skills. Run it before anything else. If it exits `3`, authentication is
 blocked — resolve it and re-run; do not proceed to any later gate.

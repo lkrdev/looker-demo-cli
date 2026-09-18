@@ -53,10 +53,13 @@ graph TD
 
 | Component | Execution Mode | Responsibility & Scope |
 |---|---|---|
-| **Parent Orchestrator** | Direct Parent Turn | Interactive co-design gates (`ask_question`), fast CLI subcommands (`demo-create data`, `lookml model`, `lookml optimize`, `lookml deploy`, `agent create`), state machine, post-deploy screenshot critique loop, and final delivery report. |
+| **Parent Orchestrator** | Direct Parent Turn | Interactive co-design gates (`ask_question`), fast CLI subcommands (`demo-create data`, `lookml model`, `lookml optimize`, `lookml deploy`, `agent create`), Modular DAG verification scorecard review, post-deploy screenshot critique loop, and final delivery report. |
+| [`synthetic-data-authoring`](../synthetic-data-authoring/SKILL.md) | **Companion Core Skill** | Guides realistic synthetic dataset design across 4 pillars: non-uniform distributions (Pareto/Log-Normal), cross-column tier coupling, temporal growth/seasonality curves, and Looker Explore optimization. |
 | [`demo-spec`](../demo-spec/SKILL.md) | **Companion Core Skill** | Asynchronously creates and maintains `SPEC.md` as the living technical architecture document across all gates, updating quietly on disk without chat dumping. |
+| [`bigquery-metadata`](../bigquery-metadata/SKILL.md) | **Companion Core Skill** | Extracts BigQuery schemas, PK/FK constraints, and partition info via native `bq` CLI into `SPEC.md` without custom Python scripts or MCP servers. |
+| [`knowledge-catalog-metadata`](../knowledge-catalog-metadata/SKILL.md) | **Companion Core Skill** | Extracts Dataplex Universal Catalog glossaries, data profiling stats, null/distinct ratios, and PII tags via `gcloud dataplex` CLI into `SPEC.md`. |
 | [`lookml-filtered-measures`](../lookml-filtered-measures/SKILL.md) | **Companion Core Skill** | Enforces mandatory `SELECT DISTINCT` grounding before writing any `filters: [...]` in LookML measures, preventing `0`/`NULL` ratios. |
-| [`data-engineer`](subagents/data-engineer.md) | **On-Demand Subagent** | Synthesizes full-volume Parquet datasets via local subagent-authored Python (zero Vertex AI dependency) and loads tables into BigQuery. |
+| [`data-engineer`](subagents/data-engineer.md) | **On-Demand Subagent** | Synthesizes high-throughput relational Parquet datasets (`>7,500 rows/sec`), validates invariants via in-memory `TableValidator`, and uploads to BigQuery via ADC with automatic Day Partitioning & Clustering (`demo-create data generate --upload --json-scorecard`). |
 | [`lookml-snowflake-modeler`](subagents/lookml-snowflake-modeler.md) | **On-Demand Subagent** | Spawned ONLY when schemas contain complex 3NF snowflake structures with Chasm Traps (multiple 1:N children), diamond joins, or require Native Derived Table (NDT) rollups. |
 | [`lookml-dashboard-designer`](subagents/lookml-dashboard-designer.md) | **Mandatory Gate 2 Subagent** | Executes the 3-Pass Executive Dashboard Polish protocol (theme-inheriting `type: text` headers, centered legends, independent dual-axis formatting, transparent grids, and screenshot critique). |
 | [`lookml-qa-validator`](subagents/lookml-qa-validator.md) | **On-Demand Subagent** | Spawned ONLY when `demo-create lookml deploy` encounters validation errors or failing queries; runs up to 3 self-healing loops via `lookml-dashboard-to-query`. |
@@ -112,7 +115,7 @@ Immediately after installation, the agent **MUST run**:
 ```bash
 demo-create pre-check --fix
 ```
-This guarantees all pinned dependencies, MCP servers (`data-designer`, `bigquery`, `knowledge-catalog`), and global agent skills (`~/.gemini/config/skills/`) are synchronized before executing any other commands.
+This guarantees all pinned dependencies, global agent CLI skills (`bigquery-metadata`, `knowledge-catalog-metadata`, `data-designer*`), and active pruning of deprecated MCP servers (`data-designer`, `bigquery`, `knowledge-catalog`) from `~/.gemini/config/mcp_config.json` are completed before executing any other commands.
 
 ---
 
@@ -187,74 +190,58 @@ Before designing schemas, creating BigQuery datasets, or touching Looker, the ag
 >    ```
 >    DO NOT fall back silently to another account or ambient ADC. Confirm credentials before proceeding.
 
----
+## 2. Iterative Schema Co-Design & Modular DAG Synthesis Gate (Gate 1)
 
-## 2. Iterative Schema Co-Design & Micro-Sample Validation Gate
-
-When creating demo datasets, the agent **MUST co-iterate with the user** across four deterministic phases. Do not write full tables or load BigQuery until all phases are complete:
+When creating demo datasets, the agent **MUST co-iterate with the user** across three deterministic phases, using the [`synthetic-data-authoring`](../synthetic-data-authoring/SKILL.md) skill, `ModularDAGSynthesizer`, in-memory `TableValidator` quality gates, and resilient BigQuery ADC ingestion:
 
 ```mermaid
 graph TD
-    A[Phase 1: Schema & ERD Proposal] -->|User Approval| B[Phase 2: Micro-Sample Preview]
-    B -->|User Validation| C[Phase 3: Scale & Volume Confirmation]
-    C -->|User Scale Selection| D[Phase 4: Full Synthesis & BigQuery Load]
+    A[Phase 1: Schema & ERD Proposal] -->|User Approval & Scale| B[Phase 2: Modular DAG Generation & ADC Upload<br/>demo-create data generate --upload --json-scorecard]
+    B --> C[Phase 3: Verification Scorecard & 5-Row Sample Preview]
 ```
 
 > [!CAUTION]
 > ### 🛑 Strict 2-Step Sequential Visible Presentation Rule (Anti-Zero-Length Turn)
 > **NEVER call `ask_question` in an empty or content-free message turn.**
-> 1. **Phase 1 Must Render ERD & Schema in Chat First**: In the exact same response turn, the agent MUST write the full Markdown ERD diagram (`mermaid`), dimension/fact tables, column datatypes, primary/foreign keys, and target domain metrics in visible chat BEFORE calling `ask_question` to approve the schema.
-> 2. **Phase 2 Must Render Data Tables in Chat First**: Once Phase 1 is approved, the agent MUST output complete Markdown preview tables (5–10 rows per table demonstrating parent/child referential integrity and realistic distributions) in visible chat BEFORE calling `ask_question` to validate the sample and select the volume scale.
-> 3. Bypassing visible preview rendering in chat blinds the user and is strictly forbidden.
+> 1. **Phase 1 Must Render ERD & Schema in Chat First**: In the exact same response turn, the agent MUST write the full Markdown ERD diagram (`mermaid`), dimension/fact tables, column datatypes, primary/foreign keys, and target domain metrics in visible chat BEFORE calling `ask_question` to approve the schema and target volume scale.
+> 2. **Phase 3 Must Render Verification Scorecard & Sample Tables in Chat**: Once `demo-create data generate --upload --json-scorecard` completes, output the verification scorecard (`pk_uniqueness: 1.0`, `orphan_fks: 0`, `records_per_second`, `partitioned_tables`, `clustered_tables`) and a 5-row Markdown sample preview in visible chat before moving to Gate 2.
+> 3. Bypassing visible rendering in chat blinds the user and is strictly forbidden.
 
-### Phase 1 — Schema Proposal & Review (Human-in-the-Loop)
+### Phase 1 — Schema Proposal & Scale Selection (Human-in-the-Loop)
 **MANDATORY Single-Turn Message Structure**:
-Your response turn in this phase MUST contain visible Markdown content before calling `ask_question`. Calling `ask_question` with an empty chat body is strictly prohibited. Structure your turn as follows:
+Your response turn in this phase MUST contain visible Markdown content before calling `ask_question`:
 1. **Domain Overview**: 2–3 sentences explaining the scenario, key operational and analytical entities, and business goals.
 2. **Mermaid ERD Diagram**: A full `mermaid` diagram showing entities, primary/foreign keys, and cardinality (e.g. `||--o{`).
 3. **Relational Schema Specification**: Markdown tables listing each table, its columns, data types, key constraints (PK, FK), and business definitions.
 4. **Key Metrics Highlight**: List the primary business and analytics metrics enabled by this schema (e.g., MRR/ARR, churn, latency, conversion).
-5. **Approval Question**: Only after rendering steps 1–4 in visible chat, call the `ask_question` tool asking the user to approve the schema or request adjustments.
+5. **Approval & Scale Question**: Only after rendering steps 1–4 in visible chat, call `ask_question` asking the user to approve the schema and choose the target row volume (**Small** ~1k–5k rows, **Medium** ~10k–50k rows, **Large** ~100k+ rows).
 
-### Phase 2 — Micro-Sample Synthesis & Preview (Human-in-the-Loop)
-- **Execution Priority (Mandatory)**:
-  1. **Priority 1 (Primary)**: Author DataDesigner builder scripts (`data_designer.config`) and execute validation/preview using the `data-designer` MCP tools (`call_mcp_tool(ServerName="data-designer", ToolName="validate_builder", ...)` and `preview_dataset`).
-  2. **Priority 2 (Fallback Only)**: Only if the `data-designer` MCP server is unavailable or fails, fall back to `demo-create data generate --engine fallback` or standard Python scripts.
-- Display Markdown preview tables directly in chat demonstrating:
-  - Referential integrity across parent/child IDs.
-  - Realistic domain-specific values and categorical distributions.
-- Prompt the user to inspect and validate the sample records.
+### Phase 2 — High-Throughput Modular DAG Synthesis & Resilient ADC Upload
+Once the schema and scale are approved, follow [`synthetic-data-authoring`](../synthetic-data-authoring/SKILL.md) to author either a declarative `DomainBlueprint` JSON (`--schema-file`) or a vectorized Python generator script (`--script`), then execute `demo-create data generate --upload --json-scorecard` (either directly or via the `data-engineer` subagent):
+- **Vectorized DAG Synthesis**: Generates parent dimensions first, samples child fact foreign keys using Pareto (80/20) weights for realistic join fanouts, and enforces cross-column tier coupling and chronological timestamps (`>7,500 records/sec`).
+- **In-Memory `TableValidator` Gates**: Enforces `100%` primary key uniqueness, `0` orphan foreign keys, and strict temporal monotonicity (`<50ms` overhead) before disk serialization.
+- **Resilient BigQuery ADC Ingestion**: Uploads Snappy-compressed Parquet tables directly via `google-cloud-bigquery` Application Default Credentials (ADC) without interactive `bq` CLI password prompts, while `BigQueryOptimizationAdvisor` automatically applies **Day Partitioning** (`DATE(timestamp)`) and up to **4 Clustering Columns** (`_id`, `_type`, `_status`).
 
-### Phase 3 — Volume & Scale Confirmation (Human-in-the-Loop)
-- Prompt the user to select the target scale:
-  - **Small** (~1,000–5,000 rows across tables) — Quick testing
-  - **Medium** (~10,000–50,000 rows) — Standard demo
-  - **Large** (~100,000–500,000+ rows) — High-volume enterprise demo
-  - **Custom** table-specific sizing
-
-### Phase 4 — Batch Synthesis & BigQuery Load (Delegate to Subagent)
-- Only after Phases 1–3 are explicitly acknowledged by the user, delegate batch synthesis and BigQuery ingestion to the **[`data-engineer`](subagents/data-engineer.md)** subagent (or run the MCP / CLI commands).
-- **DataDesigner MCP Tools First & Zero Vertex AI Dependency**:
-  - **Priority 1 (Primary)**: Execute batch generation via `data-designer` MCP tools (`validate_builder` ➔ `generate_dataset` ➔ `export_to_bigquery`) or `demo-create data generate --builder-script <path> --engine data-designer`.
-  - **Priority 2 (Fallback Only)**: Only if DataDesigner MCP/runtime is unavailable, fall back to `demo-create data generate --engine fallback`.
-  - It does **NOT** use Vertex AI, Google Cloud AI APIs, or `roles/aiplatform.user` IAM permissions.
-```yaml
-subagent:
-  type: "skills/looker-demo-orchestrator/subagents/data-engineer.md"
-  prompt: "Synthesize full volume Parquet data for {confirmed_scale} rows and upload to BigQuery project {confirmed_gcp_project} dataset {dataset_name} using DataDesigner MCP tools."
-  inputs:
-    gcp_project_id: "{confirmed_gcp_project}"
-    dataset_id: "{dataset_name}"
-    location: "US"
-    schema_spec: "{approved_schema_json}"
-    scale: "{confirmed_scale}"
-    output_dir: "scratch/parquet"
+```bash
+demo-create data generate \
+  --domain "${DATASET}" \
+  --schema-file ./artifacts/generated_data/schema.json \
+  --row-count "${ROW_COUNT}" \
+  --output-dir ./artifacts/generated_data \
+  --gcp-project "${PROJECT_ID}" \
+  --dataset "${DATASET}" \
+  --engine modular-dag \
+  --upload \
+  --json-scorecard
 ```
+
+### Phase 3 — Verification Scorecard & Sample Preview
+Render the JSON scorecard results (`execution_time_seconds`, `records_per_second`, `pk_uniqueness`, `orphan_fks`, `partitioned_tables`, `clustered_tables`) along with a 5-row sample table preview in visible chat text, then proceed to Gate 2 (`demo-create lookml model`).
 
 > [!CAUTION]
 > ### 🛑 Strict Target Project Integrity & ADC Refresh Gate
 > 1. **NEVER silently fall back or divert to an alternate Google Cloud Project or dataset** if permissions errors (e.g. `403 Access Denied`, `bigquery.datasets.create`, or expired ADC tokens) occur during dataset creation or table loading.
-> 2. If `data-engineer` returns status `PERMISSION_DENIED` or fails on the confirmed project, **the pipeline MUST BLOCK IMMEDIATELY and prompt the user** (via `ask_question` or terminal instruction) to refresh their ADC credentials (`gcloud auth application-default login`) or grant the necessary BigQuery IAM roles on the confirmed project.
+> 2. If `bq` CLI or `demo-create data upload` fails with permission errors on the confirmed project, **the pipeline MUST BLOCK IMMEDIATELY and prompt the user** to refresh their ADC credentials (`gcloud auth application-default login`) or grant the necessary BigQuery IAM roles on the confirmed project.
 > 3. Under no circumstances should the agent create or load tables into a different project than the one explicitly confirmed by the user in Step 1.
 
 ---
@@ -306,7 +293,7 @@ subagent:
 ```
 
 - **Triage Protocol**:
-  - **Existing BigQuery Dataset & Knowledge Catalog**: If modeling from an existing dataset (`dataset_id` provided or running `demo-create lookml model --dataset <id>`), introspect BigQuery table schema, primary/foreign key constraints (`INFORMATION_SCHEMA.TABLE_CONSTRAINTS`), and Google Cloud Data Catalog / Dataplex metadata (`@bigquery` entry group). If the `knowledge-catalog` MCP server is installed, invoke it to retrieve business glossaries and column tags to enrich LookML descriptions.
+  - **CLI Metadata Introspection (`bigquery-metadata` & `knowledge-catalog-metadata`)**: At the start of Gate 2 (`gate_2_model`), execute `bigquery-metadata` (`bq query` on `INFORMATION_SCHEMA` / `bq show`) and `knowledge-catalog-metadata` (`gcloud dataplex`) via CLI to populate `SPEC.md` under `## Data Dictionary & Semantic Context` (including primary/foreign keys, null/distinct ratios, low-cardinality `suggestions`, and PII `access_grant` directives). Use `SPEC.md` alongside `demo-create lookml model --dataset <id>` (Python SDK fallback) to enrich LookML descriptions and join paths. Never invoke MCP servers.
   - **Standard / Star Schemas**: `lookml-modeler` writes `.view.lkml`, primary keys, formatted measures (`usd_0`, `percent_2`, `decimal_1`), drill fields, and `.explore.lkml` directly.
   - **Mandatory `SELECT DISTINCT` Grounding ([`lookml-filtered-measures`](../lookml-filtered-measures/SKILL.md))**: Never guess categorical filter strings (e.g., `"2xx"`, `"active"`). Before writing any `filters: [...]` block inside a measure, inspect the actual distinct values in the local Parquet file or run `SELECT DISTINCT` against BigQuery so filtered measures and derived ratios (`SAFE_DIVIDE(${num}, NULLIF(${den}, 0))`) never evaluate to `0` or `NULL`.
   - **Normalized 3NF / Snowflake Schemas**: If multiple 1:N child collections or diamond joins are detected, hand off to **[`lookml-snowflake-modeler`](subagents/lookml-snowflake-modeler.md)**:

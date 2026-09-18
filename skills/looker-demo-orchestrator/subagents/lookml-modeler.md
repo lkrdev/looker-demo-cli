@@ -9,10 +9,12 @@ tools:
   - replace_file_content
   - list_dir
   - grep_search
-  - call_mcp_tool
 disallowedTools:
   - ask_question
+  - call_mcp_tool
 skills:
+  - bigquery-metadata
+  - knowledge-catalog-metadata
   - lookml-view
   - lookml-explore
   - lookml-model
@@ -38,14 +40,15 @@ The parent orchestrator invokes you with:
 
 ---
 
-## 2. Knowledge Catalog & Existing Dataset Introspection
+## 2. CLI Metadata Introspection (`bigquery-metadata` & `knowledge-catalog-metadata`)
 
 When modeling an existing BigQuery dataset (`dataset_id` provided or running `demo-create lookml model --dataset <id>`):
-1. **Knowledge Catalog MCP Integration**:
-   - If the `knowledge-catalog` MCP server is available, use `call_mcp_tool` or `demo-create lookml model --dataset <id>` to introspect table semantics, business glossaries, column descriptions, and primary/foreign key relationships.
-   - The CLI automatically queries BigQuery `INFORMATION_SCHEMA.TABLE_CONSTRAINTS` and Google Cloud Data Catalog / Dataplex entry tags (`@bigquery` entry group).
+1. **Direct CLI Metadata & Catalog Extraction**:
+   - Execute the `bigquery-metadata` skill (`bq query` on `INFORMATION_SCHEMA` / `bq show`) and `knowledge-catalog-metadata` skill (`gcloud dataplex entries lookup` / `datascans describe`) directly via CLI. Never invoke MCP servers.
+   - Synthesize findings into `SPEC.md` under `## Data Dictionary & Semantic Context` (including primary/foreign keys, null/distinct ratios, low-cardinality `suggestions`, and PII `access_grant` directives).
+   - Run `demo-create lookml model --dataset <id>` (which uses the internal Python SDK fallback if needed) and enrich the generated LookML views and explores using the `SPEC.md` Data Dictionary.
 2. **Incorporate Semantic Metadata**:
-   - Map Data Catalog field descriptions directly into LookML `description:` parameters.
+   - Map catalog field descriptions directly into LookML `description:` parameters.
    - Use discovered foreign key constraints to define join paths and explore topologies.
 
 ---

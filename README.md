@@ -8,10 +8,10 @@
 ## Overview
 
 `demo-create` unifies the entire full-stack Looker demo creation lifecycle into a single automated pipeline:
-1. **Pre-flight & Environment Audit (`pre-check`)**: Verifies active GCP/ADC accounts, installs/patches global MCP tools (`data-designer`, `bigquery`, `knowledge-catalog`), checks Looker authentication (OAuth / API keys), and organizes agent skills into intent-based subfolders.
-2. **Dataset Decision & Synthesis**: Automatically checks for existing BigQuery datasets, enables data augmentation or green-field relational schema generation, and validates referential integrity.
-3. **BigQuery Loading**: Creates datasets and partitioned/clustered tables in BigQuery.
-4. **LookML Generation & Direct Code-Mode Deployment**: Autogenerates production-ready views, explores, and executive dashboards, provisioning and deploying them directly to the Looker instance using `lkr code-mode` without requiring an MCP server.
+1. **Pre-flight & Environment Audit (`pre-check`)**: Verifies active GCP/ADC accounts, actively prunes deprecated MCP servers (`data-designer`, `bigquery`, `knowledge-catalog`), checks Looker authentication (OAuth / API keys), and organizes CLI-first agent skills into intent-based subfolders.
+2. **Dataset Decision & Side-by-Side A/B Synthesis**: Supports green-field relational schema co-design with a side-by-side A/B comparison between pure-Python LLM script generation (`data-engineer-llm`) and DataDesigner CLI execution (`data-engineer-dd`), evaluated across a 4-Dimension Comparative Scorecard.
+3. **BigQuery Loading via `bq` CLI**: Creates datasets and loads Parquet tables directly via Google Cloud SDK `bq load`, with `--verify-only` state synchronization.
+4. **LookML Generation & Direct Code-Mode Deployment**: Introspects BigQuery schemas and Dataplex semantics via CLI skills (`bigquery-metadata`, `knowledge-catalog-metadata`) into `SPEC.md`, autogenerates production-ready views, explores, and executive dashboards, and deploys them directly via `lkr code-mode`.
 5. **Conversational Analytics & Gemini Enterprise**: Provisions Looker CA AI Agents, extracts dashboard queries into 1:1 Golden Queries, and publishes to Gemini Enterprise.
 6. **Embedded Portal Scaffolding**: Clones and configures a clean, dedicated `looker-embed-demo` workspace for external client demos.
 
@@ -23,8 +23,8 @@ Instead of spending days or weeks stitching together synthetic data scripts, deb
 
 | Production Asset | What Gets Automated | Exact Output Format |
 | :--- | :--- | :--- |
-| **BigQuery Data Warehouse** | 3NF relational schema synthesis, realistic engineering distributions, PK/FK referential integrity, and batch Parquet upload | Clean BigQuery dataset with partitioned/clustered tables |
-| **LookML 3NF Semantic Model** | Explore Base View selection, Chasm Trap elimination with Native Derived Table (NDT) rollups joined `one_to_one`, role-playing diamond joins, and field metadata (`label:`, `description:`, `value_format_name:`, `drill_fields:`) | Complete `views/*.view.lkml`, `explores/*.explore.lkml`, and `models/*.model.lkml` |
+| **BigQuery Data Warehouse** | 3NF relational schema synthesis (A/B benchmarked across LLM scripts & DataDesigner CLI), PK/FK referential integrity, and batch Parquet upload via `bq load` | Clean BigQuery dataset with partitioned/clustered tables |
+| **LookML 3NF Semantic Model** | CLI-driven BigQuery & Dataplex metadata extraction (`SPEC.md`), Explore Base View selection, Chasm Trap elimination with Native Derived Table (NDT) rollups joined `one_to_one`, role-playing diamond joins, and field metadata (`label:`, `description:`, `value_format_name:`, `drill_fields:`) | Complete `views/*.view.lkml`, `explores/*.explore.lkml`, and `models/*.model.lkml` |
 | **Executive Tabbed Dashboard** | Executive tabbed report architecture, single-value KPI banners, dual-axis timelines, `advanced_vis_config` rounded geometry, cross-filtering, and popovers | Production `dashboards/*.dashboard.lookml` deployed via API |
 | **LookML Performance Optimization** | Static `suggestions: [...]` on low-cardinality dims, `suggestable: no` on unique IDs/text, model datagroup caching, BigQuery partition pruning filters, and raw foreign key hiding | Production-hardened LookML avoiding database query spikes |
 | **Pre-Deployment QA Audit** | Dev branch push, LookML project validator, 100% test execution of all dashboard queries via Looker API, and bounded self-healing (max 3 iterations) | 100% HTTP 200 OK query pass certificate before production release |
@@ -86,7 +86,7 @@ uv tool install looker-demo-cli
 This installs `demo-create`, `looker-demo-cli`, and `lkr` (`lkr-dev-cli`) into an isolated, persistent environment available across all terminal sessions.
 
 #### Step 2: Run Pre-Flight Audit & Auto-Fix
-Immediately run `pre-check --fix` to configure MCP servers, check dependencies, and sync agent skills:
+Immediately run `pre-check --fix` to prune deprecated MCP servers, check dependencies, and sync CLI-first agent skills:
 ```bash
 demo-create pre-check --fix
 ```
@@ -144,9 +144,12 @@ Once authenticated, instruct your AI assistant in chat:
 > *"Create an end-to-end Looker demo for IoT Fleet Analytics (or SaaS ARR, Retail, Fintech)."*
 
 The AI agent orchestrates the entire workflow interactively:
-- **Interactive Schema Co-Design**: Collaborate with the agent on ERD diagrams, field definitions, and micro-sample data previews before generating full scale.
-- **Fast-Path Deterministic CLI Execution**: The parent agent runs compiled CLI subcommands directly (`demo-create data`, `demo-create lookml model`, `demo-create lookml optimize`, `demo-create lookml deploy`, `demo-create agent create`), eliminating subagent initialization drag and serialization latency.
-- **On-Demand Specialized Subagents**: Spawned strictly for complex or non-deterministic recovery paths:
+- **Interactive Schema Co-Design & Side-by-Side A/B Benchmark**: Collaborate with the agent on ERD diagrams and schema definitions. At Gate 1, the orchestrator spawns parallel subagents (`data-engineer-llm` and `data-engineer-dd`) to benchmark pure-Python LLM script generation against DataDesigner CLI execution across a 4-Dimension Comparative Scorecard + 5-row sample preview before loading BigQuery via `bq load`.
+- **Fast-Path Deterministic CLI Execution**: The parent agent runs compiled CLI subcommands and CLI skills directly (`bq`, `gcloud dataplex`, `uvx ... data-designer`, `demo-create data`, `demo-create lookml model`, `demo-create lookml optimize`, `demo-create lookml deploy`, `demo-create agent create`), eliminating MCP daemon overhead and serialization latency.
+- **On-Demand Specialized Subagents**:
+  - [`data-engineer-llm`](skills/looker-demo-orchestrator/subagents/data-engineer-llm.md) & [`data-engineer-dd`](skills/looker-demo-orchestrator/subagents/data-engineer-dd.md) (Parallel Gate 1 A/B data synthesis: pure-Python PEP 723 script vs DataDesigner `uvx` CLI)
+  - [`data-engineer`](skills/looker-demo-orchestrator/subagents/data-engineer.md) (Direct CLI Parquet synthesis & BigQuery loading via `bq load` + `--verify-only` state sync)
+  - [`lookml-modeler`](skills/looker-demo-orchestrator/subagents/lookml-modeler.md) (Front-door LookML modeler using `bigquery-metadata` and `knowledge-catalog-metadata` CLI skills + `SPEC.md`)
   - [`lookml-snowflake-modeler`](skills/looker-demo-orchestrator/subagents/lookml-snowflake-modeler.md) (3NF semantic modeling, NDT rollups & diamond joins when normalized schemas are detected)
   - [`lookml-dashboard-designer`](skills/looker-demo-orchestrator/subagents/lookml-dashboard-designer.md) (Authors executive tabbed dashboards using the [`looker-visualizations`](skills/looker-visualizations/SKILL.md) suite)
   - [`lookml-qa-validator`](skills/looker-demo-orchestrator/subagents/lookml-qa-validator.md) (Dev push, validator & max 3 query self-healing when deployment tests fail)
@@ -202,7 +205,7 @@ earlier answers and you only pass what changes.
 ### Run Ephemerally with `uvx` (Zero-Install Alternative)
 You can also execute the CLI on-demand in an ephemeral cache without pre-installing:
 ```bash
-# Run pre-flight audit and auto-fix MCP / skills
+# Run pre-flight audit, prune deprecated MCP servers, and sync skills
 uvx looker-demo-cli pre-check --fix
 
 # Generate a synthetic dataset without pre-installing anything
@@ -292,10 +295,10 @@ $ demo-create status
 
 ### 2. Environment & Skill Audit (`pre-check`)
 ```bash
-# Run visual audit of GCP credentials, MCP tools, and intent skills
+# Run visual audit of GCP credentials, MCP cleanup state, and intent skills
 demo-create pre-check
 
-# Automatically install missing MCP configs and symlink skills into intent subfolders
+# Automatically prune deprecated MCP servers and sync CLI-first skills into intent subfolders
 demo-create pre-check --fix
 
 # Emit raw JSON report for programmatic agent consumption
@@ -316,6 +319,9 @@ demo-create data generate --domain retail --row-count 25000 --output-dir scratch
 
 # Upload Parquet tables to BigQuery
 demo-create data upload --parquet-dir scratch/parquet --gcp-project my-gcp-project --dataset retail_analytics
+
+# Verify tables loaded directly via `bq load` CLI and synchronize .demo-state.json without re-uploading
+demo-create data upload --parquet-dir scratch/parquet --gcp-project my-gcp-project --dataset retail_analytics --verify-only
 
 # Inspect existing BigQuery tables and schema (table view or raw JSON)
 demo-create data inspect --gcp-project my-gcp-project --dataset retail_analytics
@@ -381,7 +387,7 @@ demo-create ge publish --agent-id 1042
 
 ## Intent-Based Skill Organization
 
-When you run `demo-create pre-check --fix`, skills are automatically pulled from remote repositories and organized into `~/.gemini/config/skills/`:
+When you run `demo-create pre-check --fix`, all bundled CLI skills and remote repository skills are automatically synchronized and organized into `~/.gemini/config/skills/`:
 
 ```
 ~/.gemini/config/skills/
@@ -389,7 +395,9 @@ When you run `demo-create pre-check --fix`, skills are automatically pulled from
 │   ├── data-designer/
 │   ├── data-designer-architect/
 │   ├── data-designer-engineer/
-│   └── data-designer-evaluator/
+│   ├── data-designer-evaluator/
+│   ├── bigquery-metadata/
+│   └── knowledge-catalog-metadata/
 ├── lookml/
 │   ├── lkr-code-mode/
 │   ├── repo-lookml/
@@ -398,13 +406,20 @@ When you run `demo-create pre-check --fix`, skills are automatically pulled from
 │   ├── lookml-view/
 │   ├── lookml-dashboard/
 │   ├── lookml-dashboard-to-query/
+│   ├── lookml-fields/
+│   ├── lookml-liquid/
+│   ├── lookml-access-grants/
+│   ├── lookml-refinements/
+│   ├── lookml-sets/
+│   ├── lookml-tests/
+│   ├── embed-themes/
 │   ├── lookml-snowflake-modeler/
-│   ├── looker-visualizations/
-│   │   ├── looker-vis-cartesian/
-│   │   ├── looker-vis-tabular-kpi/
-│   │   ├── looker-vis-specialty-maps/
-│   │   └── looker-vis-advanced-config/
-│   └── embed-themes/
+│   ├── lookml-filtered-measures/
+│   └── looker-visualizations/
+│       ├── looker-vis-cartesian/
+│       ├── looker-vis-tabular-kpi/
+│       ├── looker-vis-specialty-maps/
+│       └── looker-vis-advanced-config/
 └── embed-portal/
     ├── looker-demo-orchestrator/
     ├── demo-spec/
@@ -412,7 +427,14 @@ When you run `demo-create pre-check --fix`, skills are automatically pulled from
     ├── customize-frontend/
     ├── customize-frontend-branding/
     ├── customize-frontend-theme/
-    └── sso-embed/
+    ├── customize-frontend-looker-config/
+    ├── demo-apis/
+    ├── sso-embed/
+    ├── looker-sdk-browser/
+    ├── embed-javascript-events-api/
+    ├── visualization-components/
+    ├── update-user-attribute/
+    └── localize-frontend/
 ```
 
-This guarantees that any Antigravity agent in any directory can discover and execute Looker demo workflows.
+This guarantees that any AI agent in any workspace directory can discover and execute Looker demo workflows using direct CLI execution without requiring background MCP daemons.

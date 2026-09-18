@@ -56,10 +56,13 @@ SKILL_GIT_REPOSITORIES: dict[str, dict[str, Any]] = {
 # Intent-Based Skill Mappings (category -> skill_name -> (repo_key, relative_skill_subfolder))
 INTENT_SKILL_DEFINITIONS: dict[str, dict[str, tuple[str, str]]] = {
     "data-design": {
-        "data-designer": ("synthetic-data-generator", "data-designer"),
-        "data-designer-architect": ("synthetic-data-generator", "data-designer-architect"),
-        "data-designer-engineer": ("synthetic-data-generator", "data-designer-engineer"),
-        "data-designer-evaluator": ("synthetic-data-generator", "data-designer-evaluator"),
+        "synthetic-data-authoring": ("local_cli", "synthetic-data-authoring"),
+        "data-designer": ("local_cli", "data-designer"),
+        "data-designer-architect": ("local_cli", "data-designer-architect"),
+        "data-designer-engineer": ("local_cli", "data-designer-engineer"),
+        "data-designer-evaluator": ("local_cli", "data-designer-evaluator"),
+        "bigquery-metadata": ("local_cli", "bigquery-metadata"),
+        "knowledge-catalog-metadata": ("local_cli", "knowledge-catalog-metadata"),
     },
     "lookml": {
         "lkr-code-mode": ("lkr-cli", "lkr-code-mode"),

@@ -19,6 +19,13 @@ class EntityFieldSpec(BaseModel):
     foreign_reference: str | None = None  # TableName.Field
     description: str | None = None
     sample_values: list[Any] | None = None
+    distribution: str | None = None  # lognormal, pareto, normal, uniform, weighted_choice
+    weights: list[float] | None = None
+    formula: str | None = None
+    mean: float | None = None
+    std: float | None = None
+    min_val: float | None = None
+    max_val: float | None = None
 
 
 class EntitySchemaSpec(BaseModel):
@@ -28,6 +35,8 @@ class EntitySchemaSpec(BaseModel):
     primary_key: str | None = None
     foreign_keys: dict[str, str] = Field(default_factory=dict)  # fk_col -> ParentTable.ParentCol
     row_count: int = 1000
+    partition_field: str | None = None
+    cluster_fields: list[str] | None = None
 
 
 class DomainBlueprint(BaseModel):
@@ -285,10 +294,12 @@ def _try_data_designer_script(
 ) -> list[LookMLTableSpec] | None:
     """Attempt to execute a DataDesigner builder script natively if data_designer is installed."""
     try:
+        import importlib
         import importlib.util
 
-        import data_designer.config as dd  # noqa: F401
-        from data_designer.engine import DataDesignerEngine  # type: ignore[import-untyped]
+        importlib.import_module("data_designer.config")
+        dd_engine_mod = importlib.import_module("data_designer.engine")
+        DataDesignerEngine = dd_engine_mod.DataDesignerEngine
 
         spec = importlib.util.spec_from_file_location("dd_builder", builder_script)
         if spec and spec.loader:
@@ -333,21 +344,45 @@ def generate_domain_dataset(
     output_dir: Path,
     micro_sample_only: bool = False,
     builder_script: Path | None = None,
-    engine: str = "auto",
+    engine: str = "modular-dag",
 ) -> list[LookMLTableSpec]:
-    """Generate dynamic synthetic dataset prioritizing DataDesigner when available, with Python fallback."""
+    """Generate synthetic dataset using ModularDAGSynthesizer by default, with legacy fallback."""
     if isinstance(target, DomainBlueprint):
         blueprint = target
     else:
         blueprint = create_dynamic_blueprint_from_name(target)
 
-    if engine in ("auto", "data-designer") and builder_script and builder_script.exists():
+    write_parquet = not micro_sample_only
+
+    if engine == "data-designer" and builder_script and builder_script.exists():
         row_count = 10 if micro_sample_only else (blueprint.entities[0].row_count if blueprint.entities else 1000)
         dd_specs = _try_data_designer_script(builder_script, row_count, output_dir)
         if dd_specs:
             return dd_specs
-        if engine == "data-designer":
-            raise RuntimeError(f"Data Designer execution failed for `{builder_script}`.")
+        raise RuntimeError(f"Data Designer execution failed for `{builder_script}`.")
+
+    if engine in ("modular-dag", "auto"):
+        from looker_demo_cli.generators.dag_synthesizer import ModularDAGSynthesizer
+
+        dag_synth = ModularDAGSynthesizer(output_dir=output_dir)
+        if builder_script and builder_script.exists():
+            res = dag_synth.synthesize_from_script(
+                script_path=builder_script,
+                blueprint=blueprint,
+                validate=True,
+                write_parquet=write_parquet,
+            )
+            for s in res.table_specs:
+                object.__setattr__(s, "_dag_result", res)
+            return res.table_specs
+
+        if micro_sample_only:
+            for ent in blueprint.entities:
+                ent.row_count = 10
+        res = dag_synth.synthesize(blueprint=blueprint, validate=True, write_parquet=write_parquet)
+        for s in res.table_specs:
+            object.__setattr__(s, "_dag_result", res)
+        return res.table_specs
 
     synthesizer = DynamicDataSynthesizer()
     return synthesizer.synthesize_dataset(

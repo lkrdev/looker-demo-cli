@@ -324,7 +324,7 @@ Design, synthesize, inspect, and upload BigQuery demo datasets.
 | :--- | :--- |
 | [`generate`](#demo-create-data-generate) | Synthesize high-fidelity relational Parquet dataset tables locally. |
 | [`inspect`](#demo-create-data-inspect) | Inspect tables, schemas, and metadata in a BigQuery dataset. |
-| [`upload`](#demo-create-data-upload) | Upload local Parquet tables into a BigQuery dataset. |
+| [`upload`](#demo-create-data-upload) | Upload local Parquet tables into a BigQuery dataset via ADC with automated partitioning & clustering. |
 
 ### `demo-create data generate`
 
@@ -339,9 +339,15 @@ demo-create data generate [OPTIONS]
 | `--domain` | Domain theme name (e.g. supply_chain, trucking_iot) | `logistics_analytics` |
 | `--row-count` | Target fact row count | `1000` |
 | `--output-dir` | Local directory to write Parquet files |  |
-| `--builder-script` | Path to DataDesigner Python builder script |  |
-| `--engine` | Synthesis engine priority: auto, data-designer, or fallback | `auto` |
-| `--upload` | Automatically upload synthesized Parquet tables to BigQuery |  |
+| `--schema-file` | Path to JSON DomainBlueprint schema specification |  |
+| `--script` | Path to LLM-authored Python generator script |  |
+| `--builder-script` | Path to DataDesigner or custom Python builder script |  |
+| `--engine` | Synthesis engine priority: modular-dag, auto, data-designer, or fallback | `modular-dag` |
+| `--preview` | Inspect sampled rows across generated tables without disk or BigQuery commit |  |
+| `--preview-rows`, `-n` | Number of sample rows to display in --preview mode | `5` |
+| `--validate-only` | Execute topological DAG and in-memory validation gates without uploading to BigQuery |  |
+| `--upload` | Automatically upload synthesized Parquet tables to BigQuery via ADC |  |
+| `--json-scorecard` | Include structured verification scorecard and emit JSON envelope on stdout |  |
 | `--gcp-project` | Target GCP Project ID if uploading |  |
 | `--dataset` | Target BigQuery dataset ID if uploading |  |
 | `--json` | Emit the result envelope as JSON on stdout |  |
@@ -365,7 +371,7 @@ demo-create data inspect [OPTIONS]
 
 ### `demo-create data upload`
 
-Upload local Parquet tables into a BigQuery dataset.
+Upload local Parquet tables into a BigQuery dataset via ADC with automated partitioning & clustering.
 
 ```bash
 demo-create data upload [OPTIONS]
@@ -377,6 +383,7 @@ demo-create data upload [OPTIONS]
 | `--dataset` | Target BigQuery dataset ID |  |
 | `--gcp-project` | Target GCP Project ID |  |
 | `--location` | BigQuery dataset location | `US` |
+| `--verify-only` | Verify tables already loaded in BigQuery and sync state without re-uploading Parquet files |  |
 | `--json` | Emit the result envelope as JSON on stdout |  |
 | `--state-file` | Path to .demo-state.json. Defaults to discovering it in the current directory. |  |
 

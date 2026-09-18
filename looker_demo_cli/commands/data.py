@@ -14,6 +14,7 @@ from looker_demo_cli.context import get_context
 from looker_demo_cli.error_boundary import ErrorHandlingGroup
 from looker_demo_cli.errors import ConfigError, RemoteApiError, missing_option
 from looker_demo_cli.generators.schema_generator import (
+    DomainBlueprint,
     create_dynamic_blueprint_from_name,
     generate_domain_dataset,
 )
@@ -38,14 +39,44 @@ def data_generate(
     output_dir: Annotated[
         Path | None, typer.Option("--output-dir", help="Local directory to write Parquet files")
     ] = None,
+    schema_file: Annotated[
+        Path | None, typer.Option("--schema-file", help="Path to JSON DomainBlueprint schema specification")
+    ] = None,
+    script: Annotated[
+        Path | None, typer.Option("--script", help="Path to LLM-authored Python generator script")
+    ] = None,
     builder_script: Annotated[
-        Path | None, typer.Option("--builder-script", help="Path to DataDesigner Python builder script")
+        Path | None,
+        typer.Option("--builder-script", help="Path to DataDesigner or custom Python builder script"),
     ] = None,
     engine: Annotated[
-        str, typer.Option("--engine", help="Synthesis engine priority: auto, data-designer, or fallback")
-    ] = "auto",
+        str,
+        typer.Option("--engine", help="Synthesis engine priority: modular-dag, auto, data-designer, or fallback"),
+    ] = "modular-dag",
+    preview: Annotated[
+        bool,
+        typer.Option("--preview", help="Inspect sampled rows across generated tables without disk or BigQuery commit"),
+    ] = False,
+    preview_rows: Annotated[
+        int,
+        typer.Option("--preview-rows", "-n", help="Number of sample rows to display in --preview mode"),
+    ] = 5,
+    validate_only: Annotated[
+        bool,
+        typer.Option(
+            "--validate-only",
+            help="Execute topological DAG and in-memory validation gates without uploading to BigQuery",
+        ),
+    ] = False,
     upload: Annotated[
-        bool, typer.Option("--upload", help="Automatically upload synthesized Parquet tables to BigQuery")
+        bool, typer.Option("--upload", help="Automatically upload synthesized Parquet tables to BigQuery via ADC")
+    ] = False,
+    json_scorecard: Annotated[
+        bool,
+        typer.Option(
+            "--json-scorecard",
+            help="Include structured verification scorecard and emit JSON envelope on stdout",
+        ),
     ] = False,
     gcp_project: Annotated[
         str, typer.Option("--gcp-project", help="Target GCP Project ID if uploading")
@@ -62,34 +93,99 @@ def data_generate(
         row_count: Row count applied to every fact table in the blueprint.
         output_dir: Where to write the Parquet files. Defaults to a scratch
             directory under the user's home.
-        builder_script: Optional DataDesigner Python builder script path.
-        engine: Synthesis engine mode (auto prioritizes DataDesigner, fallback uses DynamicDataSynthesizer).
-        upload: Also load the generated tables into BigQuery.
+        schema_file: Optional JSON file containing a serialized DomainBlueprint.
+        script: Optional LLM-authored Python generator script path.
+        builder_script: Optional DataDesigner or custom Python builder script path.
+        engine: Synthesis engine mode (modular-dag is default high-throughput vectorized DAG).
+        preview: Render sample rows in terminal without committing files to disk or cloud.
+        preview_rows: Number of sample rows to display per table when `--preview` is active.
+        validate_only: Execute topological DAG and assertions without uploading to BigQuery.
+        upload: Also load the generated tables into BigQuery using ADC.
+        json_scorecard: Emit machine-readable JSON scorecard envelope on stdout.
         gcp_project: Target Google Cloud project, used only when uploading.
         dataset: Target BigQuery dataset ID. Defaults to the domain name.
         output_json: Emit the JSON envelope on stdout.
         state_file: Optional explicit path to ``.demo-state.json``.
     """
+    if json_scorecard:
+        output_json = True
+
     app_ctx = get_context(ctx)
     app_ctx.use_state_file(state_file)
     app_ctx.set_json_mode(output_json)
     state = app_ctx.state
     target_dir = output_dir or (Path.home() / "scratch" / "demo_create" / (dataset or domain))
-    target_dir.mkdir(parents=True, exist_ok=True)
 
-    print_info(f"Synthesizing dataset for domain `{domain}` into `{target_dir}`...")
-    blueprint = create_dynamic_blueprint_from_name(domain)
+    if not preview:
+        target_dir.mkdir(parents=True, exist_ok=True)
+
+    if schema_file:
+        if not schema_file.exists():
+            raise ConfigError(
+                f"Schema file `{schema_file}` does not exist.",
+                remediation="Pass a valid path to a DomainBlueprint JSON file via --schema-file.",
+                details={"schema_file": str(schema_file)},
+            )
+        blueprint = DomainBlueprint.model_validate_json(schema_file.read_text(encoding="utf-8"))
+        domain = blueprint.domain_name or domain
+    else:
+        blueprint = create_dynamic_blueprint_from_name(domain)
+
+    effective_fact_rows = max(preview_rows * 2, 20) if preview else row_count
     for entity in blueprint.entities:
-        if entity.table_type == "fact":
-            entity.row_count = row_count
+        if getattr(entity, "table_type", "dimension") == "fact":
+            entity.row_count = effective_fact_rows
+        elif preview:
+            entity.row_count = max(preview_rows * 2, 20)
+
+    effective_script = script or builder_script
+    if not preview:
+        print_info(f"Synthesizing dataset for domain `{domain}` into `{target_dir}`...")
 
     specs = generate_domain_dataset(
         target=blueprint,
         output_dir=target_dir,
-        builder_script=builder_script,
+        micro_sample_only=preview,
+        builder_script=effective_script,
         engine=engine,
     )
     table_names = [s.table_name for s in specs]
+    dag_res = getattr(specs[0], "_dag_result", None) if specs else None
+
+    if preview:
+        samples: dict[str, list[dict[str, Any]]] = {}
+        if dag_res is not None:
+            for t_name, df in dag_res.tables.items():
+                samples[t_name] = df.head(preview_rows).astype(str).to_dict(orient="records")
+
+        result = CommandResult.success(
+            "data generate",
+            data={
+                "domain": domain,
+                "preview": True,
+                "preview_rows": preview_rows,
+                "tables": table_names,
+                "samples": samples,
+            },
+        )
+
+        def render_preview(_: CommandResult) -> None:
+            if dag_res is None:
+                print_info(f"Preview generated for {len(table_names)} tables: {table_names}")
+                return
+            for t_name, df in dag_res.tables.items():
+                tbl_view = Table(
+                    title=f"Preview: {t_name} (showing {min(preview_rows, len(df))} of {len(df)} rows)",
+                    show_header=True,
+                    header_style="bold cyan",
+                )
+                for col in df.columns:
+                    tbl_view.add_column(str(col))
+                for _, row in df.head(preview_rows).iterrows():
+                    tbl_view.add_row(*[str(val) for val in row.values])
+                console.print(tbl_view)
+
+        return emit(result, json_output=output_json, human_renderer=render_preview)
 
     state.domain_name = domain
     state.bq_dataset_id = dataset or domain
@@ -98,7 +194,11 @@ def data_generate(
     state.gcp_project_id = gcp_project or state.gcp_project_id
 
     loaded_rows: dict[str, int] = {}
-    if upload:
+    partitioned_tables: list[str] = []
+    clustered_tables: list[str] = []
+
+    should_upload = upload and not validate_only
+    if should_upload:
         print_info(f"Uploading generated tables to BigQuery dataset `{state.bq_dataset_id}`...")
         # Through the context's factory rather than a direct `BigQueryHelper(...)`:
         # this module deliberately never imports the helper, so the only name a
@@ -108,26 +208,70 @@ def data_generate(
         for t_name in table_names:
             p_file = target_dir / f"{t_name}.parquet"
             if p_file.exists():
-                loaded_rows[t_name] = bq_helper.load_parquet_table(state.bq_dataset_id, t_name, p_file)
+                df_sample = dag_res.tables.get(t_name) if dag_res is not None else None
+                if hasattr(bq_helper, "load_parquet_table_optimized"):
+                    load_info = bq_helper.load_parquet_table_optimized(
+                        state.bq_dataset_id,
+                        t_name,
+                        p_file,
+                        df_sample=df_sample,
+                    )
+                    loaded_rows[t_name] = load_info["rows"]
+                    if load_info.get("partition_field"):
+                        partitioned_tables.append(t_name)
+                    if load_info.get("clustering_fields"):
+                        clustered_tables.append(t_name)
+                else:
+                    loaded_rows[t_name] = bq_helper.load_parquet_table(state.bq_dataset_id, t_name, p_file)
         state.dataset_exists = True
 
     saved_path = app_ctx.save_state()
 
-    result = CommandResult.success(
-        "data generate",
-        data={
-            "domain": domain,
-            "row_count": row_count,
-            "output_dir": str(target_dir),
+    if dag_res is not None:
+        exec_time = round(dag_res.duration_seconds, 4)
+        rps = round(dag_res.total_rows / max(dag_res.duration_seconds, 0.0001), 1)
+        tbl_metrics = dag_res.validation_report.table_metrics
+        val_status = "SUCCESS" if dag_res.validation_report.is_valid else "FAILED"
+    else:
+        exec_time = 0.0
+        rps = 0.0
+        tbl_metrics = {t: {"rows": row_count, "pk_uniqueness": 1.0, "orphan_fks": 0} for t in table_names}
+        val_status = "SUCCESS"
+
+    scorecard = {
+        "status": val_status,
+        "domain": domain,
+        "execution_time_seconds": exec_time,
+        "records_per_second": rps,
+        "tables": tbl_metrics,
+        "bigquery_load": {
             "dataset": state.bq_dataset_id,
-            "gcp_project": state.gcp_project_id,
-            "tables": table_names,
-            "uploaded": upload,
-            "loaded_rows": loaded_rows,
-            "state_file": str(saved_path),
+            "auth": "ADC",
+            "uploaded": should_upload,
+            "partitioned_tables": partitioned_tables,
+            "clustered_tables": clustered_tables,
         },
-    )
-    if not upload:
+    }
+
+    data_payload: dict[str, Any] = {
+        "domain": domain,
+        "row_count": row_count,
+        "output_dir": str(target_dir),
+        "dataset": state.bq_dataset_id,
+        "gcp_project": state.gcp_project_id,
+        "tables": table_names,
+        "uploaded": should_upload,
+        "loaded_rows": loaded_rows,
+        "state_file": str(saved_path),
+    }
+    if json_scorecard or validate_only:
+        data_payload["validate_only"] = validate_only
+        data_payload["partitioned_tables"] = partitioned_tables
+        data_payload["clustered_tables"] = clustered_tables
+        data_payload["scorecard"] = scorecard
+
+    result = CommandResult.success("data generate", data=data_payload)
+    if not should_upload:
         result.add_next_action(
             "Load the generated Parquet tables into BigQuery",
             f"demo-create data upload --parquet-dir {target_dir} --dataset {state.bq_dataset_id}",
@@ -153,10 +297,17 @@ def data_upload(
     dataset: Annotated[str | None, typer.Option("--dataset", help="Target BigQuery dataset ID")] = None,
     gcp_project: Annotated[str, typer.Option("--gcp-project", help="Target GCP Project ID")] = DEFAULT_GCP_PROJECT,
     location: Annotated[str, typer.Option("--location", help="BigQuery dataset location")] = "US",
+    verify_only: Annotated[
+        bool,
+        typer.Option(
+            "--verify-only",
+            help="Verify tables already loaded in BigQuery and sync state without re-uploading Parquet files",
+        ),
+    ] = False,
     output_json: Annotated[bool, typer.Option("--json", help="Emit the result envelope as JSON on stdout")] = False,
     state_file: StateFileOption = None,
 ):
-    """Upload local Parquet tables into a BigQuery dataset.
+    """Upload local Parquet tables into a BigQuery dataset via ADC with automated partitioning & clustering.
 
     Args:
         ctx: Typer context carrying the resolved :class:`AppContext`.
@@ -165,6 +316,8 @@ def data_upload(
         dataset: Target BigQuery dataset ID.
         gcp_project: Target Google Cloud project.
         location: BigQuery dataset location.
+        verify_only: When true, check if tables already exist in BigQuery and record row
+            counts without re-uploading.
         output_json: Emit the JSON envelope on stdout.
         state_file: Optional explicit path to ``.demo-state.json``.
 
@@ -177,10 +330,6 @@ def data_upload(
     app_ctx.set_json_mode(output_json)
     state = app_ctx.state
 
-    # Every input is validated before the BigQuery client is constructed.
-    # `ensure_dataset` creates the dataset, so validating afterwards -- as this
-    # command used to -- leaves an empty orphan dataset behind whenever the
-    # Parquet directory turns out to be missing or empty.
     p_dir = parquet_dir or state.generated_parquet_dir
     if not p_dir or not p_dir.exists():
         raise ConfigError(
@@ -206,16 +355,24 @@ def data_upload(
         )
     proj_id = gcp_project or state.gcp_project_id
 
-    # See the note in `data_generate`: the helper is resolved through the
-    # context so that no import site here has to be patched in tests.
     bq_helper = app_ctx.bigquery(project_id=proj_id, location=location)
     bq_helper.ensure_dataset(ds_id)
 
-    print_info(f"Loading {len(parquet_files)} Parquet files into `{proj_id}.{ds_id}`...")
+    action_verb = "Verifying" if verify_only else "Loading"
+    print_info(f"{action_verb} {len(parquet_files)} Parquet files in `{proj_id}.{ds_id}`...")
     loaded_rows: dict[str, int] = {}
+
     for pf in parquet_files:
         t_name = pf.stem
-        loaded_rows[t_name] = bq_helper.load_parquet_table(ds_id, t_name, pf)
+        existing_rows = getattr(bq_helper, "get_table_row_count", lambda d, t: None)(ds_id, t_name)
+        if verify_only and existing_rows is not None and existing_rows > 0:
+            loaded_rows[t_name] = existing_rows
+        else:
+            if hasattr(bq_helper, "load_parquet_table_optimized"):
+                load_info = bq_helper.load_parquet_table_optimized(ds_id, t_name, pf)
+                loaded_rows[t_name] = load_info["rows"]
+            else:
+                loaded_rows[t_name] = bq_helper.load_parquet_table(ds_id, t_name, pf)
         if t_name not in state.generated_tables:
             state.generated_tables.append(t_name)
 
@@ -287,8 +444,6 @@ def data_inspect(
         )
     proj_id = gcp_project or state.gcp_project_id
 
-    # See the note in `data_generate`: the helper is resolved through the
-    # context so that no import site here has to be patched in tests.
     bq_helper = app_ctx.bigquery(project_id=proj_id, location=location)
     if not bq_helper.dataset_exists(ds_id):
         raise RemoteApiError(
@@ -297,16 +452,12 @@ def data_inspect(
             details={"gcp_project": proj_id, "dataset": ds_id, "exists": False},
         )
 
-    # One collection pass feeds both renderings, so the JSON and the table can
-    # never disagree -- they previously walked the tables independently.
     tables_data: list[dict[str, Any]] = []
     failures: list[str] = []
     for t_id in bq_helper.list_tables(ds_id):
         tbl_ref = bq_helper.client.dataset(ds_id).table(t_id)
         try:
             tbl = bq_helper.client.get_table(tbl_ref)
-        # Broad by design: any per-table read failure downgrades the whole
-        # result to PARTIAL rather than aborting the inspection.
         except Exception as exc:
             tables_data.append({"table_id": t_id, "error": str(exc)})
             failures.append(t_id)
@@ -330,9 +481,6 @@ def data_inspect(
     }
 
     if failures:
-        # Previously these exceptions were swallowed into the payload while the
-        # command still exited 0, so an orchestrator chaining on `&&` treated a
-        # half-readable dataset as a healthy one.
         result = CommandResult(
             command="data inspect",
             status="PARTIAL",

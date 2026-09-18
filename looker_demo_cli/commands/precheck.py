@@ -455,8 +455,15 @@ def _render_mcp_section(mcp_statuses: list[MCPStatus]) -> None:
     t_mcp.add_column("Details")
 
     for m in mcp_statuses:
-        status_label = "[green]CONFIGURED[/green]" if m.is_configured else "[red]MISSING[/red]"
-        details = ", ".join(m.issues) if m.issues else "Ready"
+        if m.details.get("mode") == "cli_skill":
+            status_label = "[green]CLI-ONLY (PRUNED)[/green]"
+            details = "Migrated to direct CLI skill execution"
+        elif m.is_configured:
+            status_label = "[green]CONFIGURED[/green]"
+            details = ", ".join(m.issues) if m.issues else "Ready"
+        else:
+            status_label = "[yellow]DEPRECATED[/yellow]" if any("Deprecated" in i for i in m.issues) else "[red]MISSING[/red]"
+            details = ", ".join(m.issues) if m.issues else "Ready"
         t_mcp.add_row(m.server_name, status_label, details)
     console.print(t_mcp)
 

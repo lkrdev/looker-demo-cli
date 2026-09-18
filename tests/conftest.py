@@ -421,6 +421,36 @@ class FakeBigQueryHelper:
         self.loaded.append((dataset_id, table_name, Path(parquet_file), rows))
         return rows
 
+    def load_parquet_table_optimized(
+        self,
+        dataset_id: str,
+        table_name: str,
+        parquet_file: Path,
+        df_sample: Any = None,
+        partition_field: str | None = None,
+        clustering_fields: list[str] | None = None,
+    ) -> dict[str, Any]:
+        from looker_demo_cli.utils.bigquery_client import BigQueryOptimizationAdvisor
+
+        source = df_sample if df_sample is not None else Path(parquet_file)
+        part_col = partition_field or BigQueryOptimizationAdvisor.infer_partition_field(table_name, source)
+        cluster_cols = clustering_fields or BigQueryOptimizationAdvisor.infer_cluster_fields(
+            table_name, source, part_col
+        )
+        rows = self.load_parquet_table(
+            dataset_id,
+            table_name,
+            parquet_file,
+            clustering_fields=cluster_cols,
+            partition_field=part_col,
+        )
+        return {
+            "table_name": table_name,
+            "rows": rows,
+            "partition_field": part_col,
+            "clustering_fields": cluster_cols,
+        }
+
 
 #: Modules holding a ``BigQueryHelper`` reference that must be swapped for the
 #: fake. ``looker_demo_cli.context`` is the important one: ``AppContext.bigquery``

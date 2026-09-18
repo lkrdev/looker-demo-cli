@@ -405,9 +405,10 @@ GATES: Final[tuple[Gate, ...]] = (
         human_checkpoint=(
             "MANDATORY: Write out the full proposed schema (tables, columns, types, primary/foreign keys) and "
             "Mermaid ERD diagram in visible chat text FIRST. Only AFTER rendering the schema in chat, call "
-            "ask_question to confirm user approval. Once approved, prioritize data-designer MCP tools "
-            "(validate_builder, preview_dataset, generate_dataset, export_to_bigquery) first, falling back to "
-            "demo-create data generate only if data-designer MCP is unavailable."
+            "ask_question to confirm user approval. Once approved, execute side-by-side A/B generation via "
+            "data-engineer-llm (pure Python script) and data-engineer-dd (DataDesigner uvx CLI), present the "
+            "4-Dimension Comparative Scorecard + 5-row sample preview in chat, load the selected dataset(s) via "
+            "bq load CLI, and sync state via demo-create data upload --verify-only."
         ),
         _is_complete=_gate_1_complete,
         _command=_gate_1_command,
