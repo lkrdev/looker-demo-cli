@@ -73,36 +73,7 @@ Read and strictly enforce [`skills/synthetic-data-authoring/SKILL.md`](../../syn
 
 ---
 
-## 3. Strict Guardrails & Security Policies
+## 3. Strict Guardrails & Output Contract
 
-> [!CAUTION]
-> **STRICT PROJECT INTEGRITY & ADC AUTHENTICATION GATE**
-> 1. **NEVER silently fall back or divert to a different GCP Project or dataset** if permissions errors (`403 Access Denied`, `bigquery.datasets.create`, or expired token) occur.
-> 2. If credentials lack permissions or fail on the confirmed project, **IMMEDIATELY ABORT** and return a `PERMISSION_DENIED` status with the exact error message.
-
----
-
-## 4. Output Contract
-
-Return the structured JSON scorecard payload produced by `--json-scorecard` to the parent orchestrator:
-
-```json
-{
-  "status": "SUCCESS",
-  "domain": "telemetry_analytics",
-  "execution_time_seconds": 1.84,
-  "records_per_second": 8695.6,
-  "tables": {
-    "dim_systems": {"rows": 50, "pk_uniqueness": 1.0, "orphan_fks": 0},
-    "fct_sessions": {"rows": 15000, "pk_uniqueness": 1.0, "orphan_fks": 0, "temporal_valid": true}
-  },
-  "bigquery_load": {
-    "dataset": "telemetry_analytics",
-    "auth": "ADC",
-    "uploaded": true,
-    "partitioned_tables": ["fct_sessions"],
-    "clustered_tables": ["fct_sessions"]
-  },
-  "sample_rows_markdown": "| session_id | system_id | duration_ms | status |\n|---|---|---|---|\n| SES-000001 | SYS-00012 | 342.1 | Completed |"
-}
-```
+- **Strict Project Integrity & ADC Gate ([`auth-and-guardrails.md`](../../resources/auth-and-guardrails.md))**: **NEVER silently fall back or divert to a different GCP Project or dataset** if permissions errors (`403 Access Denied`, `bigquery.datasets.create`, or expired token) occur. Immediately abort and return a `PERMISSION_DENIED` status.
+- **Output Contract ([`synthetic-data-examples.md`](../../resources/synthetic-data-examples.md))**: Return the structured JSON scorecard payload produced by `--json-scorecard` (`status`, `domain`, `execution_time_seconds`, `records_per_second`, `tables`, `bigquery_load`, `sample_rows_markdown`) to the parent orchestrator.

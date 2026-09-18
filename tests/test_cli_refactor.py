@@ -82,6 +82,19 @@ def test_all_cli_skills_are_bundled_and_registered(tmp_path: Path) -> None:
     for deprecated in DEPRECATED_SKILLS:
         assert not (tmp_path / deprecated).exists()
 
+    expected_resources = [
+        "README.md",
+        "spec-and-data-dictionary-template.md",
+        "delivery-report-template.md",
+        "dashboard-polish-standards.md",
+        "auth-and-guardrails.md",
+        "synthetic-data-examples.md",
+        "lkr-code-mode-reference.md",
+    ]
+    for res_name in expected_resources:
+        res_path = repo_root / "skills" / "resources" / res_name
+        assert res_path.exists(), f"Missing shared skill resource: {res_path}"
+
 
 def test_data_engineer_subagent_exists_and_disallows_mcp() -> None:
     """The data-engineer subagent must exist, disallow call_mcp_tool, and use synthetic-data-authoring."""

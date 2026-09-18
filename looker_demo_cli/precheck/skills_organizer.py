@@ -141,6 +141,10 @@ def audit_and_organize_skills(fix: bool = False) -> list[SkillInstallStatus]:
 
     repo_paths = sync_remote_skill_repos(fix=fix)
     local_cli_root = Path(__file__).resolve().parent.parent.parent
+    shared_resources_src = local_cli_root / "skills" / "resources"
+
+    if fix and shared_resources_src.exists():
+        shutil.copytree(shared_resources_src, GEMINI_SKILLS_DIR / "resources", dirs_exist_ok=True)
 
     results: list[SkillInstallStatus] = []
 
@@ -148,6 +152,8 @@ def audit_and_organize_skills(fix: bool = False) -> list[SkillInstallStatus]:
         category_dir = GEMINI_SKILLS_DIR / category
         if fix:
             category_dir.mkdir(parents=True, exist_ok=True)
+            if shared_resources_src.exists():
+                shutil.copytree(shared_resources_src, category_dir / "resources", dirs_exist_ok=True)
 
         for skill_name, (repo_key, skill_rel_folder) in skills.items():
             if repo_key == "local_cli":

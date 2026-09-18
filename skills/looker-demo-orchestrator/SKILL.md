@@ -130,40 +130,10 @@ lkr auth list
 
 > [!CAUTION]
 > ### 🛑 Mandatory Pre-Flight Hard Stop & Immediate Auth Fail Gate
-> 1. **Immediate Fail on Missing Auth**: If `demo-create pre-check` exits with code **3** (`AUTH_ERROR`) or reports `data.is_blocked: true`:
->    - **GCP Missing / Unauthenticated**: STOP immediately. Prompt the user to run:
->      ```bash
->      gcloud auth login
->      gcloud auth application-default login
->      gcloud config set project <PROJECT_ID>
->      ```
->    - **Looker Unauthenticated**: Prompt the user to run `lkr auth login` (or configure API keys).
->      If `lkr-cli` OAuth client is not registered on the Looker instance, provide:
->      - **API Explorer URL**: `https://<your-instance>/extensions/marketplace_extension_api_explorer::api-explorer/4.0/methods/Auth/register_oauth_client_app`
->      - **Client ID**: `lkr-cli`
->      - **Request Body JSON**:
->        ```json
->        {
->          "redirect_uri": "http://localhost:8000/callback",
->          "display_name": "LKR",
->          "description": "lkr.dev language server, MCP and CLI",
->          "enabled": true
->        }
->        ```
->      - **Remote Host / SSH Tunneling**: If operating on a remote machine /   / VM, remind the user to forward port 8000:
->        ```bash
->        ssh -L 8000:localhost:8000 <remote-host>
->        ```
->      - **Port 8000 Conflict Cleanup**: Free port 8000 before running `lkr auth login`:
->        ```bash
->        lsof -ti:8000 | xargs kill -9   # (or: fuser -k 8000/tcp)
->        ```
->      - **Headless / Agent OAuth Callback Fallback**: If the user's browser redirects to `http://localhost:8000/callback?code=...` and cannot load the page, the user can paste the full callback URL into the chat so the agent can curl it locally.
->    - **DO NOT proceed** until authentication is re-verified via `demo-create pre-check --fix`.
-> 2. **DO NOT execute any further tool calls** (e.g. do not probe database connections, inspect models, or test SDK commands).
+> 1. **Immediate Fail on Missing Auth**: If `demo-create pre-check` exits with code **3** (`AUTH_ERROR`) or reports `data.is_blocked: true`, **STOP immediately** and follow **[`auth-and-guardrails.md`](../resources/auth-and-guardrails.md)** to guide the user through `gcloud auth login` / `gcloud auth application-default login` or `lkr auth login` (including first-time `lkr-cli` OAuth client registration, SSH port `8000` forwarding, and headless callback `curl` recovery).
+> 2. **DO NOT proceed** or execute any further tool calls until authentication is verified via `demo-create pre-check --fix`.
 > 3. **IMMEDIATELY invoke `ask_question`** in the very next step to prompt the user to confirm all 4 targets below.
 > 4. If `available_connections` is empty in `pre-check`, provide standard recommendations (e.g. `looker_demo_bigquery`, `default_bigquery_connection`) along with a write-in option rather than trying to query Looker first.
-> 5. Only proceed to Phase 1 (Schema Proposal) after the user has explicitly submitted their answers.
 
 ### Mandatory Interactive Confirmation Checklist:
 Before designing schemas, creating BigQuery datasets, or touching Looker, the agent **MUST explicitly prompt the user** (via `ask_question` or interactive prompt) to confirm all four environment targets:
@@ -318,23 +288,17 @@ subagent:
 > 2. **Never Mistake `HTTP 200 OK` Query Validation for Frontend Highcharts Validity**: Looker's `validate_project` and `run_inline_query` (`HTTP 200 OK`) only check LookML and SQL syntax — they do **NOT** validate client-side JavaScript/Highcharts configurations! For example, `series_types: { ...: looker_column }` is syntactically valid YAML/LookML and passes query validation, but **crashes Highcharts in the browser** because Highcharts expects bare `'column'`, `'line'`, `'area'`, `'bar'`, or `'scatter'` inside `series_types`, not Looker's internal `looker_column` wrapper.
 > 3. **Never Rush Past the 3-Pass Executive Polish Protocol**: Between Gate 2 (`lookml model`) and Gate 3 (`lookml deploy`), you **MUST** pause to open the generated `.dashboard.lookml` file, consult the visualization skills ([`looker-visualizations`](../looker-visualizations/SKILL.md), [`looker-vis-advanced-config`](../looker-visualizations/looker-vis-advanced-config/SKILL.md), [`looker-vis-cartesian`](../looker-visualizations/looker-vis-cartesian/SKILL.md), [`looker-vis-tabular-kpi`](../looker-visualizations/looker-vis-tabular-kpi/SKILL.md), [`looker-vis-specialty-maps`](../looker-visualizations/looker-vis-specialty-maps/SKILL.md)), and rewrite the tiles with modern tokens before deployment.
 
-#### What MUST Happen by Default on Every Newly Generated or Iterated LookML Dashboard:
-1. **Audit Chart Types & `series_types` Against Highcharts Specs**:
-   - Element root `type:` uses Looker wrapper names (`looker_column`, `looker_bar`, `looker_line`, `looker_area`, `looker_pie`, `looker_grid`, `single_value`).
-   - Inside `series_types:` (for mixed/combo Cartesian series), **ALWAYS use bare Highcharts series names** (`column`, `bar`, `line`, `area`, `scatter`) — **NEVER** `looker_column`, `looker_line`, or `looker_area`.
-2. **Inject Modern Geometry Tokens via `advanced_vis_config`**:
-   - Apply rounded bar/column corners (`"plotOptions": {"series": {"borderRadius": 4}}`), rounded container geometry and transparent chart surfaces (`"chart": {"backgroundColor": "transparent", "borderRadius": 8}`), and elevated shadow tooltips (`"tooltip": {"borderRadius": 8, "shadow": true}`).
-3. **Convert Default Pie Charts to Donuts with Curated Palettes**:
-   - Configure all `looker_pie` tiles with `show_donut: true`, `inner_radius: 50`, `legend_position: center`, and curated `series_colors:` / Highcharts `"colors": [...]` palettes grounded in `SELECT DISTINCT` data literals.
-4. **Upgrade Tables to `transparent` Theme with In-Cell Data Bars**:
-   - Configure all `looker_grid` tiles with `table_theme: transparent`, `show_view_names: false`, `show_row_numbers: true`, `truncate_text: true`, `size_to_fit: true`, and `series_cell_visualizations` data bars on primary numeric measures.
-
-After `demo-create lookml model` scaffolds the baseline LookML project, **automatically trigger the `looker-visualizations` skills** (either directly or via the **[`lookml-dashboard-designer`](subagents/lookml-dashboard-designer.md)** subagent) executing the **3-Pass Iterative Design & Screenshot Critique Protocol**:
+#### Mandatory 3-Pass Dashboard Polish Protocol ([`dashboard-polish-standards.md`](../resources/dashboard-polish-standards.md)):
+After `demo-create lookml model` scaffolds the baseline LookML project, **always consult [`dashboard-polish-standards.md`](../resources/dashboard-polish-standards.md) and the `looker-visualizations` skill suite** (either directly or via the **[`lookml-dashboard-designer`](subagents/lookml-dashboard-designer.md)** subagent) to enforce:
+1. **Highcharts `series_types` Audit**: Root `type:` uses `looker_*` wrappers; `series_types:` uses **bare Highcharts names ONLY** (`column`, `bar`, `line`, `area`, `scatter`) — never `looker_column`.
+2. **Modern Geometry Tokens via `advanced_vis_config`**: Rounded bars (`borderRadius: 4`), transparent chart surfaces (`"backgroundColor": "transparent", "borderRadius": 8`), shadow tooltips, and centered legends (`legend_position: center`).
+3. **Donut Charts with Curated Palettes**: `type: looker_pie`, `show_donut: true`, `inner_radius: 50`, and `SELECT DISTINCT`-grounded `series_colors:`.
+4. **Transparent Data Grids & Section Headers**: `looker_grid` with `table_theme: transparent` and `series_cell_visualizations` data bars, plus native `type: text` headers at `row: 0` (no hardcoded HTML gradient banners) and independent dual-axis ranges (`y_axis_combined: false`, `y_axis_unpinned: true`).
 
 ```yaml
 subagent:
   type: "skills/looker-demo-orchestrator/subagents/lookml-dashboard-designer.md"
-  prompt: "Execute the 3-Pass Executive Dashboard Polish protocol for {project_name} using looker-visualizations, looker-vis-advanced-config, looker-vis-cartesian, looker-vis-tabular-kpi, and looker-vis-specialty-maps. Enforce: (1) Audit series_types against Highcharts specs (use bare 'column'/'line'/'area', NEVER 'looker_column'), (2) Inject modern geometry tokens via advanced_vis_config (rounded bar corners borderRadius: 4, transparent chart backgroundColor, shadow tooltips), (3) Convert default pie charts to donuts (show_donut: true, inner_radius: 50) with curated palettes, (4) Upgrade looker_grid tables to table_theme: transparent with series_cell_visualizations data bars, (5) Theme-inheriting type: text section headers, centered legends (legend_position: center), and independent dual-axis formatting."
+  prompt: "Execute the 3-Pass Executive Dashboard Polish protocol for {project_name} following skills/resources/dashboard-polish-standards.md and looker-visualizations."
   inputs:
     project_name: "{looker_project_name}"
     model_name: "{looker_model_name}"
@@ -342,17 +306,6 @@ subagent:
     lookml_dir: "lookml/"
     domain_theme: "{domain_theme}"
 ```
-
-- **Pass 1 (Explore-Grounded Architecture & Distinct Value Discovery)**: Inspects staged `explores/*.explore.lkml` and `views/*.view.lkml` files (never invents fields) and runs `SELECT DISTINCT` on categorical dimensions used in custom `series_colors:` so color keys match exact data literals.
-- **Pass 2 (Executive Visual Polish Standards)**:
-  - **Highcharts `series_types` Audit**: Verifies all `series_types:` entries use bare Highcharts identifiers (`column`, `line`, `area`, `bar`, `scatter`) and never `looker_*` wrapper names.
-  - **Theme-Inheriting Section Headers**: Native `type: text` tiles (`row: 0, width: 24, height: 2`) at the top of each tab using `title_text` and `subtitle_text` without hardcoded HTML background gradients or fixed hex text colors.
-  - **KPI Scorecards**: `single_value` stat banners (`row: 2, height: 4`) with `single_value_title` and change comparisons (`show_comparison: true`). Never attach `advanced_vis_config` to `single_value` tiles.
-  - **Centered Legends**: Every chart with a legend (`looker_area`, `looker_column`, `looker_bar`, `looker_line`, `looker_pie`) explicitly sets `legend_position: center` and `"legend": {"align": "center", "verticalAlign": "bottom"}` in `advanced_vis_config`.
-  - **Independent Dual-Axis Ranges & Numeric Formatting**: Dual-axis charts set `y_axis_combined: false`, `y_axis_unpinned: true`, and map series to independent left/right axes with explicit numeric format strings (`"${value:,.0f}"`, `"{value:,.0f}"`, `"{value:.1f} ms"`, `"{value:.1f}%"`).
-  - **Donut Charts with Curated Palettes**: All `looker_pie` tiles set `show_donut: true`, `inner_radius: 50`, and curated color arrays.
-  - **Transparent Data Grids**: `looker_grid` tiles set `table_theme: transparent`, `show_view_names: false`, and inline `series_cell_visualizations` bars on primary measures.
-- **Pre-Push Visual & Filtered Measure Auditor**: `demo-create lookml deploy` automatically executes static Highcharts `series_types` contract checks, Executive Polish warnings, and the **Filtered Measure Distinct-Value Auditor** against local Parquet/BigQuery before pushing to Looker.
 
 ---
 
@@ -558,136 +511,14 @@ The report must be emitted directly in chat as the final deliverable and saved t
 
 ### Mandatory Report Structure & Template:
 
-```markdown
-# {Domain Name} — Final Delivery Report
-
-> [!NOTE]
-> **Production Deployment Status: Active & Operational**
-> - **Looker Instance**: [{looker_instance_host}]({looker_instance_url})
-> - **Looker Project & Model**: `{looker_project_name}`
-> - **BigQuery Dataset**: `{gcp_project_id}.{bq_dataset_id}` ({gcp_location})
-> - **Looker Database Connection**: `{looker_connection_name}`
-> - **Validation Gate**: 0 LookML errors, {queries_passed}/{queries_tested} (100%) Dashboard Queries Passed
-
----
-
-## 1. Quick Access Links
-
-| Asset | Direct URL / Access Path | Description |
-| :--- | :--- | :--- |
-| **Technical Architecture Spec** | [SPEC.md](SPEC.md) | Living technical specification, relational schema & modeling architecture |
-| **Executive Dashboard** | [{dashboard_title}]({looker_instance_url}/dashboards/{lookml_model_name}::{dashboard_name}) | {tabs_count}-tab executive command center with cross-filtering |
-| **Conversational Analytics Agent** | [{agent_name}]({looker_instance_url}/conversational-analytics/agents/{ca_agent_id}) | AI Data Agent with {gq_count} pre-seeded Golden Queries *(if provisioned)* |
-| **{Primary Explore} Explore** | [Explore: {Primary Explore Label}]({looker_instance_url}/explore/{lookml_model_name}/{primary_explore}) | Primary domain entity, metrics & dimension analysis |
-| **{Event Stream} Explore** | [Explore: {Event Stream Label}]({looker_instance_url}/explore/{lookml_model_name}/{event_explore}) | Granular event/telemetry audit stream |
-| **Embed Analytics Portal** | [External Embed Portal]({embed_portal_url}) | White-labeled external embed application *(if scaffolded)* |
-
----
-
-## 2. BigQuery Data Warehouse Summary
-
-All {table_count} relational tables were synthesized with realistic domain distributions, strict referential integrity, and uploaded to BigQuery:
-
-```{gcp_project_id}.{bq_dataset_id}
-├── {table_name_1}  ({rows_1} rows)  - {table_1_description}
-├── {table_name_2}  ({rows_2} rows)  - {table_2_description}
-└── {table_name_n}  ({rows_n} rows)  - {table_n_description}
-```
-
-Total dataset volume: **{total_rows} rows**.
-
----
-
-## 3. Relational Architecture & ERD
-
-```mermaid
-erDiagram
-    {table_a} ||--o{ {table_b} : "{relationship_label} ({foreign_key})"
-```
-
-*(Optional — Include `### Chasm Trap Mitigation Architecture` below ONLY if snowflake modeling was required / 1:N child collections were detected)*:
-<!--
-### Chasm Trap Mitigation Architecture
-- Document NDT rollups pre-aggregating child 1:N metrics at the parent grain.
-- Document one_to_one joins onto parent table eliminating Cartesian products.
-- Document dedicated Event Stream Explores with event leaf as Base View.
--->
-
----
-
-## 4. LookML Dashboard Layout & Tabbed Architecture
-
-The dashboard (`{lookml_model_name}::{dashboard_name}`) is structured into **{tab_count} functional operational tabs** with universal cross-filtering and popover filters:
-
-### Tab 1: {Tab 1 Name}
-- **KPI Banners**: {List of primary single-value metrics}.
-- **{Chart 1 Title}**: {Chart visualization type and business question answered}.
-- **{Chart 2 Title}**: {Chart visualization type and business question answered}.
-
-### Tab 2: {Tab 2 Name}
-- **KPI Banners**: {List of secondary single-value metrics}.
-- **{Chart 1 Title}**: {Chart visualization type and business question answered}.
-
----
-
-## 5. Pre-Deployment Validation Audit Record
-
-In strict compliance with the **Looker Demo Orchestrator** pre-deployment gate, all validation checks passed before production release:
-
-```
-[Phase 1] Code Push to Dev Branch:             100% COMPLETE ({files_count} LookML files pushed)
-[Phase 2] LookML Validator (validate_project):   0 ERRORS DETECTED
-[Phase 3] Exhaustive Dashboard Query Tests:      {queries_passed} / {queries_tested} (100%) QUERIES PASSED
-[Phase 4] Production Deployment:                SUCCESS (Deployed to Production at {timestamp})
-```
-
-### Detailed Query Test Results ({queries_passed}/{queries_tested} HTTP 200 OK)
-1. `{query_tile_1}` (Explore: `{explore_1}`) ➔ **PASS**
-2. `{query_tile_2}` (Explore: `{explore_2}`) ➔ **PASS**
-3. `{query_tile_n}` (Explore: `{explore_n}`) ➔ **PASS**
-
----
-
-## 6. Conversational Analytics (CA) AI Agent Configuration *(if provisioned)*
-
-- **Agent ID**: `{ca_agent_id}`
-- **Agent Name**: `{ca_agent_name}`
-- **Explore Sources**: `{explore_sources_list}`
-- **Code Interpreter**: Enabled
-- **Direct Agent Chat URL**: [Open {ca_agent_name}]({looker_instance_url}/conversational-analytics/agents/{ca_agent_id})
-
-### Pre-Seeded Golden Queries
-1. *"{Natural language business question 1}"*
-2. *"{Natural language business question 2}"*
-3. *"{Natural language business question n}"*
-
----
-
-## 7. Gemini Enterprise (GE) / Embed Portal Status
-
-*(If published to Gemini Enterprise)*:
-- **Publish State**: `published` (HTTP 200 OK)
-- **Status Message**: `Successfully published Agent {ca_agent_id} to GEMINI_ENTERPRISE.`
-- **Capabilities**: Full natural language synthesis over `{lookml_model_name}`, golden query semantic routing, and code interpretation within Gemini Enterprise apps.
-
-*(If external embed portal was scaffolded)*:
-- **Workspace Directory**: `{embed_workspace_dir}` (Full-stack: `frontend/` React 19 + TypeScript + Vite 6 + TanStack Router, `backend/` FastAPI + Cookieless Embed SSO)
-- **Local Dev Command**: `cd {embed_workspace_dir}/frontend && pnpm install && pnpm dev` (or `./start.sh` from portal root)
-- **Portal Views & Navigation (`customize-frontend-looker-config`)**:
-  - **Home Hub (`/`)**: Hero header (`{portal_hub_title}`), Live Operational/Financial Summary KPI cards, Live Operational Ticker (streaming events), AI Strategic Executive Briefing.
-  - **Embedded Dashboard (`/dashboard`)**: `{deployed_dashboard_id}` with universal date filters (`{dashboard_date_filter_names}`).
-  - **Embedded AI Assistant (`/conversational-analytics`)**: Connected CA Agent `{ca_agent_id}`.
-  - **Embedded Explorer (`/explore`)**: Grounded in `{explore_path}`.
-- **Branding & CSS Theming (`customize-frontend-branding` & `customize-frontend-theme`)**:
-  - Brand Header Name: `{brand_name}` (in `Sidebar.tsx` & `constants.ts`)
-  - Primary HSL Palette: `--color-primary-raw: {primary_hsl};`
-  - Typography: `--font-heading: 'Outfit'`, `--font-sans: 'Inter'`
-  - Dark Mode: Native `html.dark` surface tokens
-  - Looker Themes (`embed-themes`): `<Brand>_Light` & `<Brand>_Dark`
-- **Role-Based Access Control (`ROLE_PERMISSIONS`)**:
-  - Simple User (`viewer`) vs Advanced User (`explorer`) profiles with group assignment `{group_id}`.
-- **Build Status**: Verified 0 TypeScript / compilation errors via `pnpm run build`.
-```
+Import and populate the canonical 7-section delivery report structure defined in **[`delivery-report-template.md`](../resources/delivery-report-template.md)**:
+1. **Header & Deployment Status Banner**: Looker instance URL, LookML project/model, BigQuery dataset, connection, and 100% query validation score.
+2. **Section 1 — Quick Access Links**: Direct clickable links to `[SPEC.md](SPEC.md)`, the Executive Dashboard (`{model}::{dashboard}`), the Conversational Analytics Agent (`{ca_agent_id}`), the Primary & Event Stream Explores, and the External Embed Portal.
+3. **Section 2 — BigQuery Data Warehouse Summary**: Table inventory, row counts, and Day Partitioning / Clustering summary.
+4. **Section 3 — Relational Architecture & ERD**: Mermaid `erDiagram` and optional `Chasm Trap Mitigation Architecture` (when NDT rollups were generated).
+5. **Section 4 — LookML Dashboard Layout & Tabbed Architecture**: Summary of the 3 operational tabs, KPI scorecards, and chart tiles.
+6. **Section 5 — Pre-Deployment Validation Audit Record**: Dev push, `validate_project` (`0` errors), and per-tile `HTTP 200 OK` query execution record.
+7. **Section 6 & 7 — Conversational Analytics (CA) Agent, Gemini Enterprise & Embed Portal Status**: Agent ID, pre-seeded Golden Queries, GE publish state, and `embed-portal/` build verification.
 
 ---
 

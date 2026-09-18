@@ -175,37 +175,9 @@ graph TD
     DQ -->|Fail / Quality Warnings| Sanitize[Sanitization Filter<br/>sql_always_where: valid_flag = 1]
 ```
 
-### Decision Matrix:
-| Profile Indicator | Value / Threshold | LookML Modeling Directive |
-| :--- | :--- | :--- |
-| **Distinct Ratio** | `distinctRatio == 1.0` (Nulls = 0) | **Confirms Primary Key Grain**: Set `primary_key: yes`. |
-| **Distinct Ratio** | `distinctRatio < 0.05` | **Categorical Dimension**: Populate `suggestions: [...]` with top values; prime candidate for dashboard filters. |
-| **Numeric Spread** | High skew (`max >> quartiles[2]`) | **Tiered Dimension**: Generate `type: tier` dimension with quartile intervals. |
-| **Null Ratio** | `nullRatio > 0.10` | **Dimension Group / String**: Add `sql: COALESCE(...)` or note that measures must use `count` vs `count_distinct`. |
-| **Quality Score** | `< 90%` or rule failure | **Explore Safeguard**: Add `sql_always_where` or `sql_always_having` to prune corrupt/incomplete rows. |
-| **Sensitivity Tag**| `PII` / `CONFIDENTIAL` | **Access Control**: Set `hidden: yes` or attach `required_access_grants: [pii_access]`. |
+### Decision Matrix & `SPEC.md` Enrichment Protocol
 
----
-
-## 4. Synthesis & Enrichment Output in `SPEC.md`
-
-Append or update the Data Dictionary in `SPEC.md` with the new profiling and quality insights:
-
-```markdown
-### Data Profiling, Quality & Statistical Insights
-
-#### Table: `<TABLE_NAME>`
-- **Catalog Status**: `Active`
-- **Data Quality Score**: `98.4%` (Passed)
-- **Total Records Analyzed**: `1,250,000`
-
-| Column | Null % | Distinct % | Min / Max | Top Frequent Values | Modeling Insight & LookML Directive |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| `order_id` | 0.0% | 100.0% | `1001` / `1251000` | N/A | **Validated PK**: Set `primary_key: yes`. |
-| `order_status` | 0.0% | 0.0004% | N/A | `COMPLETED` (72%), `PENDING` (18%), `CANCELLED` (10%) | **Low-Cardinality Categorical**: Filter candidate; add `suggestions: ['COMPLETED', 'PENDING', 'CANCELLED']`. |
-| `total_amount` | 0.2% | Continuous | `$4.50` / `$12,450.00` | N/A | **Continuous Metric**: Use `value_format_name: usd`; create spend tier dimension (`type: tier`). |
-| `ssn` | 0.0% | 100.0% | N/A | N/A | **PII Sensitive**: Mark `hidden: yes` and restrict with `access_grant`. |
-```
+Apply the **Dataplex Profile-to-LookML Decision Matrix** and update the `### Detailed Column Catalog & Dataplex Profiling Insights` table in `SPEC.md` using the canonical template in **[`spec-and-data-dictionary-template.md`](../resources/spec-and-data-dictionary-template.md)**.
 
 ---
 

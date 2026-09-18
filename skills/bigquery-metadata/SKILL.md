@@ -130,36 +130,7 @@ bq show --format=prettyjson "${PROJECT_ID}:${DATASET}.${TABLE}" | jq '{
 
 ## 3. Data Dictionary Synthesis Protocol
 
-Once metadata is collected, synthesize findings into a structured markdown block and insert or update it in `SPEC.md` under `## Data Dictionary & Semantic Context` (and optionally in `docs/DATA_DICTIONARY.md` if requested):
-
-```markdown
-## Data Dictionary & Semantic Context
-
-### Summary
-- **GCP Project**: `<PROJECT_ID>`
-- **Dataset**: `<DATASET>`
-- **Total Tables**: `<COUNT>`
-
-### Entity Relationship & Grain Summary
-| Table Name | Grain / Primary Key | Table Type | Estimated Rows | Partition / Clustering |
-| :--- | :--- | :--- | :--- | :--- |
-| `fct_orders` | `order_id` (PK) | BASE TABLE | 1,250,000 | `order_date` (DAY) / `customer_id` |
-| `dim_customers` | `customer_id` (PK) | BASE TABLE | 45,000 | None / `country_code` |
-
-### Relationships & Joins
-| Source Table | Foreign Key | Target Table | Primary Key | Join Relationship |
-| :--- | :--- | :--- | :--- | :--- |
-| `fct_orders` | `customer_id` | `dim_customers` | `customer_id` | `many_to_one` |
-
-### Detailed Column Catalog
-#### Table: `<TABLE_NAME>`
-| Column | BigQuery Type | LookML Dimension Type | Nullable | Primary/Foreign Key | Description / Semantic Note |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| `order_id` | `STRING` | `string` | NO | PK (`primary_key: yes`) | Unique order identifier |
-| `customer_id`| `STRING` | `string` | NO | FK -> `dim_customers` | Customer reference |
-| `total_amount`| `NUMERIC` | `number` | YES | None | Gross transaction amount |
-| `created_at` | `TIMESTAMP`| `time` | NO | None | Order creation timestamp |
-```
+Once metadata is collected, synthesize findings into `SPEC.md` under `## 3. Relational Schema, Data Dictionary & Semantic Context` following the canonical structure in **[`spec-and-data-dictionary-template.md`](../resources/spec-and-data-dictionary-template.md)** (and see **[`auth-and-guardrails.md`](../resources/auth-and-guardrails.md)** for environment/target resolution and GCP project integrity rules).
 
 ---
 

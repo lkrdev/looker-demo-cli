@@ -9,16 +9,11 @@ A specialized suite of agent skills designed to guide Large Language Models (LLM
 
 > [!IMPORTANT]
 > ### Mandatory Default Protocol for Every Generated or Iterated LookML Dashboard
-> Whenever a LookML dashboard is generated (e.g., via `demo-create lookml model`) or modified, **never treat the CLI template as a finished product or rely solely on `HTTP 200 OK` SQL query checks**. Every dashboard iteration **MUST** trigger this skill suite before deployment to enforce four default rules:
-> 1. **Audit Chart Types & `series_types` Against Highcharts Specs ([`looker-vis-cartesian`](looker-vis-cartesian/SKILL.md))**:
->    - Root tile `type:` uses Looker wrappers (`looker_column`, `looker_bar`, `looker_line`, `looker_area`, `looker_pie`, `looker_grid`, `single_value`).
->    - Inside `series_types:` (for mixed/combo series), **ALWAYS use bare Highcharts series names** (`column`, `bar`, `line`, `area`, `scatter`) — **NEVER** `looker_column` (which passes LookML/SQL syntax validation with `HTTP 200 OK` yet crashes Highcharts in the browser).
-> 2. **Inject Modern Geometry Tokens via `advanced_vis_config` ([`looker-vis-advanced-config`](looker-vis-advanced-config/SKILL.md))**:
->    - Include rounded bar corners (`"plotOptions": {"series": {"borderRadius": 4}}`), transparent chart surfaces and container radius (`"chart": {"backgroundColor": "transparent", "borderRadius": 8}`), shadow tooltips (`"tooltip": {"borderRadius": 8, "shadow": true}`), and centered legends (`"legend": {"align": "center", "verticalAlign": "bottom"}`).
-> 3. **Convert Default Pie Charts to Donuts with Curated Palettes ([`looker-vis-specialty-maps`](looker-vis-specialty-maps/SKILL.md))**:
->    - Set `type: looker_pie`, `show_donut: true`, `inner_radius: 50`, `legend_position: center`, and curated `series_colors:` / Highcharts `"colors"` palettes.
-> 4. **Upgrade Tables to `transparent` Theme with In-Cell Data Bars ([`looker-vis-tabular-kpi`](looker-vis-tabular-kpi/SKILL.md))**:
->    - Set `table_theme: transparent`, `show_view_names: false`, `show_row_numbers: true`, `truncate_text: true`, `size_to_fit: true`, and `series_cell_visualizations` data bars on numeric measures.
+> Whenever a LookML dashboard is generated (e.g., via `demo-create lookml model`) or modified, **never treat the CLI template as a finished product or rely solely on `HTTP 200 OK` SQL query checks**. Every dashboard iteration **MUST** enforce the 4 default rules and 9-point UI quality checklist in **[`dashboard-polish-standards.md`](../resources/dashboard-polish-standards.md)**:
+> 1. **Audit Chart Types & `series_types` Against Highcharts Specs ([`looker-vis-cartesian`](looker-vis-cartesian/SKILL.md))**: Root `type:` uses Looker wrappers (`looker_column`, `looker_line`, `looker_pie`, `looker_grid`, `single_value`); inside `series_types:`, **ALWAYS use bare Highcharts names** (`column`, `bar`, `line`, `area`, `scatter`) — **NEVER** `looker_column`.
+> 2. **Inject Modern Geometry Tokens via `advanced_vis_config` ([`looker-vis-advanced-config`](looker-vis-advanced-config/SKILL.md))**: Rounded bar corners (`borderRadius: 4`), transparent chart surfaces (`"backgroundColor": "transparent", "borderRadius": 8`), shadow tooltips, and centered legends (`legend_position: center`).
+> 3. **Convert Default Pie Charts to Donuts with Curated Palettes ([`looker-vis-specialty-maps`](looker-vis-specialty-maps/SKILL.md))**: Set `type: looker_pie`, `show_donut: true`, `inner_radius: 50`, and curated `series_colors:`.
+> 4. **Upgrade Tables to `transparent` Theme with In-Cell Data Bars ([`looker-vis-tabular-kpi`](looker-vis-tabular-kpi/SKILL.md))**: Set `table_theme: transparent`, `show_view_names: false`, `show_row_numbers: true`, `truncate_text: true`, `size_to_fit: true`, and `series_cell_visualizations` data bars.
 
 ---
 
