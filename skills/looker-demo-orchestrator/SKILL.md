@@ -105,17 +105,24 @@ failures carry a distinct exit code (`AuthError`=3, `ConfigError`=4,
 `RemoteApiError`=5, `ValidationError`=6, `StateError`=7), so branch on the exit
 code rather than parsing prose.
 
-## 0. Bootstrap on Fresh Machines (Mandatory Step 0)
+## 0. Bootstrap & CLI Upgrade (Mandatory Step 0)
 
-If `demo-create` is not available on `PATH`, the agent **MUST immediately run**:
+If `demo-create` is not available on `PATH`, the agent **MUST immediately install it** (either from the package index or directly from the GitHub repository if unpublished):
 ```bash
-uv tool install looker-demo-cli
+uv tool install git+https://github.com/lkrdev/looker-demo-cli.git
+# Or if published: uv tool install looker-demo-cli
 ```
-Immediately after installation, the agent **MUST run**:
+
+If `demo-create` is already installed on `PATH`, **upgrade it first** so the local `uv` tool environment pulls the latest commits from the repository:
+```bash
+uv tool upgrade looker-demo-cli
+```
+
+Immediately after installing or upgrading, the agent **MUST run**:
 ```bash
 demo-create pre-check --fix
 ```
-This guarantees all pinned dependencies, global agent CLI skills (`synthetic-data-authoring`, `bigquery-metadata`, `knowledge-catalog-metadata`), active pruning of deprecated skills (`data-designer*`, `vertex-ai`), and pruning of deprecated MCP servers (`data-designer`, `bigquery`, `knowledge-catalog`) from `~/.gemini/config/mcp_config.json` are completed before executing any other commands.
+This guarantees all pinned dependencies, global agent CLI skills (`synthetic-data-authoring`, `bigquery-metadata`, `knowledge-catalog-metadata`), active pruning of deprecated skills (`data-designer*`, `vertex-ai`), and pruning of deprecated MCP servers (`data-designer`, `bigquery`, `knowledge-catalog`) from `~/.gemini/config/mcp_config.json` are synchronized with the latest CLI version before executing any other commands.
 
 ---
 
