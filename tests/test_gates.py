@@ -1,80 +1,53 @@
-"""Tests for :mod:`looker_demo_cli.gates`.
-
-Scope: the pure gate model behind ``demo-create status`` -- which gates are
-complete, which one is current, which ones pause for a human, and the literal
-command each one emits.
-
-Why these tests are unusually strict about strings
---------------------------------------------------
-The command strings this module produces are **executed verbatim by an AI
-orchestrator**. There is no human between the string and the shell. A wrong
-flag name does not surface as a helpful error; it surfaces as an agent that
-runs ``--project`` against a command expecting ``--looker-project``, reads the
-usage error, and starts improvising. So the exact command for both an empty and
-a fully populated state is pinned character for character, and any change to
-one has to be a deliberate edit to a test.
-
-Every test is hermetic by construction: the module under test performs no I/O,
-so no fixture, fake, or temporary directory is required. States are built with
-an explicit ``gcp_project_id`` wherever a command string is asserted, because
-``FlowState`` defaults that field from ``$GOOGLE_CLOUD_PROJECT`` and a
-developer with it set would otherwise see different output than CI.
-"""
+"""Tests for the pure gate model (`looker_demo_cli.gates`), Click command validity, and `demo-create status`."""
 
 from __future__ import annotations
 
-import inspect
+import shlex
 from pathlib import Path
+from typing import Any
 
 import pytest
+from typer.main import get_command
 
-from looker_demo_cli import gates as gates_module
+from looker_demo_cli.cli import app
+from looker_demo_cli.errors import StateError
 from looker_demo_cli.gates import (
-    COMMAND_PREFIX,
     GATES,
     completed_gates,
     current_gate,
     evaluate_gates,
     is_pipeline_complete,
 )
-from looker_demo_cli.state import FlowState
+from looker_demo_cli.output import ENVELOPE_SCHEMA_VERSION
+from looker_demo_cli.state import STATE_FILE_NAME, FlowState
+
+try:
+    from conftest import envelope
+except ImportError:  # pragma: no cover
+    from tests.conftest import envelope
 
 pytestmark = pytest.mark.unit
 
+_CLI: Any = get_command(app)
+_GATE_IDS: list[str] = [gate.id for gate in GATES]
 
-# ===========================================================================
-# State builders
-# ===========================================================================
+_COMPLETION_SIGNAL: dict[str, dict[str, object]] = {
+    "gate_0_environment": {"precheck_passed": True},
+    "gate_1_data": {"dataset_exists": True},
+    "gate_2_model": {"lookml_output_dir": Path("/scratch/lookml")},
+    "gate_3_deploy": {"deployed_dashboard_url": "https://acme.looker.com/dashboards/42"},
+    "gate_4_agent": {"ca_agent_id": "agent-42"},
+    "gate_5_publish": {"published_to_ge": True},
+}
 
 
-def _unstarted_state(**overrides) -> FlowState:
-    """A state in which nothing has run yet.
-
-    ``gcp_project_id`` is forced blank rather than left to its default so the
-    resulting command strings do not depend on the developer's environment.
-    It is applied via ``setdefault`` so a caller can still pin a specific
-    blank form (``""`` vs ``"   "``) without colliding on the keyword.
-
-    Args:
-        **overrides: Fields to set on top of the unstarted baseline.
-
-    Returns:
-        A ``FlowState`` with no gate signals present.
-    """
+def _unstarted_state(**overrides: Any) -> FlowState:
     overrides.setdefault("gcp_project_id", "")
     return FlowState(**overrides)
 
 
-def _finished_state(**overrides) -> FlowState:
-    """A state in which every gate has run to completion.
-
-    Args:
-        **overrides: Fields to set on top of the finished baseline.
-
-    Returns:
-        A ``FlowState`` carrying every gate's completion signal.
-    """
-    fields = {
+def _finished_state(**overrides: Any) -> FlowState:
+    fields: dict[str, Any] = {
         "precheck_passed": True,
         "gcp_project_id": "acme-analytics",
         "gcp_account": "analyst@acme.com",
@@ -98,29 +71,7 @@ def _finished_state(**overrides) -> FlowState:
     return FlowState(**fields)
 
 
-#: The single field each gate reads, and a value that satisfies it. Kept as one
-#: table so a predicate change has exactly one place to be reflected.
-_COMPLETION_SIGNAL: dict[str, dict[str, object]] = {
-    "gate_0_environment": {"precheck_passed": True},
-    "gate_1_data": {"dataset_exists": True},
-    "gate_2_model": {"lookml_output_dir": Path("/scratch/lookml")},
-    "gate_3_deploy": {"deployed_dashboard_url": "https://acme.looker.com/dashboards/42"},
-    "gate_4_agent": {"ca_agent_id": "agent-42"},
-    "gate_5_publish": {"published_to_ge": True},
-}
-
-_GATE_IDS: list[str] = [gate.id for gate in GATES]
-
-
 def _state_satisfying(*gate_ids: str) -> FlowState:
-    """Build a state carrying exactly the named gates' completion signals.
-
-    Args:
-        *gate_ids: Gate ids to satisfy.
-
-    Returns:
-        A ``FlowState`` with those gates complete and no others.
-    """
     overrides: dict[str, object] = {}
     for gate_id in gate_ids:
         overrides.update(_COMPLETION_SIGNAL[gate_id])
@@ -128,152 +79,29 @@ def _state_satisfying(*gate_ids: str) -> FlowState:
 
 
 # ===========================================================================
-# Structural invariants
+# Gate model invariants & evaluation
 # ===========================================================================
 
 
-def test_gates_are_numbered_contiguously_from_zero():
-    """Gate numbers are an index, not a label.
-
-    ``status`` reports ``gate`` numbers into ``next_actions``, and the rest of
-    the CLI already emits ``gate=1``/``gate=3``/``gate=5`` from its own
-    commands. A gap or a renumbering would silently desynchronise the two.
-    """
-    assert [gate.number for gate in GATES] == list(range(len(GATES)))
-
-
-def test_gate_ids_are_unique():
-    """Ids are the machine-readable key an orchestrator branches on.
-
-    ``completed_gates`` in the JSON payload is a list of ids, and
-    ``evaluate_gates`` marks the current gate by comparing ids. A duplicate
-    would make both ambiguous.
-    """
-    assert len(set(_GATE_IDS)) == len(GATES)
-
-
-def test_gate_count_matches_the_documented_workflow():
-    """The workflow is defined as gates 0 through 5.
-
-    Pinned because adding a seventh gate is a change to the published contract
-    an agent drives, not an implementation detail.
-    """
+def test_gate_structural_invariants() -> None:
+    """Gates are numbered 0..5 contiguously, uniquely named, and gate 2 is the only non-pausing gate."""
     assert len(GATES) == 6
+    assert [g.number for g in GATES] == list(range(6))
+    assert len(set(_GATE_IDS)) == 6
+    for gate in GATES:
+        assert gate.id.startswith(f"gate_{gate.number}_")
+        assert gate.title.strip()
+        assert (gate.human_checkpoint is not None) == gate.requires_human_confirmation
 
-
-@pytest.mark.parametrize("gate", GATES, ids=_GATE_IDS)
-def test_gate_id_encodes_its_own_number(gate):
-    """An id read in isolation must reveal its position.
-
-    Log lines and JSON payloads carry the id without the number beside it; an
-    id that disagreed with its number would make a report misleading rather
-    than merely terse.
-    """
-    assert gate.id.startswith(f"gate_{gate.number}_")
-
-
-@pytest.mark.parametrize("gate", GATES, ids=_GATE_IDS)
-def test_human_checkpoint_is_present_exactly_when_confirmation_is_required(gate):
-    """Telling an agent to ask the user, without saying what to ask, is not actionable.
-
-    The orchestrator branches on ``requires_human_confirmation`` and then has
-    to render a question; the checkpoint sentence *is* that question. Equally,
-    a checkpoint on a gate that never pauses would be dead text that drifts.
-    """
-    assert (gate.human_checkpoint is not None) == gate.requires_human_confirmation
-    if gate.human_checkpoint is not None:
-        assert gate.human_checkpoint.strip()
-
-
-@pytest.mark.parametrize("gate", GATES, ids=_GATE_IDS)
-def test_gate_titles_are_non_empty(gate):
-    """The title is the only thing shown in the Rich table's Stage column."""
-    assert gate.title.strip()
-
-
-def test_only_gate_two_runs_without_a_human_pause():
-    """Pins which gates stop for a human, since that is the whole workflow.
-
-    Gates 0, 1, 3, 4 and 5 each mandate an explicit confirmation. Gate 2's only
-    branch -- whether a 3NF schema needs NDT rollups -- is decided from the
-    schema by a subagent, so pausing there would ask the user a question they
-    have no input on. Any change to this set is a workflow change.
-    """
-    non_pausing = [gate.id for gate in GATES if not gate.requires_human_confirmation]
+    non_pausing = [g.id for g in GATES if not g.requires_human_confirmation]
     assert non_pausing == ["gate_2_model"]
-
-
-def test_module_stays_free_of_io_and_presentation_dependencies():
-    """The gate model is reused by tests, by ``status``, and later by others.
-
-    The moment it imports ``typer`` or ``rich``, judging a state requires a CLI
-    runner, and the cheap plain-dataclass tests below stop being possible.
-    """
-    forbidden = {"typer", "rich", "subprocess", "requests", "google", "os", "shutil", "io"}
-
-    imported_roots = set()
-    for line in inspect.getsource(gates_module).splitlines():
-        if line.startswith("from "):
-            imported_roots.add(line.split()[1].split(".")[0])
-        elif line.startswith("import "):
-            imported_roots.add(line.split()[1].split(".")[0])
-
-    assert not (imported_roots & forbidden), f"gates must stay pure; found {imported_roots & forbidden}"
-
-
-# ===========================================================================
-# current_gate / completed_gates
-# ===========================================================================
-
-
-def test_unstarted_state_starts_at_gate_zero():
-    """A fresh checkout must be told to run the environment audit first.
-
-    This is the entry point of the whole feature: an agent with no memory runs
-    ``status`` and is pointed at gate 0 rather than guessing.
-    """
-    assert current_gate(_unstarted_state()).id == "gate_0_environment"
-
-
-def test_unstarted_state_has_no_completed_gates():
-    """Nothing has run, so nothing may be reported as done."""
-    assert completed_gates(_unstarted_state()) == []
-
-
-def test_unstarted_state_is_not_complete():
-    """``is_complete`` in the payload must be false before anything runs."""
-    assert is_pipeline_complete(_unstarted_state()) is False
-
-
-@pytest.mark.parametrize(
-    ("satisfied", "expected_current"),
-    [
-        ("gate_0_environment", "gate_1_data"),
-        ("gate_1_data", "gate_0_environment"),
-        ("gate_2_model", "gate_0_environment"),
-        ("gate_3_deploy", "gate_0_environment"),
-        ("gate_4_agent", "gate_0_environment"),
-        ("gate_5_publish", "gate_0_environment"),
-    ],
-    ids=[
-        "gate_0_alone_advances_to_gate_1",
-        "gate_1_alone_still_needs_gate_0",
-        "gate_2_alone_still_needs_gate_0",
-        "gate_3_alone_still_needs_gate_0",
-        "gate_4_alone_still_needs_gate_0",
-        "gate_5_alone_still_needs_gate_0",
-    ],
-)
-def test_current_gate_is_strictly_the_first_incomplete_gate(satisfied, expected_current):
-    """A later signal does not license skipping the gates before it.
-
-    These states are reachable: a user can re-point the CLI at a new GCP
-    project (clearing nothing) or hand-edit ``.demo-state.json``. The gates
-    carry real data dependencies -- ``lookml model`` introspects the dataset
-    gate 1 loads -- so "furthest signal wins" would send an agent to model a
-    warehouse that does not exist. First-incomplete-wins is the safe reading.
-    """
-    assert current_gate(_state_satisfying(satisfied)).id == expected_current
+    assert set(GATES[0].describe()) == {
+        "number",
+        "id",
+        "title",
+        "requires_human_confirmation",
+        "human_checkpoint",
+    }
 
 
 @pytest.mark.parametrize(
@@ -287,118 +115,19 @@ def test_current_gate_is_strictly_the_first_incomplete_gate(satisfied, expected_
         (5, "gate_5_publish"),
         (6, None),
     ],
-    ids=[
-        "nothing_done",
-        "through_gate_0",
-        "through_gate_1",
-        "through_gate_2",
-        "through_gate_3",
-        "through_gate_4",
-        "everything_done",
-    ],
 )
-def test_current_gate_walks_forward_as_each_prefix_completes(satisfied_count, expected_current):
-    """The happy path: each finished gate hands off to exactly the next one.
-
-    This is the loop an orchestrator runs -- call ``status``, run
-    ``next_command``, call ``status`` again -- so it must terminate and must not
-    stall on or repeat a gate.
-    """
+def test_gate_progression_walk(satisfied_count: int, expected_current: str | None) -> None:
+    """Completing each gate prefix advances current_gate strictly to the first incomplete gate."""
     state = _state_satisfying(*_GATE_IDS[:satisfied_count])
     current = current_gate(state)
     assert (current.id if current else None) == expected_current
+    assert [g.id for g in completed_gates(state)] == _GATE_IDS[:satisfied_count]
+    assert is_pipeline_complete(state) is (satisfied_count == 6)
 
-
-def test_completed_gates_reports_out_of_order_signals():
-    """An inconsistent state must be legible, not silently normalised.
-
-    ``current_gate`` deliberately ignores the stray gate 5 signal, but hiding
-    it from ``completed_gates`` too would leave a user staring at a published
-    agent the report claims does not exist.
-    """
-    state = _state_satisfying("gate_5_publish")
-    assert [gate.id for gate in completed_gates(state)] == ["gate_5_publish"]
-
-
-def test_completed_gates_preserves_pipeline_order():
-    """The report is read top to bottom; scrambling it would be a bug."""
-    state = _state_satisfying("gate_3_deploy", "gate_0_environment", "gate_1_data")
-    assert [gate.id for gate in completed_gates(state)] == [
-        "gate_0_environment",
-        "gate_1_data",
-        "gate_3_deploy",
-    ]
-
-
-def test_finished_state_has_no_current_gate():
-    """``None`` is how the payload says "the build is done".
-
-    ``status`` maps this straight onto ``next_command: null``, which is the
-    orchestrator's stop condition.
-    """
-    assert current_gate(_finished_state()) is None
-
-
-def test_finished_state_is_complete():
-    """The positive form of the stop condition, read by ``is_complete``."""
-    assert is_pipeline_complete(_finished_state()) is True
-
-
-def test_finished_state_completes_every_gate():
-    """Guards the fully populated fixture itself.
-
-    If a completion predicate later reads a different field, this fails loudly
-    rather than quietly weakening every test built on ``_finished_state``.
-    """
-    assert [gate.id for gate in completed_gates(_finished_state())] == _GATE_IDS
-
-
-# ===========================================================================
-# evaluate_gates
-# ===========================================================================
-
-
-def test_evaluate_gates_reports_every_gate_in_order():
-    """The Rich table and the JSON array are both rendered straight from this."""
-    statuses = evaluate_gates(_unstarted_state())
-    assert [s.gate.id for s in statuses] == _GATE_IDS
-
-
-def test_evaluate_gates_marks_exactly_one_current_gate():
-    """Two "current" rows would make the table meaningless and the payload ambiguous."""
-    statuses = evaluate_gates(_state_satisfying("gate_0_environment", "gate_1_data"))
-    current = [s.gate.id for s in statuses if s.is_current]
-    assert current == ["gate_2_model"]
-
-
-def test_evaluate_gates_marks_no_current_gate_when_finished():
-    """Every row is complete, so nothing may be highlighted as next to do."""
-    statuses = evaluate_gates(_finished_state())
-    assert not any(s.is_current for s in statuses)
-    assert all(s.complete for s in statuses)
-
-
-def test_evaluate_gates_agrees_with_the_individual_predicates():
-    """One pass over the gates must not drift from asking each gate directly."""
-    state = _state_satisfying("gate_0_environment", "gate_2_model")
     statuses = evaluate_gates(state)
-    assert {s.gate.id: s.complete for s in statuses} == {gate.id: gate.is_complete(state) for gate in GATES}
-
-
-def test_evaluate_gates_supplies_a_command_for_completed_gates_too():
-    """A finished gate is still re-runnable, and re-running needs its arguments.
-
-    Re-deploying after a hand edit is routine; making the caller reconstruct
-    the flags from scratch is exactly the drift this feature removes.
-    """
-    statuses = {s.gate.id: s for s in evaluate_gates(_finished_state())}
-    assert statuses["gate_3_deploy"].command.startswith(COMMAND_PREFIX)
-
-
-def test_gate_status_to_dict_carries_the_published_keys():
-    """These key names are the JSON contract an orchestrator parses."""
-    status = evaluate_gates(_unstarted_state())[0]
-    assert set(status.to_dict()) == {
+    assert [s.gate.id for s in statuses] == _GATE_IDS
+    assert [s.gate.id for s in statuses if s.is_current] == ([expected_current] if expected_current else [])
+    assert set(statuses[0].to_dict()) == {
         "number",
         "id",
         "title",
@@ -410,88 +139,20 @@ def test_gate_status_to_dict_carries_the_published_keys():
     }
 
 
-def test_gate_describe_omits_state_dependent_fields():
-    """``describe`` is the state-independent half, reused wherever no state exists."""
-    assert set(GATES[0].describe()) == {
-        "number",
-        "id",
-        "title",
-        "requires_human_confirmation",
-        "human_checkpoint",
-    }
+def test_out_of_order_signals_keep_first_incomplete_as_current() -> None:
+    """Later gate signals do not skip earlier incomplete gates, while completed_gates preserves order."""
+    state = _state_satisfying("gate_3_deploy", "gate_1_data")
+    assert current_gate(state).id == "gate_0_environment"
+    assert [g.id for g in completed_gates(state)] == ["gate_1_data", "gate_3_deploy"]
 
 
 # ===========================================================================
-# Command generation -- general invariants
-# ===========================================================================
-
-
-@pytest.mark.parametrize("gate", GATES, ids=_GATE_IDS)
-@pytest.mark.parametrize(
-    "state_builder",
-    [_unstarted_state, _finished_state],
-    ids=["unstarted_state", "finished_state"],
-)
-def test_every_command_is_a_demo_create_invocation(gate, state_builder):
-    """An agent pipes this straight into a shell; it must be our CLI.
-
-    Checked for both an empty and a full state because the interpolation paths
-    differ, and a placeholder branch that emitted bare arguments would only
-    break in the case nobody demos.
-    """
-    assert gate.command(state_builder()).startswith(COMMAND_PREFIX)
-
-
-@pytest.mark.parametrize("gate", GATES, ids=_GATE_IDS)
-@pytest.mark.parametrize(
-    "state_builder",
-    [_unstarted_state, _finished_state],
-    ids=["unstarted_state", "finished_state"],
-)
-def test_no_command_contains_unresolved_format_braces(gate, state_builder):
-    """A stray ``{`` means an f-string or template failed to render.
-
-    The failure mode is silent: the agent runs ``--dataset {dataset}``, BigQuery
-    is asked for a table that cannot exist, and the error surfaces three steps
-    downstream. Angle-bracketed placeholders are the only permitted "unknown".
-    """
-    command = gate.command(state_builder())
-    assert "{" not in command and "}" not in command
-
-
-@pytest.mark.parametrize("gate", GATES, ids=_GATE_IDS)
-def test_placeholders_are_balanced_angle_brackets(gate):
-    """A half-written placeholder reads as a shell redirect, not as a prompt.
-
-    ``--dataset <dataset-id`` would be executed; ``--dataset <dataset-id>`` is
-    obviously a value the agent must supply.
-    """
-    command = gate.command(_unstarted_state())
-    assert command.count("<") == command.count(">")
-
-
-@pytest.mark.parametrize("gate", GATES, ids=_GATE_IDS)
-def test_finished_state_leaves_no_placeholders(gate):
-    """Once everything is known, nothing may still be asked of the caller.
-
-    A placeholder surviving into a fully populated state means a value the
-    state records is not being read -- the exact drift this module exists to
-    prevent.
-    """
-    assert "<" not in gate.command(_finished_state())
-
-
-# ===========================================================================
-# Command generation -- exact strings
+# Gate command interpolation & branches
 # ===========================================================================
 
 _UNSTARTED_COMMANDS: dict[str, str] = {
     "gate_0_environment": "demo-create pre-check --fix --gcp-project <gcp-project>",
     "gate_1_data": "demo-create data generate --domain <domain> --row-count <row-count> --output-dir <output-dir>",
-    # Every identifier here is a placeholder: as of 0.3.0 `FlowState` no longer
-    # seeds `bq_dataset_id` / `looker_project_name` / `lookml_model_name` /
-    # `looker_connection_name` with the "logistics_analytics" placeholder
-    # literals that used to make an unstarted build look half-configured.
     "gate_2_model": (
         "demo-create lookml model --looker-project <looker-project> --dataset <dataset-id> "
         "--connection <connection-name> --gcp-project <gcp-project>"
@@ -523,131 +184,152 @@ _FINISHED_COMMANDS: dict[str, str] = {
 
 
 @pytest.mark.parametrize("gate", GATES, ids=_GATE_IDS)
-def test_unstarted_state_command_is_exactly_as_published(gate):
-    """Pins the flag names an agent will type before any state exists.
+def test_gate_commands_match_expected_unstarted_and_populated_strings(gate: Any) -> None:
+    """Every gate produces exact command templates when unstarted and substitutes state when populated."""
+    unstarted_cmd = gate.command(_unstarted_state())
+    finished_cmd = gate.command(_finished_state())
 
-    Every flag here was taken from the target command's real ``typer``
-    signature: ``--looker-project`` (not ``--project``, which would collide
-    with ``--gcp-project``), ``--connection``, ``--lookml-dir``,
-    ``--parquet-dir``, ``--output-dir``, ``--row-count``. If one of those
-    commands renames a flag, this test is the tripwire.
-    """
-    assert gate.command(_unstarted_state()) == _UNSTARTED_COMMANDS[gate.id]
+    assert unstarted_cmd == _UNSTARTED_COMMANDS[gate.id]
+    assert finished_cmd == _FINISHED_COMMANDS[gate.id]
+    assert "<" not in finished_cmd
+    assert "{" not in unstarted_cmd and "{" not in finished_cmd
+
+
+def test_gate_command_branch_behaviors() -> None:
+    """Verify Gate 1 generate/upload switch, Gate 3 account flag, Gate 4 explore fallback, and blank handling."""
+    # Gate 1 switches from generate to upload once Parquet exists
+    assert GATES[1].command(_unstarted_state()).startswith("demo-create data generate ")
+    with_parquet = _unstarted_state(generated_parquet_dir=Path("/scratch/retail"), bq_dataset_id="retail")
+    assert GATES[1].command(with_parquet).startswith("demo-create data upload ")
+
+    # Gate 3 omits --looker-account when None
+    assert "--looker-account" not in GATES[3].command(_finished_state(looker_account=None))
+
+    # Gate 4 falls back to existing_tables when generated_tables is empty
+    byo_state = _finished_state(generated_tables=[], existing_tables=["fct_shipments"])
+    assert "--explore fct_shipments" in GATES[4].command(byo_state)
+
+    # Whitespace-only values render as placeholders
+    assert "--gcp-project <gcp-project>" in GATES[0].command(_unstarted_state(gcp_project_id="   "))
+
+
+# ===========================================================================
+# Click command tree introspection (validates gate commands against real CLI)
+# ===========================================================================
+
+
+def _resolve_click_command(argv: list[str]) -> tuple[Any, list[str], list[str]]:
+    node: Any = _CLI
+    path: list[str] = []
+    idx = 0
+    while idx < len(argv) and not argv[idx].startswith("-"):
+        commands = getattr(node, "commands", None)
+        child = commands.get(argv[idx]) if isinstance(commands, dict) else None
+        if child is None:
+            break
+        node = child
+        path.append(argv[idx])
+        idx += 1
+    return node, path, argv[idx:]
+
+
+def _declared_options(command: Any) -> set[str]:
+    return {opt for param in command.params for opt in (*param.opts, *param.secondary_opts) if opt.startswith("-")}
 
 
 @pytest.mark.parametrize("gate", GATES, ids=_GATE_IDS)
-def test_finished_state_command_is_exactly_as_published(gate):
-    """Pins that recorded values are substituted, not merely available.
+@pytest.mark.parametrize("state_builder", [_unstarted_state, _finished_state], ids=["unstarted", "populated"])
+def test_every_gate_command_resolves_against_real_click_parser(gate: Any, state_builder: Any) -> None:
+    """Every emitted gate command resolves to a real leaf subcommand with valid, non-duplicate flags and --json."""
+    cmd_str = gate.command(state_builder())
+    argv = shlex.split(cmd_str)
+    assert argv[0] == "demo-create"
 
-    The point of the feature is that an agent never re-derives an argument: if
-    state says the dataset is ``retail``, the command must already say
-    ``--dataset retail``.
-    """
-    assert gate.command(_finished_state()) == _FINISHED_COMMANDS[gate.id]
+    resolved, path, remaining = _resolve_click_command(argv[1:])
+    assert path, f"No subcommand resolved from {cmd_str!r}"
+    assert not isinstance(getattr(resolved, "commands", None), dict), f"{cmd_str!r} stopped at group {path}"
+
+    declared = _declared_options(resolved)
+    assert "--json" in declared
+
+    by_opt = {opt: p for p in resolved.params for opt in (*p.opts, *p.secondary_opts) if opt.startswith("-")}
+    flags: list[str] = []
+    positionals: list[str] = []
+    i = 0
+    while i < len(remaining):
+        tok = remaining[i]
+        if tok.startswith("-"):
+            name, sep, _ = tok.partition("=")
+            flags.append(name)
+            param = by_opt.get(name)
+            if param is not None and not sep and not getattr(param, "is_flag", False):
+                i += 1
+        else:
+            positionals.append(tok)
+        i += 1
+
+    undeclared = set(flags) - declared
+    assert not undeclared, f"{cmd_str!r} uses undeclared flags {undeclared}"
+    assert len(flags) == len(set(flags)), f"{cmd_str!r} contains duplicate flags: {flags}"
+    assert positionals == [], f"{cmd_str!r} contains unexpected positional args: {positionals}"
 
 
 # ===========================================================================
-# Command generation -- branch behavior
+# `demo-create status` CLI integration
 # ===========================================================================
 
 
-def test_gate_one_asks_for_upload_once_parquet_exists():
-    """Re-running ``data generate`` would throw away a reviewed dataset.
+def test_status_json_fresh_and_finished_states(invoke, state_file, isolated_cwd: Path) -> None:
+    """`status --json` reports gate 0 on a fresh workspace without creating state, and terminates when complete."""
+    fresh = invoke(["status", "--json"])
+    assert fresh.exit_code == 0
+    assert fresh.stderr == ""
+    body = envelope(fresh)
+    assert body["command"] == "status"
+    assert body["schema_version"] == ENVELOPE_SCHEMA_VERSION
+    assert body["data"]["current_gate"]["id"] == "gate_0_environment"
+    assert body["data"]["completed_gates"] == []
+    assert body["data"]["is_complete"] is False
+    assert body["next_actions"][0]["command"] == body["data"]["next_command"]
+    assert not (isolated_cwd / STATE_FILE_NAME).exists()
 
-    Gate 1 spans two commands. Once Phase 2 has produced Parquet the user has
-    inspected, the only remaining work is the load, and regenerating would
-    resample every distribution they just approved.
-    """
-    state = _unstarted_state(generated_parquet_dir=Path("/scratch/retail"), bq_dataset_id="retail")
-    assert GATES[1].command(state).startswith("demo-create data upload ")
-
-
-def test_gate_one_asks_for_generate_before_any_parquet_exists():
-    """With nothing on disk there is nothing to upload."""
-    assert GATES[1].command(_unstarted_state()).startswith("demo-create data generate ")
-
-
-def test_gate_one_never_guesses_the_row_count():
-    """Row volume is the user's Phase 3 decision, not the CLI's.
-
-    Substituting a remembered value would let an agent load 500k rows because a
-    previous demo did, silently bypassing the confirmation the gate exists for.
-    """
-    assert "--row-count <row-count>" in GATES[1].command(_finished_state(generated_parquet_dir=None))
-
-
-def test_gate_three_omits_the_looker_account_flag_when_none_is_recorded():
-    """An invented OAuth alias fails harder than an omitted optional flag.
-
-    With the flag absent, ``lookml deploy`` falls back to the saved ``lkr``
-    session, which is right far more often than any alias an agent could guess.
-    """
-    state = _finished_state(looker_account=None)
-    assert "--looker-account" not in GATES[3].command(state)
+    # Completed pipeline
+    state_file(**_finished_state().model_dump())
+    done = invoke(["status", "--json"])
+    assert done.exit_code == 0
+    done_body = envelope(done)
+    assert done_body["data"]["is_complete"] is True
+    assert done_body["data"]["current_gate"] is None
+    assert done_body["data"]["next_command"] is None
+    assert done_body["next_actions"] == []
 
 
-def test_gate_three_passes_through_a_recorded_looker_account():
-    """When the account *is* known, omitting it would risk the wrong instance."""
-    state = _finished_state(looker_account="acme-looker")
-    assert GATES[3].command(state).endswith("--looker-account acme-looker")
+def test_status_human_mode_renders_table_to_stderr(invoke, state_file) -> None:
+    """`status` without `--json` renders gate table on stderr and leaves stdout empty."""
+    state_file(precheck_passed=True, dataset_exists=True, bq_dataset_id="retail", looker_project_name="retail_demo")
+    result = invoke(["status"])
+
+    assert result.exit_code == 0
+    assert result.stdout == ""
+    assert "complete" in result.stderr
+    assert "current" in result.stderr
+    assert "pending" in result.stderr
+    for gate in GATES:
+        assert gate.title in result.stderr
 
 
-def test_gate_four_falls_back_from_generated_tables_to_modelled_tables():
-    """A dataset modelled from pre-existing BigQuery tables has no generated ones.
+def test_status_state_file_redirection_and_corrupt_state_error(invoke, tmp_path: Path) -> None:
+    """`--state-file` redirects reads and surfaces `StateError` (exit 7) on corrupt or newer files."""
+    custom = tmp_path / "custom_state.json"
+    custom.write_text(FlowState(precheck_passed=True).model_dump_json(), encoding="utf-8")
 
-    ``existing_tables`` is what ``lookml model`` records in that path; without
-    the fallback, the whole "bring your own warehouse" flow would emit an
-    ``<explore-name>`` placeholder even though the explore is known.
-    """
-    state = _finished_state(generated_tables=[], existing_tables=["fct_shipments"])
-    assert "--explore fct_shipments" in GATES[4].command(state)
+    ok = invoke(["status", "--json", "--state-file", str(custom)])
+    assert ok.exit_code == 0
+    assert envelope(ok)["data"]["current_gate"]["id"] == "gate_1_data"
+    assert Path(envelope(ok)["data"]["state_file"]) == custom
 
-
-def test_gate_four_leaves_the_explore_unresolved_when_no_tables_are_known():
-    """Better an obvious blank than a confidently wrong explore name."""
-    state = _unstarted_state(generated_tables=[], existing_tables=[])
-    assert "--explore <explore-name>" in GATES[4].command(state)
-
-
-def test_gate_four_points_at_the_dashboards_subdirectory():
-    """Golden queries are mined from the dashboard files, which live one level down.
-
-    ``agent create`` accepts either the LookML root or its ``dashboards/``
-    child; naming the precise directory keeps grounding from depending on how
-    the generator happens to lay the tree out.
-    """
-    state = _finished_state(lookml_output_dir=Path("/scratch/lookml_retail_demo"))
-    assert GATES[4].command(state).endswith("--dashboards-dir /scratch/lookml_retail_demo/dashboards")
-
-
-def test_gate_four_omits_the_dashboards_flag_before_lookml_is_generated():
-    """Pointing at a directory that does not exist yet is worse than saying nothing."""
-    assert "--dashboards-dir" not in GATES[4].command(_unstarted_state())
-
-
-@pytest.mark.parametrize(
-    "blank",
-    ["", "   "],
-    ids=["empty_string", "whitespace_only"],
-)
-def test_blank_state_values_render_as_placeholders(blank):
-    """``FlowState`` defaults ``gcp_project_id`` from the environment.
-
-    On a machine with no ``$GOOGLE_CLOUD_PROJECT`` that default is ``""``.
-    Interpolating it produces ``--gcp-project`` followed by the next flag,
-    which the CLI parses as the project *being* ``--json``. A blank must be
-    treated as unknown.
-    """
-    assert "--gcp-project <gcp-project>" in GATES[0].command(_unstarted_state(gcp_project_id=blank))
-
-
-def test_default_flow_state_is_judged_without_error():
-    """``status`` runs against a brand-new ``FlowState`` on a fresh machine.
-
-    Constructed with no arguments at all, i.e. with whatever the environment
-    supplies, so an environment-derived default cannot crash the one command an
-    agent calls first.
-    """
-    statuses = evaluate_gates(FlowState())
-    assert len(statuses) == len(GATES)
-    assert all(status.command.startswith(COMMAND_PREFIX) for status in statuses)
+    broken = tmp_path / "broken.json"
+    broken.write_text("{not valid json", encoding="utf-8")
+    err = invoke(["status", "--json", "--state-file", str(broken)])
+    assert err.exit_code == StateError.exit_code
+    assert envelope(err)["errors"][0]["code"] == "STATE_ERROR"

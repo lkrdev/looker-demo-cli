@@ -7,7 +7,6 @@ via `TableValidator`, and serializes Snappy-compressed Parquet files.
 
 from __future__ import annotations
 
-import datetime
 import importlib.util
 import subprocess
 import sys
@@ -140,6 +139,13 @@ class ModularDAGSynthesizer:
                             tables = {k: v for k, v in res.items() if isinstance(v, pd.DataFrame)}
                             executed_in_proc = True
                             break
+                if not tables:
+                    # Check if the script wrote Parquet files directly during exec_module
+                    parquet_files = sorted(self.output_dir.glob("*.parquet"))
+                    if parquet_files:
+                        for p_file in parquet_files:
+                            tables[p_file.stem] = pd.read_parquet(p_file)
+                        executed_in_proc = True
             except Exception:
                 executed_in_proc = False
 

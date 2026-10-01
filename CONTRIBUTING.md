@@ -90,7 +90,6 @@ undeclared marker is an error, not a typo you find later.
 | --- | --- |
 | `unit` | Hermetic: no network, no subprocess, no host dependency |
 | `integration` | Needs a provisioned host (`gcloud` / `uv` / `lkr`) or real subprocesses |
-| `characterization` | Pins current observable behaviour to detect refactor regressions |
 
 **`integration` is deselected by default.** `addopts` carries
 `-m "not integration"`, so a plain `pytest` run is fully hermetic and works in a
@@ -98,38 +97,10 @@ clean container. Opt in explicitly:
 
 ```bash
 uv run pytest -m integration
-uv run pytest -m "unit or characterization"
+uv run pytest -m unit
 ```
 
-Most modules set `pytestmark = pytest.mark.unit` at module level and apply
-`characterization` per-test.
-
----
-
-## Characterization tests: the convention
-
-A test marked `@pytest.mark.characterization` and carrying a `# BUG:` note pins
-**known-wrong behaviour on purpose**. It is not an endorsement — it is a tripwire
-that makes the eventual fix a visible, intentional edit rather than an accident.
-
-```python
-@pytest.mark.characterization
-def test_domain_defaults_silently(invoke):
-    """Pins that --domain falls back rather than erroring."""
-    # BUG: --domain silently defaults to "logistics_analytics" instead of being
-    # required, so a typo produces a plausible-looking demo of the wrong domain.
-    ...
-```
-
-Write the `# BUG:` note so it names **the defect and its consequence**, and the
-phase or issue that owns the fix where one is known.
-
-> [!CAUTION]
-> If you fix the underlying bug, you must **invert** the test — never delete it.
-> Rename it to describe the *correct* behaviour, rewrite the docstring, drop the
-> `# BUG:` note, and change the marker to `unit`. Deleting it removes the only
-> record that the behaviour was ever considered, and the bug reappears
-> unnoticed.
+Most modules set `pytestmark = pytest.mark.unit` at module level.
 
 ---
 
@@ -240,7 +211,7 @@ Cover at minimum:
 - state persistence, if the command writes any.
 
 **5. If the command advances a gate**, update `looker_demo_cli/gates.py` and let
-`tests/test_gates_command_validity.py` verify every flag you emit against the
+`tests/test_gates.py` verify every flag you emit against the
 real Click parser.
 
 ---
@@ -249,6 +220,5 @@ real Click parser.
 
 - Keep the local gate green.
 - Raise `COVERAGE_FLOOR` if your change lifts measured coverage.
-- Invert characterization tests you fix; do not delete them.
 - Note any new external boundary — if it needs a fourth port, say so explicitly
   in the description, because that is an architectural change.

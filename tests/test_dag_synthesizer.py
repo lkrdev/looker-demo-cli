@@ -4,12 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pandas as pd
-
 from looker_demo_cli.generators.dag_synthesizer import ModularDAGSynthesizer
 from looker_demo_cli.generators.schema_generator import (
     DomainBlueprint,
-    EntityFieldSpec,
     EntitySchemaSpec,
     create_dynamic_blueprint_from_name,
 )
@@ -106,3 +103,41 @@ def generate_tables(output_dir, row_count=100):
     assert result.total_rows == 210
     assert "dim_agents" in result.parquet_paths
     assert "fct_sessions" in result.parquet_paths
+
+
+def test_synthesize_from_script_top_level_parquet_does_not_rerun_subprocess(tmp_path: Path, monkeypatch):
+    import subprocess
+
+    out_dir = tmp_path / "out"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    script_file = tmp_path / "top_level_gen.py"
+    script_file.write_text(
+        f"""
+from pathlib import Path
+import pandas as pd
+
+out = Path({str(out_dir)!r})
+df_dim = pd.DataFrame({{
+    "agent_id": [f"AGT-{{i:03d}}" for i in range(1, 6)],
+    "agent_name": [f"Agent {{i}}" for i in range(1, 6)],
+}})
+df_dim.to_parquet(out / "dim_agents.parquet", index=False)
+"""
+    )
+
+    subprocess_calls = []
+    orig_run = subprocess.run
+
+    def spy_run(*args, **kwargs):
+        subprocess_calls.append((args, kwargs))
+        return orig_run(*args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", spy_run)
+
+    synth = ModularDAGSynthesizer(output_dir=out_dir)
+    result = synth.synthesize_from_script(script_path=script_file, validate=True)
+
+    assert len(subprocess_calls) == 0
+    assert result.validation_report.is_valid
+    assert result.total_rows == 5
+    assert "dim_agents" in result.tables

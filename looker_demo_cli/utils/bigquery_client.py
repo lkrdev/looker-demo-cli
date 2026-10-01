@@ -31,12 +31,14 @@ class BigQueryOptimizationAdvisor:
             for col in source.columns:
                 col_str = str(col)
                 dtype_str = str(source[col].dtype).lower()
-                if (
+                is_temporal = (
                     pd.api.types.is_datetime64_any_dtype(source[col])
                     or "date" in dtype_str
                     or "timestamp" in dtype_str
-                    or col_str.lower().endswith(("_date", "_time", "_at", "_timestamp"))
-                ):
+                )
+                is_name_match = col_str.lower().endswith(("_date", "_time", "_at", "_timestamp"))
+                is_numeric = pd.api.types.is_numeric_dtype(source[col])
+                if is_temporal or (is_name_match and not is_numeric):
                     temporal_cols.add(col_str)
             return cols, temporal_cols
 
@@ -49,11 +51,10 @@ class BigQueryOptimizationAdvisor:
                 temporal_cols = set()
                 for name, pa_type in zip(schema.names, schema.types):
                     t_str = str(pa_type).lower()
-                    if (
-                        "timestamp" in t_str
-                        or "date" in t_str
-                        or name.lower().endswith(("_date", "_time", "_at", "_timestamp"))
-                    ):
+                    is_temporal = "timestamp" in t_str or "date" in t_str
+                    is_name_match = name.lower().endswith(("_date", "_time", "_at", "_timestamp"))
+                    is_numeric = any(x in t_str for x in ("int", "double", "float", "decimal"))
+                    if is_temporal or (is_name_match and not is_numeric):
                         temporal_cols.add(name)
                 return cols, temporal_cols
             except Exception:

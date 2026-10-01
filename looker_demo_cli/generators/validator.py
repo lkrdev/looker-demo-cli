@@ -10,7 +10,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-import numpy as np
 import pandas as pd
 
 
@@ -232,7 +231,11 @@ class TableValidator:
                 if start_c and end_c and start_c != end_c:
                     try:
                         s_series = pd.to_datetime(df[start_c], errors="coerce")
+                        if s_series.dt.tz is not None:
+                            s_series = s_series.dt.tz_localize(None)
                         e_series = pd.to_datetime(df[end_c], errors="coerce")
+                        if e_series.dt.tz is not None:
+                            e_series = e_series.dt.tz_localize(None)
                         valid_mask = s_series.notnull() & e_series.notnull()
                         inversions = int((e_series[valid_mask] < s_series[valid_mask]).sum())
                         if inversions > 0:
