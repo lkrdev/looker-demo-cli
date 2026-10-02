@@ -196,7 +196,7 @@ def test_model_from_parquet_writes_expected_tree_and_state(
     payload = envelope(result)
     assert payload["data"]["source"] == "parquet"
     assert sorted(payload["data"]["tables"]) == ["dim_products", "dim_users", "fct_orders"]
-    assert payload["next_actions"][0]["gate"] == 3
+    assert payload["next_actions"][0]["gate"] == 6
     assert lkml_tree(out) == {
         "views/dim_products.view.lkml",
         "views/dim_users.view.lkml",
@@ -206,6 +206,7 @@ def test_model_from_parquet_writes_expected_tree_and_state(
     }
     state = read_state(isolated_cwd)
     assert state["looker_project_name"] == "retail_demo"
+    assert state["primary_explore_name"] == "fct_orders"
     assert state["bq_dataset_id"] == "retail_raw"
     assert state["looker_connection_name"] == "default_bigquery_connection"
 
@@ -473,3 +474,63 @@ def test_clean_root_partial_and_api_failures(invoke, fake_looker, install_looker
         api_err = invoke(["lookml", "clean-root", "--looker-project", "retail_demo", "--json"])
     assert api_err.exit_code == RemoteApiError.exit_code
     assert envelope(api_err)["status"] == "FAILED"
+
+
+# ---------------------------------------------------------------------------
+# lookml certify-polish, optimize --skip, deploy guards & approve-critique
+# ---------------------------------------------------------------------------
+
+
+def test_certify_polish_optimize_skip_deploy_guards_and_approve_critique(
+    invoke, sample_lookml_dir: Path, state_file, isolated_cwd: Path, tmp_path: Path
+):
+    """Covers Gate 2B certify-polish, Gate 3A optimize --skip, Gate 3B deploy StateError guards, and Gate 3C approve-critique."""
+    # Missing directory -> ConfigError
+    assert (
+        invoke(["lookml", "certify-polish", "--lookml-dir", str(tmp_path / "missing"), "--json"]).exit_code
+        == ConfigError.exit_code
+    )
+
+    # Stateful pipeline: precheck_passed=True requires certify-polish and optimize before deploy
+    state_file(precheck_passed=True, lookml_output_dir=str(sample_lookml_dir))
+    unpolished = invoke(["lookml", "deploy", "--json"])
+    assert unpolished.exit_code == StateError.exit_code
+    assert "Gate 2B" in envelope(unpolished)["errors"][0]["message"]
+
+    # Gate 2B: certify-polish
+    cert = invoke(["lookml", "certify-polish", "--lookml-dir", str(sample_lookml_dir), "--json"])
+    assert cert.exit_code == 0, cert.output
+    cert_payload = envelope(cert)
+    assert cert_payload["data"]["certified"] is True
+    assert cert_payload["next_actions"][0]["gate"] == 7
+    assert read_state(isolated_cwd)["polish_certified"] is True
+
+    # Still blocked at deploy until Gate 3A (optimize or optimize --skip) is resolved
+    unoptimized = invoke(["lookml", "deploy", "--json"])
+    assert unoptimized.exit_code == StateError.exit_code
+    assert "Gate 3A" in envelope(unoptimized)["errors"][0]["message"]
+
+    # Gate 3A: optimize --skip
+    skip_opt = invoke(["lookml", "optimize", "--lookml-dir", str(sample_lookml_dir), "--skip", "--json"])
+    assert skip_opt.exit_code == 0, skip_opt.output
+    skip_payload = envelope(skip_opt)
+    assert skip_payload["data"]["skipped"] is True
+    assert skip_payload["next_actions"][0]["gate"] == 8
+    assert read_state(isolated_cwd)["optimizer_status"] == "skipped"
+
+    # Gate 3C: approve-critique requires deployed_dashboard_url
+    no_deploy = invoke(["lookml", "approve-critique", "--json"])
+    assert no_deploy.exit_code == StateError.exit_code
+
+    state_file(
+        precheck_passed=True,
+        looker_project_name="retail_demo",
+        deployed_dashboard_url="https://fake.cloud.looker.com/dashboards/42",
+    )
+    critique = invoke(["lookml", "approve-critique", "--notes", "Looks great", "--json"])
+    assert critique.exit_code == 0, critique.output
+    critique_payload = envelope(critique)
+    assert critique_payload["data"]["critique_approved"] is True
+    assert critique_payload["next_actions"][0]["gate"] == 10
+    assert read_state(isolated_cwd)["critique_approved"] is True
+

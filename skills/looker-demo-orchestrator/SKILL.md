@@ -8,69 +8,68 @@ description: Master orchestration skill for designing, generating, modeling, and
 This skill defines the mandatory operational procedure for an AI agent or engineer creating full-stack data demos on Google Cloud BigQuery and Looker.
 
 > [!CAUTION]
-> **CRITICAL RULE: THE GATES ARE MANDATORY AND MUST NOT BE BATCHED.**
-> There is deliberately no single command that builds a demo end to end -- the monolithic `demo-create run` was removed in 0.3.0 precisely because it bypassed iterative schema co-design and volume validation. The agent **MUST** orchestrate the gated subcommands interactively stage-by-stage as detailed below, pausing for human confirmation where required.
+> **CRITICAL RULE: THE 13 GATES (`0..12`) ARE MANDATORY AND MUST NOT BE BATCHED.**
+> There is deliberately no single command that builds a demo end to end -- the monolithic `demo-create run` was removed in 0.3.0 precisely because it bypassed iterative schema co-design and volume validation. The agent **MUST** orchestrate the 13 gated subcommands (`0..12`) interactively stage-by-stage as detailed below, pausing for human confirmation wherever `requires_human_confirmation` is `true` and recording explicit user decisions in `.demo-state.json`.
 
 ---
 
-## Core Execution Architecture: CLI-First with On-Demand Subagents
+## Core Execution Architecture: CLI-First with On-Demand Subagents (13-Stage State Machine)
 
-To eliminate subagent initialization drag, serialization latency, and background file-write race conditions, the workflow follows a **CLI-First Architecture with On-Demand Subagents**:
+To eliminate subagent initialization drag, serialization latency, and background file-write race conditions, the workflow follows a **CLI-First 13-Gate Architecture (`0..12`) with On-Demand Subagents**:
 
 ```mermaid
 graph TD
-    Start([User Request]) --> PreCheck["Orchestrator: Turn-1 Pre-Check<br/>(demo-create pre-check --json)"]
-    PreCheck --> Gate0{"Human Gate 0: Instant 4-Target Alignment<br/>(ask_question - NO plan before this!)"}
-    Gate0 -->|Co-Design Phase 1| Phase1["Orchestrator: Schema & ERD Proposal<br/>(Mermaid ERD in Chat)"]
-    Phase1 -->|Co-Design Phase 2| Phase2["Orchestrator: Micro-Sample Preview<br/>(5-10 Sample Rows in Chat)"]
-    Phase2 --> Gate1{"Human Gate 1: Scale & Volume Confirmation<br/>(ask_question)"}
-    Gate1 -->|Fast-Path CLI| GenBQ["Orchestrator: Batch Synthesis & BQ Upload<br/>(demo-create data generate + upload)"]
-    GenBQ --> ModelCLI["Gate 2A: Semantic Modeling & SELECT DISTINCT Grounding<br/>(demo-create lookml model + lookml-filtered-measures)"]
-    ModelCLI --> SnowflakeBranch{"Is Schema 3NF Snowflake<br/>with Chasm Traps?"}
+    Start([User Request]) --> Gate0["Gate 0 (gate_0a_precheck): Environment & Skill Audit<br/>(demo-create pre-check --fix --gcp-project &lt;gcp-project&gt;)"]
+    Gate0 --> Gate1{"Gate 1 (gate_0b_confirm_targets): 4-Target Confirmation<br/>[requires_human_confirmation=true]<br/>(ask_question -> demo-create confirm-targets)"}
+    Gate1 --> Gate2["Gate 2 (gate_1a_propose_schema): Propose Schema & 5-Row Preview<br/>(demo-create data propose-schema --schema-file &lt;schema-file&gt; --preview)"]
+    Gate2 --> Gate3{"Gate 3 (gate_1b_approve_schema): Schema ERD & Volume Approval<br/>[requires_human_confirmation=true]<br/>(Render Schema, ERD & Samples in Chat -> ask_question -> demo-create data approve-schema)"}
+    Gate3 --> Gate4["Gate 4 (gate_1c_generate_data): Modular DAG Synthesis & BigQuery Load<br/>(demo-create data generate ... --upload --json-scorecard)"]
+    Gate4 --> Gate5["Gate 5 (gate_2a_lookml_model): Semantic Modeling & Draft Dashboards<br/>(demo-create lookml model + lookml-filtered-measures)"]
+    Gate5 --> SnowflakeBranch{"Is Schema 3NF Snowflake<br/>with Chasm Traps?"}
     SnowflakeBranch -->|Yes: Spawn Subagent| S_Snowflake["Subagent: lookml-snowflake-modeler<br/>(NDT Rollups & Chasm Trap Elimination)"]
-    SnowflakeBranch -->|No: Standard Star Schema| DashDesign["Gate 2B: Mandatory Dashboard Polish<br/>(lookml-dashboard-designer 3-Pass Protocol)"]
-    S_Snowflake --> DashDesign
-    DashDesign --> CleanRoot["Gate 3A: Clean Root Orphan Duplicates<br/>(demo-create lookml clean-root)"]
-    CleanRoot --> GateOpt{"Gate 3B: Run Performance Optimizer?<br/>(Guarded ask_question)"}
-    GateOpt -->|Yes: Confirmed| OptCLI["Orchestrator: Performance Optimizer<br/>(demo-create lookml optimize --backup)"]
-    GateOpt -->|No: Skipped| DeployCLI["Gate 3C: Pre-Deployment QA & Release<br/>(demo-create lookml deploy + Filtered Measure Auditor)"]
-    OptCLI --> DeployCLI
-    DeployCLI --> QAStatus{"LookML & Query Validation<br/>Passed 100%?"}
-    QAStatus -->|Fail: Spawn Subagent| S_QA["Subagent: lookml-qa-validator<br/>(Max 3 Self-Healing Loops)"]
-    S_QA -->|Certified Ready| DeployProd["Orchestrator: Production Release<br/>(lkr tools lookml deploy)"]
-    QAStatus -->|Pass 100%| DeployProd
-    DeployProd --> GateCritique{"Gate 3D: Post-Deploy Screenshot Critique<br/>(ask_question: Approve or Share Screenshot)"}
-    GateCritique -->|User Shares Screenshot| Pass3Refine["Pass 3 Visual Critique & Refinement<br/>(view_file -> Refine LookML -> Redeploy)"]
-    Pass3Refine --> GateCritique
-    GateCritique -->|Approved| GateCA{"Human Gate 4: Provision CA Agent?<br/>(ask_question)"}
-    GateCA -->|Yes| CA_CLI["Orchestrator: CA Agent & Golden Queries<br/>(demo-create agent create)"]
-    GateCA -->|No| DeliveryReport["Orchestrator: Final Delivery Report<br/>(DELIVERY_REPORT.md)"]
-    CA_CLI --> GateGE{"Human Gate 5: Publish to Gemini Enterprise?<br/>(ask_question)"}
-    GateGE -->|Yes| GE_CLI["Orchestrator: Publish to GE<br/>(demo-create agent publish)"]
-    GateGE -->|No| DeliveryReport
-    GE_CLI --> DeliveryReport
+    SnowflakeBranch -->|No: Standard Star Schema| Gate6["Gate 6 (gate_2b_certify_polish): 3-Pass Dashboard Polish & Audit<br/>(Apply looker-visualizations -> demo-create lookml certify-polish)"]
+    S_Snowflake --> Gate6
+    Gate6 --> Gate7{"Gate 7 (gate_3a_optimize): Run Performance Optimizer?<br/>[requires_human_confirmation=true]<br/>(ask_question -> demo-create lookml optimize [--skip])"}
+    Gate7 -->|Yes: Optimize| OptApply["Apply Performance Optimizer<br/>(demo-create lookml optimize --lookml-dir &lt;lookml-dir&gt;)"]
+    Gate7 -->|No: Skip| OptSkip["Record Skip Decision<br/>(demo-create lookml optimize --lookml-dir &lt;lookml-dir&gt; --skip)"]
+    OptApply --> Gate8["Gate 8 (gate_3b_deploy): Pre-Deployment QA & Production Release<br/>(demo-create lookml deploy --looker-project &lt;looker-project&gt; --lookml-dir &lt;lookml-dir&gt;)"]
+    OptSkip --> Gate8
+    Gate8 --> QAStatus{"LookML & Query Validation<br/>Passed 100%?"}
+    QAStatus -->|Fail: Spawn Subagent| S_QA["Subagent: lookml-qa-validator<br/>(Max 3 Self-Healing Loops -> Re-run deploy)"]
+    S_QA --> Gate8
+    QAStatus -->|Pass 100%| Gate9{"Gate 9 (gate_3c_critique): Post-Deploy Screenshot Critique (Pass 3)<br/>[requires_human_confirmation=true]<br/>(Present URL -> ask_question -> demo-create lookml approve-critique)"}
+    Gate9 -->|User Shares Screenshot| Pass3Refine["Pass 3 Visual Critique & Refinement<br/>(view_file -> Refine LookML -> certify-polish -> deploy)"]
+    Pass3Refine --> Gate9
+    Gate9 -->|Approved: lookml approve-critique| Gate10{"Gate 10 (gate_4_agent): Provision CA Agent?<br/>[requires_human_confirmation=true]<br/>(ask_question -> demo-create agent create [--skip])"}
+    Gate10 -->|Yes: Create Agent| CA_CLI["Provision CA Agent & Golden Queries<br/>(demo-create agent create --model &lt;model-name&gt; --explore &lt;explore-name&gt;)"]
+    Gate10 -->|No: --skip| Gate12{"Gate 12 (gate_6_embed): Scaffold External Embed Portal?<br/>[requires_human_confirmation=true]<br/>(ask_question -> demo-create embed scaffold [--skip])"}
+    CA_CLI --> Gate11{"Gate 11 (gate_5_publish): Publish to Gemini Enterprise?<br/>[requires_human_confirmation=true]<br/>(ask_question -> demo-create agent publish [--skip])"}
+    Gate11 -->|Yes or --skip| Gate12
+    Gate12 -->|Yes: Scaffold Portal| EmbedCLI["Scaffold External Portal<br/>(demo-create embed scaffold + embed-portal-engineer)"]
+    Gate12 -->|No: --skip| DeliveryReport["Orchestrator: Final Delivery Report<br/>(DELIVERY_REPORT.md -> links to SPEC.md)"]
+    EmbedCLI --> DeliveryReport
 ```
 
 | Component | Execution Mode | Responsibility & Scope |
 |---|---|---|
-| **Parent Orchestrator** | Direct Parent Turn | Interactive co-design gates (`ask_question`), fast CLI subcommands (`demo-create data`, `lookml model`, `lookml optimize`, `lookml deploy`, `agent create`), Modular DAG verification scorecard review, post-deploy screenshot critique loop, and final delivery report. |
+| **Parent Orchestrator** | Direct Parent Turn | Interactive co-design gates (`ask_question`), state-tracked confirmation/certification CLI commands (`pre-check`, `confirm-targets`, `data propose-schema`, `data approve-schema`, `data generate`, `lookml model`, `lookml certify-polish`, `lookml optimize [--skip]`, `lookml deploy`, `lookml approve-critique`, `agent create [--skip]`, `agent publish [--skip]`, `embed scaffold [--skip]`), Modular DAG verification scorecard review, and final delivery report. |
 | [`synthetic-data-authoring`](../synthetic-data-authoring/SKILL.md) | **Companion Core Skill** | Guides realistic synthetic dataset design across 4 pillars: non-uniform distributions (Pareto/Log-Normal), cross-column tier coupling, temporal growth/seasonality curves, and Looker Explore optimization. |
-| [`demo-spec`](../demo-spec/SKILL.md) | **Companion Core Skill** | Asynchronously creates and maintains `SPEC.md` as the living technical architecture document across all gates, updating quietly on disk without chat dumping. |
+| [`demo-spec`](../demo-spec/SKILL.md) | **Companion Core Skill** | Asynchronously creates and maintains `SPEC.md` as the living technical architecture document across all 13 gates (`0..12`), updating quietly on disk without chat dumping. |
 | [`bigquery-metadata`](../bigquery-metadata/SKILL.md) | **Companion Core Skill** | Extracts BigQuery schemas, PK/FK constraints, and partition info via native `bq` CLI into `SPEC.md` without custom Python scripts or MCP servers. |
 | [`knowledge-catalog-metadata`](../knowledge-catalog-metadata/SKILL.md) | **Companion Core Skill** | Extracts Dataplex Universal Catalog glossaries, data profiling stats, null/distinct ratios, and PII tags via `gcloud dataplex` CLI into `SPEC.md`. |
-| [`lookml-filtered-measures`](../lookml-filtered-measures/SKILL.md) | **Companion Core Skill** | Enforces mandatory `SELECT DISTINCT` grounding before writing any `filters: [...]` in LookML measures, preventing `0`/`NULL` ratios. |
-| [`data-engineer`](subagents/data-engineer.md) | **On-Demand Subagent** | Synthesizes high-throughput relational Parquet datasets (`>7,500 rows/sec`), validates invariants via in-memory `TableValidator`, and uploads to BigQuery via ADC with automatic Day Partitioning & Clustering (`demo-create data generate --upload --json-scorecard`). |
-| [`lookml-snowflake-modeler`](subagents/lookml-snowflake-modeler.md) | **On-Demand Subagent** | Spawned ONLY when schemas contain complex 3NF snowflake structures with Chasm Traps (multiple 1:N children), diamond joins, or require Native Derived Table (NDT) rollups. |
-| [`lookml-dashboard-designer`](subagents/lookml-dashboard-designer.md) | **Mandatory Gate 2 Subagent** | Executes the 3-Pass Executive Dashboard Polish protocol (theme-inheriting `type: text` headers, centered legends, independent dual-axis formatting, transparent grids, and screenshot critique). |
-| [`lookml-qa-validator`](subagents/lookml-qa-validator.md) | **On-Demand Subagent** | Spawned ONLY when `demo-create lookml deploy` encounters validation errors or failing queries; runs up to 3 self-healing loops via `lookml-dashboard-to-query`. |
-| [`embed-portal-engineer`](subagents/embed-portal-engineer.md) | **On-Demand Subagent** | Spawned ONLY if external embed demo portal is requested by user. |
+| [`lookml-filtered-measures`](../lookml-filtered-measures/SKILL.md) | **Companion Core Skill** | Enforces mandatory `SELECT DISTINCT` grounding before writing any `filters: [...]` in LookML measures, preventing `0`/`NULL` ratios (audited at Gate 6 by `lookml certify-polish`). |
+| [`data-engineer`](subagents/data-engineer.md) | **On-Demand Subagent** | Synthesizes high-throughput relational Parquet datasets (`>7,500 rows/sec`), validates invariants via in-memory `TableValidator`, and uploads to BigQuery via ADC with automatic Day Partitioning & Clustering at Gate 4 (`demo-create data generate --upload --json-scorecard`). |
+| [`lookml-snowflake-modeler`](subagents/lookml-snowflake-modeler.md) | **On-Demand Subagent** | Spawned ONLY at Gate 5 (`gate_2a_lookml_model`) when schemas contain complex 3NF snowflake structures with Chasm Traps (multiple 1:N children), diamond joins, or require Native Derived Table (NDT) rollups. |
+| [`lookml-dashboard-designer`](subagents/lookml-dashboard-designer.md) | **Mandatory Gate 6 Subagent** | Executes the 3-Pass Executive Dashboard Polish protocol (theme-inheriting `type: text` headers, centered legends, independent dual-axis formatting, transparent grids, and screenshot critique) prior to running `demo-create lookml certify-polish`. |
+| [`lookml-qa-validator`](subagents/lookml-qa-validator.md) | **On-Demand Subagent** | Spawned ONLY at Gate 8 (`gate_3b_deploy`) when `demo-create lookml deploy` encounters validation errors or failing queries; runs up to 3 self-healing loops via `lookml-dashboard-to-query`. |
+| [`embed-portal-engineer`](subagents/embed-portal-engineer.md) | **On-Demand Subagent** | Spawned ONLY at Gate 12 (`gate_6_embed`) if external embed demo portal scaffolding is confirmed by the user. |
 
 > [!IMPORTANT]
 > ### Subagent Lifecycle Kill-Fence & Headless Rollback Protocol
 > 1. **Subagent Kill-Fence**: Before any file revert, rollback, or manual code restoration, the orchestrator **MUST kill all running subagents** via `manage_subagents(Action='kill_all')` (or `manage_subagents(Action='kill', ConversationIds=[...])`) to prevent background tasks from overwriting restored files.
 > 2. **Headless Directory Snapshots**: In headless environments without Git tracking, `demo-create lookml optimize` automatically snapshots pre-optimization files to `lookml/.backup_pre_opt`. If the user rejects optimization or requests a rollback, execute `demo-create lookml restore --lookml-dir <dir>` to cleanly restore files in 1 command.
 > 3. **Artifact Boundaries**: `ArtifactMetadata` in `write_to_file` is strictly for files inside `<appDataDir>/brain/<conversation-id>/`. For workspace files, never supply `ArtifactMetadata`.
-> 4. **Living `SPEC.md` Quiet Maintenance**: Throughout every conversation and across all gates, the orchestrator quietly maintains `SPEC.md` in the workspace root following [`demo-spec`](../demo-spec/SKILL.md). Never dump `SPEC.md` into chat unless a significant structural change was made. `DELIVERY_REPORT.md` must always link to `SPEC.md`.
+> 4. **Living `SPEC.md` Quiet Maintenance**: Throughout every conversation and across all 13 gates, the orchestrator quietly maintains `SPEC.md` in the workspace root following [`demo-spec`](../demo-spec/SKILL.md). Never dump `SPEC.md` into chat unless a significant structural change was made. `DELIVERY_REPORT.md` must always link to `SPEC.md`.
 > 5. **Mandatory `.gitignore` Verification for `.env` Files**: Whenever creating or modifying a `.env` file (e.g., Looker API credentials, GCP settings, or Embed Portal environment), confirm that `.gitignore` exists in the working directory and includes `.env` (and `**/.env`) before writing credentials to disk.
 
 ---
@@ -89,10 +88,28 @@ The envelope reports:
 | Field | Use |
 | :--- | :--- |
 | `completed_gates` | Which stages are already done; never redo one. |
-| `current_gate` | Where the build actually is. |
+| `current_gate` | Where the build actually is (`0..12`). |
 | `next_command` | The literal command to run, with every known value substituted and `<placeholder>` where a value is still needed. |
-| `requires_human_confirmation` | **Branch on this.** When `true`, call `ask_question` with the gate's `human_checkpoint` *before* running `next_command`. |
+| `requires_human_confirmation` | **Branch on this.** When `true`, call `ask_question` with the gate's `human_checkpoint` *before* running `next_command` (or passing `--skip`). |
 | `is_complete` | When `true`, the build is finished and `next_actions` is empty. |
+
+### The 13-Stage Gate State Machine (`looker_demo_cli/gates.py`)
+
+| Gate `#` | Gate ID | Title | `requires_human_confirmation` | Canonical CLI Command Template |
+| ---: | :--- | :--- | :---: | :--- |
+| **0** | `gate_0a_precheck` | Environment, credential & skill-tree audit | `False` | `demo-create pre-check --fix --gcp-project <gcp-project>` |
+| **1** | `gate_0b_confirm_targets` | 4-target environment confirmation | **`True`** | `demo-create confirm-targets --gcp-account <gcp-account> --gcp-project <gcp-project> --looker-account <looker-account> --connection <connection-name>` |
+| **2** | `gate_1a_propose_schema` | Schema blueprint authoring & 5-row micro-sample preview | `False` | `demo-create data propose-schema --schema-file <schema-file> --preview` |
+| **3** | `gate_1b_approve_schema` | Schema ERD & target row volume approval | **`True`** | `demo-create data approve-schema --row-count <row-count> --dataset <dataset-id>` |
+| **4** | `gate_1c_generate_data` | Modular DAG synthesis & BigQuery load | `False` | `demo-create data generate --schema-file <schema-file> --row-count <row-count> --gcp-project <gcp-project> --dataset <dataset-id> --upload --json-scorecard` |
+| **5** | `gate_2a_lookml_model` | Semantic LookML modeling & draft dashboard scaffolding | `False` | `demo-create lookml model --looker-project <looker-project> --dataset <dataset-id> --connection <connection-name> --gcp-project <gcp-project>` |
+| **6** | `gate_2b_certify_polish` | 3-Pass Executive Dashboard Polish & filtered measure audit | `False` | `demo-create lookml certify-polish --lookml-dir <lookml-dir>` |
+| **7** | `gate_3a_optimize` | LookML Server Performance Optimizer gate | **`True`** | `demo-create lookml optimize --lookml-dir <lookml-dir>` *(or `--skip`)* |
+| **8** | `gate_3b_deploy` | Pre-deployment LookML validation, query testing & production release | `False` | `demo-create lookml deploy --looker-project <looker-project> --lookml-dir <lookml-dir>` |
+| **9** | `gate_3c_critique` | Post-deploy dashboard screenshot critique (Pass 3) | **`True`** | `demo-create lookml approve-critique --looker-project <looker-project>` |
+| **10** | `gate_4_agent` | Conversational Analytics agent provisioning & golden queries | **`True`** | `demo-create agent create --model <model-name> --explore <explore-name>` *(or `--skip`)* |
+| **11** | `gate_5_publish` | Gemini Enterprise publishing | **`True`** | `demo-create agent publish --agent-id <agent-id>` *(or `--skip`)* |
+| **12** | `gate_6_embed` | External Embedded Analytics portal scaffolding | **`True`** | `demo-create embed scaffold --looker-project <looker-project>` *(or `--skip`)* |
 
 The gate sections below explain *why* each gate exists and precisely what to
 confirm with the user. `demo-create status` tells you *where you are*. Prefer the
@@ -126,12 +143,13 @@ This guarantees all pinned dependencies, global agent CLI skills (`synthetic-dat
 
 ---
 
-## 1. Pre-Flight Environment Inspection & Interactive Confirmation Gate
+## 1. Pre-Flight Environment Audit & 4-Target Confirmation (Gate 0: `gate_0a_precheck` & Gate 1: `gate_0b_confirm_targets`)
 
-Always execute the pre-check inspection first to inspect GCP credentials, available projects, Looker OAuth sessions, and MCP tools:
+### Gate 0 (`gate_0a_precheck`) — Environment, Credential & Skill-Tree Audit
+Always execute the pre-check inspection first to inspect GCP credentials, available projects, Looker OAuth sessions, and agent skills:
 
 ```bash
-demo-create pre-check --json
+demo-create pre-check --fix --gcp-project <gcp-project> --json
 lkr auth list
 ```
 
@@ -139,25 +157,35 @@ lkr auth list
 > ### 🛑 Mandatory Pre-Flight Hard Stop & Immediate Auth Fail Gate
 > 1. **Immediate Fail on Missing Auth**: If `demo-create pre-check` exits with code **3** (`AUTH_ERROR`) or reports `data.is_blocked: true`, **STOP immediately** and follow **[`auth-and-guardrails.md`](../resources/auth-and-guardrails.md)** to guide the user through `gcloud auth login` / `gcloud auth application-default login` or `lkr auth login` (including first-time `lkr-cli` OAuth client registration, SSH port `8000` forwarding, and headless callback `curl` recovery).
 > 2. **DO NOT proceed** or execute any further tool calls until authentication is verified via `demo-create pre-check --fix`.
-> 3. **IMMEDIATELY invoke `ask_question`** in the very next step to prompt the user to confirm all 4 targets below.
+> 3. **IMMEDIATELY invoke `ask_question`** in the very next step (Gate 1 `gate_0b_confirm_targets`) to prompt the user to confirm all 4 targets below.
 > 4. If `available_connections` is empty in `pre-check`, provide standard recommendations (e.g. `looker_demo_bigquery`, `default_bigquery_connection`) along with a write-in option rather than trying to query Looker first.
 
-### Mandatory Interactive Confirmation Checklist:
-Before designing schemas, creating BigQuery datasets, or touching Looker, the agent **MUST explicitly prompt the user** (via `ask_question` or interactive prompt) to confirm all four environment targets:
+### Gate 1 (`gate_0b_confirm_targets`) — 4-Target Environment Confirmation `[requires_human_confirmation=True]`
+Before designing schemas, creating BigQuery datasets, or touching Looker, the agent **MUST explicitly prompt the user** via `ask_question` to confirm all four environment targets:
 
 1. **GCP User Account**: (e.g. `admin@example.com` vs `analyst@company.com`)
 2. **Target Google Cloud Project ID**: (e.g. `my-analytics-gcp-project`, `demo-data-warehouse`)
 3. **Target Looker Instance / OAuth Account**: (e.g. `my-company.looker.com` vs `demo-instance` from `lkr auth list` or `available_oauth_instances`)
 4. **Target Looker Database Connection**: (e.g. `looker_demo_bigquery` or `default_bigquery_connection`)
 
+Once the human confirms all 4 targets, **record them in `.demo-state.json`** using `demo-create confirm-targets`:
+
+```bash
+demo-create confirm-targets \
+  --gcp-account <gcp-account> \
+  --gcp-project <gcp-project> \
+  --looker-account <looker-account> \
+  --connection <connection-name>
+```
+
 > [!IMPORTANT]
 > **NEVER assume or default the Looker instance or GCP project** without explicit user confirmation, even if an active session exists in `pre-check`.
 >
-> ### 🛑 Strict Anti-Planning Rule (NO `implementation_plan.md` Before Gate 0)
-> The agent **MUST NEVER** generate an `implementation_plan.md` artifact or start drafting detailed plans before Gate 0 has completed and the user has confirmed all 4 environment targets via `ask_question`. Writing a planning artifact at Turn 1 buries the mandatory Gate 0 questions and forces premature assumptions about GCP projects and Looker instances.
+> ### 🛑 Strict Anti-Planning Rule (NO `implementation_plan.md` Before Gate 1)
+> The agent **MUST NEVER** generate an `implementation_plan.md` artifact or start drafting detailed plans before Gate 0 (`gate_0a_precheck`) and Gate 1 (`gate_0b_confirm_targets`) have completed and the user has confirmed all 4 environment targets via `ask_question` and `demo-create confirm-targets`. Writing a planning artifact at Turn 1 buries the mandatory target confirmation questions and forces premature assumptions about GCP projects and Looker instances.
 >
 > ### 🛑 Strict Pre-Flight GCP Account Activation & Validation
-> Immediately upon user selection of the GCP User Account in Step 1:
+> Immediately upon user selection of the GCP User Account at Gate 1:
 > 1. Set the active gcloud CLI account: `gcloud config set account <selected_account>`
 > 2. Verify token validity: `gcloud auth print-access-token --account=<selected_account>`
 > 3. If token check fails, exits non-zero, or prompts for re-authentication, **STOP IMMEDIATELY**. Prompt the user to run:
@@ -167,59 +195,76 @@ Before designing schemas, creating BigQuery datasets, or touching Looker, the ag
 >    ```
 >    DO NOT fall back silently to another account or ambient ADC. Confirm credentials before proceeding.
 
-## 2. Iterative Schema Co-Design & Modular DAG Synthesis Gate (Gate 1)
+---
 
-When creating demo datasets, the agent **MUST co-iterate with the user** across three deterministic phases, using the [`synthetic-data-authoring`](../synthetic-data-authoring/SKILL.md) skill, `ModularDAGSynthesizer`, in-memory `TableValidator` quality gates, and resilient BigQuery ADC ingestion:
+## 2. Iterative Schema Co-Design & Modular DAG Synthesis (Gates 2–4: `gate_1a_propose_schema`, `gate_1b_approve_schema`, `gate_1c_generate_data`)
+
+When creating demo datasets, the agent **MUST co-iterate with the user** across three CLI-enforced gates (`2..4`), using the [`synthetic-data-authoring`](../synthetic-data-authoring/SKILL.md) skill, `ModularDAGSynthesizer`, in-memory `TableValidator` quality gates, and resilient BigQuery ADC ingestion:
 
 ```mermaid
 graph TD
-    A[Phase 1: Schema & ERD Proposal] -->|User Approval & Scale| B[Phase 2: Modular DAG Generation & ADC Upload<br/>demo-create data generate --upload --json-scorecard]
-    B --> C[Phase 3: Verification Scorecard & 5-Row Sample Preview]
+    A["Gate 2 (gate_1a_propose_schema): Author Blueprint & 5-Row Micro-Sample<br/>demo-create data propose-schema --schema-file &lt;schema-file&gt; --preview"] --> B{"Gate 3 (gate_1b_approve_schema): Render Schema/ERD/Preview in Chat -> ask_question<br/>demo-create data approve-schema --row-count &lt;row-count&gt; --dataset &lt;dataset-id&gt;"}
+    B --> C["Gate 4 (gate_1c_generate_data): Modular DAG Generation & ADC Upload<br/>demo-create data generate --schema-file &lt;schema-file&gt; --row-count &lt;row-count&gt; --gcp-project &lt;gcp-project&gt; --dataset &lt;dataset-id&gt; --upload --json-scorecard"]
 ```
 
 > [!CAUTION]
 > ### 🛑 Strict 2-Step Sequential Visible Presentation Rule (Anti-Zero-Length Turn)
 > **NEVER call `ask_question` in an empty or content-free message turn.**
-> 1. **Phase 1 Must Render ERD & Schema in Chat First**: In the exact same response turn, the agent MUST write the full Markdown ERD diagram (`mermaid`), dimension/fact tables, column datatypes, primary/foreign keys, and target domain metrics in visible chat BEFORE calling `ask_question` to approve the schema and target volume scale.
-> 2. **Phase 3 Must Render Verification Scorecard & Sample Tables in Chat**: Once `demo-create data generate --upload --json-scorecard` completes, output the verification scorecard (`pk_uniqueness: 1.0`, `orphan_fks: 0`, `records_per_second`, `partitioned_tables`, `clustered_tables`) and a 5-row Markdown sample preview in visible chat before moving to Gate 2.
+> 1. **Gate 2 (`gate_1a_propose_schema`) + Gate 3 (`gate_1b_approve_schema`) Must Render ERD, Schema & 5-Row Sample Preview in Chat First**: After running `demo-create data propose-schema --schema-file <schema-file> --preview`, in the exact same response turn, the agent MUST write the full Markdown ERD diagram (`data.mermaid_erd`), dimension/fact tables, column datatypes, primary/foreign keys, 5-row sample preview (`data.samples`), and target domain metrics in visible chat BEFORE calling `ask_question` to approve the schema and target volume scale.
+> 2. **Gate 4 (`gate_1c_generate_data`) Must Render Verification Scorecard & Sample Tables in Chat**: Once `demo-create data generate ... --upload --json-scorecard` completes, output the verification scorecard (`pk_uniqueness: 1.0`, `orphan_fks: 0`, `records_per_second`, `partitioned_tables`, `clustered_tables`) and a 5-row Markdown sample preview in visible chat before moving to Gate 5 (`gate_2a_lookml_model`).
 > 3. Bypassing visible rendering in chat blinds the user and is strictly forbidden.
 
-### Phase 1 — Schema Proposal & Scale Selection (Human-in-the-Loop)
-**MANDATORY Single-Turn Message Structure**:
-Your response turn in this phase MUST contain visible Markdown content before calling `ask_question`:
-1. **Domain Overview**: 2–3 sentences explaining the scenario, key operational and analytical entities, and business goals.
-2. **Mermaid ERD Diagram**: A full `mermaid` diagram showing entities, primary/foreign keys, and cardinality (e.g. `||--o{`).
-3. **Relational Schema Specification**: Markdown tables listing each table, its columns, data types, key constraints (PK, FK), and business definitions.
-4. **Key Metrics Highlight**: List the primary business and analytics metrics enabled by this schema (e.g., MRR/ARR, churn, latency, conversion).
-5. **Approval & Scale Question**: Only after rendering steps 1–4 in visible chat, call `ask_question` asking the user to approve the schema and choose the target row volume (**Small** ~1k–5k rows, **Medium** ~10k–50k rows, **Large** ~100k+ rows).
+### Gate 2 (`gate_1a_propose_schema`) — Schema Blueprint Authoring & 5-Row Micro-Sample Preview
+Author a declarative `DomainBlueprint` JSON file (e.g., `./artifacts/generated_data/schema.json`) following [`synthetic-data-authoring`](../synthetic-data-authoring/SKILL.md), then validate the blueprint, synthesize a 5-row in-memory micro-sample, and generate the canonical Mermaid ERD via:
 
-### Phase 2 — High-Throughput Modular DAG Synthesis & Resilient ADC Upload
-Once the schema and scale are approved, follow [`synthetic-data-authoring`](../synthetic-data-authoring/SKILL.md) to author either a declarative `DomainBlueprint` JSON (`--schema-file`) or a vectorized Python generator script (`--script`), then execute `demo-create data generate --upload --json-scorecard` (either directly or via the `data-engineer` subagent):
+```bash
+demo-create data propose-schema \
+  --schema-file ./artifacts/generated_data/schema.json \
+  --preview
+```
+
+### Gate 3 (`gate_1b_approve_schema`) — Schema ERD & Target Row Volume Approval `[requires_human_confirmation=True]`
+**MANDATORY Single-Turn Message Structure**:
+Your response turn at Gate 3 MUST contain visible Markdown content before calling `ask_question`:
+1. **Domain Overview**: 2–3 sentences explaining the scenario, key operational and analytical entities, and business goals.
+2. **Mermaid ERD Diagram**: Render the full `mermaid` diagram (`data.mermaid_erd`) showing entities, primary/foreign keys, and cardinality (`||--o{`).
+3. **Relational Schema Specification**: Markdown tables listing each table, its columns, data types, key constraints (PK, FK), and business definitions.
+4. **5-Row Micro-Sample Preview**: Render the 5-row sample preview (`data.samples`) generated by `data propose-schema --preview`.
+5. **Key Metrics Highlight**: List the primary business and analytics metrics enabled by this schema (e.g., MRR/ARR, churn, latency, conversion).
+6. **Approval & Scale Question**: Only after rendering steps 1–5 in visible chat, call `ask_question` asking the user to approve the schema and choose the target row volume (**Small** ~1k–5k rows, **Medium** ~10k–50k rows, **Large** ~100k+ rows).
+
+Once the user approves the schema and selects the target row volume, persist the approval in `.demo-state.json`:
+
+```bash
+demo-create data approve-schema \
+  --row-count "${ROW_COUNT}" \
+  --dataset "${DATASET}"
+```
+
+### Gate 4 (`gate_1c_generate_data`) — High-Throughput Modular DAG Synthesis & Resilient ADC Upload
+Once `data approve-schema` is recorded, execute `demo-create data generate` (either directly or via the `data-engineer` subagent):
 - **Vectorized DAG Synthesis**: Generates parent dimensions first, samples child fact foreign keys using Pareto (80/20) weights for realistic join fanouts, and enforces cross-column tier coupling and chronological timestamps (`>7,500 records/sec`).
 - **In-Memory `TableValidator` Gates**: Enforces `100%` primary key uniqueness, `0` orphan foreign keys, and strict temporal monotonicity (`<50ms` overhead) before disk serialization.
 - **Resilient BigQuery ADC Ingestion**: Uploads Snappy-compressed Parquet tables directly via `google-cloud-bigquery` Application Default Credentials (ADC) without interactive `bq` CLI password prompts, while `BigQueryOptimizationAdvisor` automatically applies **Day Partitioning** (`DATE(timestamp)`) and up to **4 Clustering Columns** (`_id`, `_type`, `_status`).
 
 ```bash
 demo-create data generate \
-  --domain "${DATASET}" \
   --schema-file ./artifacts/generated_data/schema.json \
   --row-count "${ROW_COUNT}" \
-  --output-dir ./artifacts/generated_data \
   --gcp-project "${PROJECT_ID}" \
   --dataset "${DATASET}" \
-  --engine modular-dag \
   --upload \
   --json-scorecard
 ```
+*(Note: If Parquet files were already generated locally without `--upload`, `demo-create status` emits `demo-create data upload --parquet-dir <parquet-dir> --gcp-project <gcp-project> --dataset <dataset-id>` to complete Gate 4.)*
 
-### Phase 3 — Verification Scorecard & Sample Preview
-Render the JSON scorecard results (`execution_time_seconds`, `records_per_second`, `pk_uniqueness`, `orphan_fks`, `partitioned_tables`, `clustered_tables`) along with a 5-row sample table preview in visible chat text, then proceed to Gate 2 (`demo-create lookml model`).
+Render the JSON scorecard results (`execution_time_seconds`, `records_per_second`, `pk_uniqueness`, `orphan_fks`, `partitioned_tables`, `clustered_tables`) along with a 5-row sample table preview in visible chat text, then proceed to Gate 5 (`gate_2a_lookml_model`).
 
 > [!CAUTION]
 > ### 🛑 Strict Target Project Integrity & ADC Refresh Gate
 > 1. **NEVER silently fall back or divert to an alternate Google Cloud Project or dataset** if permissions errors (e.g. `403 Access Denied`, `bigquery.datasets.create`, or expired ADC tokens) occur during dataset creation or table loading.
 > 2. If `bq` CLI or `demo-create data upload` fails with permission errors on the confirmed project, **the pipeline MUST BLOCK IMMEDIATELY and prompt the user** to refresh their ADC credentials (`gcloud auth application-default login`) or grant the necessary BigQuery IAM roles on the confirmed project.
-> 3. Under no circumstances should the agent create or load tables into a different project than the one explicitly confirmed by the user in Step 1.
+> 3. Under no circumstances should the agent create or load tables into a different project than the one explicitly confirmed by the user at Gate 1 (`gate_0b_confirm_targets`).
 
 ---
 
@@ -251,12 +296,12 @@ create_lookml_model(body={
 
 ---
 
-## 4. LookML Quality Standards & 4-Stage Semantic Pipeline
+## 4. LookML Quality Standards & 5-Stage Semantic Pipeline (Gates 5–9)
 
-### A. Semantic Modeling, Triage & Filtered Measure Grounding (CLI-First + On-Demand `lookml-snowflake-modeler`)
+### A. Gate 5 (`gate_2a_lookml_model`) — Semantic Modeling, Triage & Filtered Measure Grounding (CLI-First + On-Demand `lookml-snowflake-modeler`)
 
 1. **Fast-Path CLI Scaffolding & Metadata Introspection (Parent Orchestrator)**:
-   - At the start of Gate 2 (`gate_2_model`), execute `bigquery-metadata` (`bq query` on `INFORMATION_SCHEMA` / `bq show`) and `knowledge-catalog-metadata` (`gcloud dataplex`) via CLI to populate `SPEC.md` under `## Data Dictionary & Semantic Context` (including primary/foreign keys, null/distinct ratios, low-cardinality `suggestions`, and PII `access_grant` directives). Never invoke MCP servers.
+   - At the start of Gate 5 (`gate_2a_lookml_model`), execute `bigquery-metadata` (`bq query` on `INFORMATION_SCHEMA` / `bq show`) and `knowledge-catalog-metadata` (`gcloud dataplex`) via CLI to populate `SPEC.md` under `## Data Dictionary & Semantic Context` (including primary/foreign keys, null/distinct ratios, low-cardinality `suggestions`, and PII `access_grant` directives). Never invoke MCP servers.
    - Run `demo-create lookml model` directly in the parent session:
      ```bash
      demo-create lookml model \
@@ -269,7 +314,7 @@ create_lookml_model(body={
    - **Mandatory Field Standards**: Explicit `label:` and `description:` parameters on EVERY dimension, dimension group, and measure (Title Case, e.g. `label: "Monthly Recurring Revenue"`).
 
 2. **Conditional Subagent Delegation (`lookml-snowflake-modeler` — Spawned ONLY for 3NF / Chasm Traps)**:
-   - If the schema is a standard Star schema ($D_1 \to F \leftarrow D_2$ with no `1:N` child fanout traps), proceed directly to **Gate 2B (Mandatory Executive Dashboard Polish)** without spawning a modeling subagent.
+   - If the schema is a standard Star schema ($D_1 \to F \leftarrow D_2$ with no `1:N` child fanout traps), proceed directly to **Gate 6 (`gate_2b_certify_polish`: Mandatory Executive Dashboard Polish)** without spawning a modeling subagent.
    - If the schema contains normalized **3NF / Snowflake structures with Chasm Traps** (multiple `1:N` child collections hanging off a parent entity) or **diamond role-playing joins**, spawn the **[`lookml-snowflake-modeler`](subagents/lookml-snowflake-modeler.md)** subagent:
 
 ```yaml
@@ -286,17 +331,17 @@ subagent:
 
 ---
 
-### B. Mandatory Executive Dashboard Polish (Always Trigger `looker-visualizations` Skills Before Gate 3)
+### B. Gate 6 (`gate_2b_certify_polish`) — 3-Pass Executive Dashboard Polish & Filtered Measure Audit
 
 > [!CAUTION]
-> ### 🛑 Why You Must NEVER Skip Dashboard Polish Between Gate 2 and Gate 3
+> ### 🛑 Why You Must NEVER Skip Dashboard Polish or `lookml certify-polish` Before Deployment
 > Guard against three classic failure modes whenever generating or iterating on a LookML dashboard:
 > 1. **Never Over-Rely on the CLI's Built-In Templates (`demo-create lookml model`)**: The CLI generator only synthesizes a **raw scaffolding draft** (`.dashboard.lookml`), NOT a finished product. Never deploy the raw CLI draft without first opening the dashboard file and applying domain-specific visual polish using the `looker-visualizations` skill suite.
 > 2. **Never Mistake `HTTP 200 OK` Query Validation for Frontend Highcharts Validity**: Looker's `validate_project` and `run_inline_query` (`HTTP 200 OK`) only check LookML and SQL syntax — they do **NOT** validate client-side JavaScript/Highcharts configurations! For example, `series_types: { ...: looker_column }` is syntactically valid YAML/LookML and passes query validation, but **crashes Highcharts in the browser** because Highcharts expects bare `'column'`, `'line'`, `'area'`, `'bar'`, or `'scatter'` inside `series_types`, not Looker's internal `looker_column` wrapper.
-> 3. **Never Rush Past the 3-Pass Executive Polish Protocol**: Between Gate 2 (`lookml model`) and Gate 3 (`lookml deploy`), you **MUST** pause to open the generated `.dashboard.lookml` file, consult the visualization skills ([`looker-visualizations`](../looker-visualizations/SKILL.md), [`looker-vis-advanced-config`](../looker-visualizations/looker-vis-advanced-config/SKILL.md), [`looker-vis-cartesian`](../looker-visualizations/looker-vis-cartesian/SKILL.md), [`looker-vis-tabular-kpi`](../looker-visualizations/looker-vis-tabular-kpi/SKILL.md), [`looker-vis-specialty-maps`](../looker-visualizations/looker-vis-specialty-maps/SKILL.md)), and rewrite the tiles with modern tokens before deployment.
+> 3. **Hard State Precondition on `lookml deploy`**: `demo-create lookml deploy` enforces `state.polish_certified == True` and raises `StateError` (exit code `7`) if Gate 6 (`demo-create lookml certify-polish`) has not passed.
 
 #### Mandatory 3-Pass Dashboard Polish Protocol ([`dashboard-polish-standards.md`](../resources/dashboard-polish-standards.md)):
-After `demo-create lookml model` scaffolds the baseline LookML project, **always consult [`dashboard-polish-standards.md`](../resources/dashboard-polish-standards.md) and the `looker-visualizations` skill suite** (either directly or via the **[`lookml-dashboard-designer`](subagents/lookml-dashboard-designer.md)** subagent) to enforce:
+After `demo-create lookml model` scaffolds the baseline LookML project, **always consult [`dashboard-polish-standards.md`](../resources/dashboard-polish-standards.md) and the `looker-visualizations` skill suite** ([`looker-visualizations`](../looker-visualizations/SKILL.md), [`looker-vis-advanced-config`](../looker-visualizations/looker-vis-advanced-config/SKILL.md), [`looker-vis-cartesian`](../looker-visualizations/looker-vis-cartesian/SKILL.md), [`looker-vis-tabular-kpi`](../looker-visualizations/looker-vis-tabular-kpi/SKILL.md), [`looker-vis-specialty-maps`](../looker-visualizations/looker-vis-specialty-maps/SKILL.md)) — either directly or via the **[`lookml-dashboard-designer`](subagents/lookml-dashboard-designer.md)** subagent — to enforce:
 1. **Highcharts `series_types` Audit**: Root `type:` uses `looker_*` wrappers; `series_types:` uses **bare Highcharts names ONLY** (`column`, `bar`, `line`, `area`, `scatter`) — never `looker_column`.
 2. **Modern Geometry Tokens via `advanced_vis_config`**: Rounded bars (`borderRadius: 4`), transparent chart surfaces (`"backgroundColor": "transparent", "borderRadius": 8`), shadow tooltips, and centered legends (`legend_position: center`).
 3. **Donut Charts with Curated Palettes**: `type: looker_pie`, `show_donut: true`, `inner_radius: 50`, and `SELECT DISTINCT`-grounded `series_colors:`.
@@ -314,13 +359,19 @@ subagent:
     domain_theme: "{domain_theme}"
 ```
 
+Once the dashboard tiles and views are polished, **certify Gate 6 (`gate_2b_certify_polish`)** via the CLI:
+
+```bash
+demo-create lookml certify-polish --lookml-dir <lookml-dir>
+```
+
 ---
 
-### C. LookML Server Performance Optimization Gate (Strictly Guarded Interactive Gate)
+### C. Gate 7 (`gate_3a_optimize`) — LookML Server Performance Optimizer Gate `[requires_human_confirmation=True]`
 
 > [!CAUTION]
 > ### 🛑 STRICT CONDITIONAL BRANCH FENCE: NEVER AUTO-RUN OPTIMIZER
-> Spawning the optimizer subagent or running `demo-create lookml optimize` without prior user confirmation violates the co-design contract. The orchestrator **MUST pause and prompt the user via `ask_question`**:
+> Spawning the optimizer or running `demo-create lookml optimize` without prior user confirmation violates the co-design contract. Furthermore, `demo-create lookml deploy` enforces `state.optimizer_status in ("applied", "skipped")` and raises `StateError` if Gate 7 is still `"pending"`. The orchestrator **MUST pause and prompt the user via `ask_question`**:
 > - **Question**: "Would you like to run the LookML Performance Optimizer to audit and apply Google Cloud Looker Server Optimization best practices?"
 > - **Options**:
 >   - `(Recommended) Yes: Apply Google Cloud performance optimizations (datagroup caching, partition pruning filters, static suggestions, foreign key hiding)`
@@ -331,8 +382,12 @@ subagent:
 >   ```bash
 >   demo-create lookml optimize --lookml-dir <lookml_dir>
 >   ```
->   The CLI automatically snapshots current LookML files into `<lookml_dir>/.backup_pre_opt` before modifying any files.
-> - **If user selects "No"**: Advance immediately to Phase D without touching LookML files.
+>   The CLI automatically snapshots current LookML files into `<lookml_dir>/.backup_pre_opt` before modifying any files and sets `optimizer_status="applied"`.
+> - **If user selects "No"**: Record the explicit skip decision in `.demo-state.json` via `--skip`:
+>   ```bash
+>   demo-create lookml optimize --lookml-dir <lookml_dir> --skip
+>   ```
+>   This sets `optimizer_status="skipped"` without touching LookML files and advances to Gate 8 (`gate_3b_deploy`).
 > - **If user requests a Rollback**:
 >   1. Enforce the **Kill-Fence**: Immediately terminate any active subagents: `manage_subagents(Action='kill_all')`.
 >   2. Atomically restore the pre-optimization snapshot with 1 command (headless, zero git requirement):
@@ -349,14 +404,15 @@ subagent:
 
 ---
 
-### D. Mandatory Pre-Deployment Validation Gate (CLI Fast-Path with On-Demand QA Healing)
+### D. Gate 8 (`gate_3b_deploy`) — Pre-Deployment Validation, Query Testing & Production Release
 
 1. **Direct Fast-Path Deploy & Query Test**:
    Execute pre-flight filtered measure audit, dev push, project validator, and dashboard query verification directly in the parent session:
    ```bash
    demo-create lookml deploy --looker-project <looker_project_name> --lookml-dir <lookml_dir> --looker-account <oauth_account>
    ```
-   If all LookML checks, filtered measure distinct-value checks, and dashboard query tests return 100% HTTP 200 OK, the CLI automatically deploys to production and outputs the live dashboard URL.
+   *(If root-level duplicate files shadow `views/` or `dashboards/` subfolders on the remote branch, run `demo-create lookml clean-root --looker-project <looker_project_name>` to remove orphans.)*
+   If all LookML checks, filtered measure distinct-value checks, and dashboard query tests return 100% HTTP 200 OK, the CLI automatically deploys to production, outputs the live `deployed_dashboard_url`, and resets `critique_approved = False` so Gate 9 (`gate_3c_critique`) is triggered.
 
 2. **On-Demand QA Healing Subagent (Triggered ONLY on Validation / Query Failure)**:
    If validation fails or any dashboard query encounters an error, spawn the **[`lookml-qa-validator`](subagents/lookml-qa-validator.md)** subagent:
@@ -386,46 +442,50 @@ graph LR
 
 > [!CAUTION]
 > **Production Deployment Authority Remains with Parent Orchestrator**:
-> The `lookml-qa-validator` subagent is strictly an auditing/healing worker and cannot release to production. Once it returns `{ready_to_deploy: true}`, the **Parent Orchestrator** executes production release:
-> ```bash
-> lkr --oauth-account=<oauth_account> tools lookml deploy --project=<project_name>
-> ```
+> The `lookml-qa-validator` subagent is strictly an auditing/healing worker and cannot release to production. Once it returns `{ready_to_deploy: true}`, the **Parent Orchestrator** re-runs `demo-create lookml deploy` (or `lkr --oauth-account=<oauth_account> tools lookml deploy --project=<project_name>`) to release to production.
 
 ---
 
-### E. Interactive Post-Deploy Screenshot Critique Checkpoint (Pass 3 Visual Critique)
+### E. Gate 9 (`gate_3c_critique`) — Post-Deploy Dashboard Screenshot Critique (Pass 3) `[requires_human_confirmation=True]`
 
-Immediately after `demo-create lookml deploy` succeeds and outputs the live Looker dashboard URL, the orchestrator **MUST present the URL in chat and pause with `ask_question`** before advancing to Gate 4 (`gate_4_agent`):
+Immediately after Gate 8 (`demo-create lookml deploy`) succeeds and outputs the live Looker dashboard URL, the orchestrator **MUST present the URL in chat and pause with `ask_question`** before advancing to Gate 10 (`gate_4_agent`):
 
 - **Question**: "The dashboard is live at `{deployed_dashboard_url}`. Would you like to share a screenshot of the rendered dashboard for visual layout critique & Pass 3 refinement, or approve as-is?"
 - **Options**:
-  - `(Recommended) Approve dashboard layout as-is and proceed to Gate 4 (Conversational Analytics Agent)`
+  - `(Recommended) Approve dashboard layout as-is and proceed to Gate 10 (Conversational Analytics Agent)`
   - `I will share/upload a screenshot in chat for visual critique and refinement`
 
 **If the user shares a screenshot path or image**:
 1. Inspect the rendered image via `view_file`.
 2. Audit typography hierarchy, axis label spacing, legend alignment, dual-axis balance, and color contrast.
 3. Apply targeted LookML adjustments to `dashboards/*.dashboard.lookml` (via direct edit or `lookml-dashboard-designer`).
-4. Re-deploy via `demo-create lookml deploy` and confirm visual satisfaction before advancing to Gate 4.
+4. Re-certify (`demo-create lookml certify-polish`) and re-deploy (`demo-create lookml deploy`), then confirm visual satisfaction with the user.
+
+**Once the user approves the rendered dashboard layout**, record the approval in `.demo-state.json` via `demo-create lookml approve-critique`:
+
+```bash
+demo-create lookml approve-critique --looker-project <looker-project>
+```
+*(Note: `demo-create agent create` enforces `state.critique_approved == True` and raises `StateError` if Gate 9 has not been approved.)*
 
 ---
 
-## 5. Provision Conversational Analytics Data Agent & Gemini Enterprise (GE) Publishing (CLI Fast-Path)
+## 5. Provision Conversational Analytics Data Agent & Gemini Enterprise (GE) Publishing (Gate 10: `gate_4_agent` & Gate 11: `gate_5_publish`)
 
 > [!IMPORTANT]
 > **CLI-First Execution (`demo-create agent`)**:
-> Once the user confirms Gate 4 (`gate_4_agent`) and Gate 5 (`gate_5_publish`), the **Parent Orchestrator** executes `demo-create agent create` and `demo-create agent publish` directly via the CLI fast-path.
+> At Gate 10 (`gate_4_agent`) and Gate 11 (`gate_5_publish`), the **Parent Orchestrator** prompts the user via `ask_question` and executes `demo-create agent create` (or `--skip`) and `demo-create agent publish` (or `--skip`) directly via the CLI fast-path.
 
 > [!CAUTION]
-> ### 🛑 Strict Sequential Gate Isolation: NEVER Bundle CA, GE, and Embed Gates
-> The orchestrator **MUST present each post-deployment gate sequentially in its own discrete step**:
-> 1. **Phase 1: LookML Model & Dashboard Deployed to Production (+ Pass 3 Screenshot Critique)**
-> 2. **Phase 2: CA Agent Confirmation Gate** (`ask_question`)
-> 3. **Phase 3: GE Verification & Publishing Gate** (`ask_question`, if CA Agent created)
-> 4. **Phase 4: External Embed Portal Gate** (`ask_question`, ONLY after Looker assets, CA Agent, and GE status are completely finished)
+> ### 🛑 Strict Sequential Gate Isolation: NEVER Bundle Post-Deploy Gates (`9..12`)
+> The orchestrator **MUST present each post-deployment gate sequentially in its own discrete turn**:
+> 1. **Gate 9 (`gate_3c_critique`): Post-Deploy Screenshot Critique** (`ask_question` $\to$ `demo-create lookml approve-critique`)
+> 2. **Gate 10 (`gate_4_agent`): CA Agent Confirmation Gate** (`ask_question` $\to$ `demo-create agent create [--skip]`)
+> 3. **Gate 11 (`gate_5_publish`): GE Verification & Publishing Gate** (`ask_question` $\to$ `demo-create agent publish [--skip]`, if CA Agent created)
+> 4. **Gate 12 (`gate_6_embed`): External Embed Portal Gate** (`ask_question` $\to$ `demo-create embed scaffold [--skip]`, ONLY after Gates 9–11 are complete)
 > Under NO circumstances may the agent bundle these questions into a single multi-question modal.
 
-### A. Interactive CA Agent Confirmation Gate (Gate 4 — Parent Orchestrator)
+### A. Gate 10 (`gate_4_agent`) — Interactive CA Agent Confirmation Gate `[requires_human_confirmation=True]`
 Prompt the user via `ask_question`:
 - **Question**: "Would you like to provision a Looker Conversational Analytics (CA) Agent for the `{model_name}` model?"
 - **Options**:
@@ -433,16 +493,21 @@ Prompt the user via `ask_question`:
   - `Provide custom system instructions before provisioning`
   - `Skip Conversational Analytics Agent creation`
 
-If confirmed, execute the Gate 4 command directly in the parent session:
-```bash
-demo-create agent create \
-  --model "${LOOKER_PROJECT}" \
-  --explore "${PRIMARY_EXPLORE}" \
-  --dashboards-dir "${LOOKML_DIR}/dashboards"
-```
+- **If confirmed**: Execute the Gate 10 command directly in the parent session:
+  ```bash
+  demo-create agent create \
+    --model "${LOOKER_PROJECT}" \
+    --explore "${PRIMARY_EXPLORE}" \
+    --dashboards-dir "${LOOKML_DIR}/dashboards"
+  ```
+- **If skipped**: Record the skip decision in `.demo-state.json` via `--skip`:
+  ```bash
+  demo-create agent create --skip
+  ```
+  *(Passing `--skip` sets both `ca_agent_status="skipped"` and `ge_publish_status="skipped"`, automatically satisfying Gate 10 and Gate 11 so the state machine advances directly to Gate 12 `gate_6_embed`.)*
 
-### B. Interactive Gemini Enterprise (GE) Verification & Publishing Gate (Gate 5 — Parent Orchestrator)
-If CA Agent creation is completed, check Looker GE settings (`demo-create ge status` or `GET /api/4.0/gemini_enablement`):
+### B. Gate 11 (`gate_5_publish`) — Interactive Gemini Enterprise (GE) Verification & Publishing Gate `[requires_human_confirmation=True]`
+If a CA Agent was provisioned at Gate 10, check Looker GE settings (`demo-create ge status` or `GET /api/4.0/gemini_enablement`):
 
 - **Case 1: GE is already configured** (`ai_ge_project_id`, `ai_ge_instance_id`, `ai_ge_location` populated):
   - Displays the active GE app ID, location, and GCP project.
@@ -455,10 +520,14 @@ If CA Agent creation is completed, check Looker GE settings (`demo-create ge sta
 - **Case 2: GE is not configured** (or user requested reconfigure):
   - Run `demo-create ge configure --gcp-project <PROJECT_ID>` to discover available GE apps, update Looker settings via `PATCH /api/4.0/gemini_enablement`, and grant `roles/discoveryengine.admin` to the Looker Service Account.
 
-Once confirmed, publish the agent directly via the Gate 5 command:
-```bash
-demo-create agent publish --agent-id "${CA_AGENT_ID}"
-```
+- **If confirmed**: Publish the agent directly via the Gate 11 command:
+  ```bash
+  demo-create agent publish --agent-id "${CA_AGENT_ID}"
+  ```
+- **If skipped**: Record the skip decision in `.demo-state.json` via `--skip`:
+  ```bash
+  demo-create agent publish --skip
+  ```
 
 ### C. Looker 4.0 Golden Query & Re-Publishing Guarantees
 `demo-create agent create` and `demo-create agent publish` enforce the strict Looker 4.0 Golden Query rules:
@@ -469,21 +538,30 @@ demo-create agent publish --agent-id "${CA_AGENT_ID}"
 
 ---
 
-## 6. External Embedded Portal Scaffolding (Delegate to Subagent)
+## 6. External Embedded Portal Scaffolding (Gate 12: `gate_6_embed`)
 
 > [!IMPORTANT]
 > **Conditional Subagent Trigger**:
-> The **[`embed-portal-engineer`](subagents/embed-portal-engineer.md)** subagent is **ONLY spawned if the user explicitly confirms external embed portal creation** in the interactive gate below.
+> The **[`embed-portal-engineer`](subagents/embed-portal-engineer.md)** subagent is **ONLY spawned if the user explicitly confirms external embed portal creation** at Gate 12 (`gate_6_embed`).
 
-### A. Interactive External Embed Confirmation Gate (Parent Orchestrator)
+### A. Gate 12 (`gate_6_embed`) — Interactive External Embed Confirmation Gate `[requires_human_confirmation=True]`
 Prompt the user via `ask_question`:
 - **Question**: "Would you like to scaffold an external branded embedded analytics portal (`looker-embed-demo`)?"
 - **Options**:
   - `(Recommended) Scaffold external embed portal with custom brand theme and embedded chat`
   - `Skip external portal scaffolding (internal Looker only)`
 
+- **If confirmed**: Run the Gate 12 CLI command and delegate frontend customization/build verification to **[`embed-portal-engineer`](subagents/embed-portal-engineer.md)**:
+  ```bash
+  demo-create embed scaffold --looker-project "${LOOKER_PROJECT}"
+  ```
+- **If skipped**: Record the skip decision in `.demo-state.json` via `--skip`:
+  ```bash
+  demo-create embed scaffold --skip
+  ```
+
 ### B. Procedural Delegation: `embed-portal-engineer` Subagent
-If confirmed, delegate frontend scaffolding, environment configuration, brand tokens, and build verification to **[`embed-portal-engineer`](subagents/embed-portal-engineer.md)**:
+When external embed portal creation is confirmed, delegate brand styling and build verification to **[`embed-portal-engineer`](subagents/embed-portal-engineer.md)**:
 
 ```yaml
 subagent:
@@ -509,7 +587,7 @@ The subagent:
 
 ## 7. Mandatory Final Delivery Report Protocol
 
-Upon completing the demo creation pipeline (production deployment, plus optional CA Agent or Embed Portal steps), the Parent Orchestrator **MUST synthesize all subagent outputs and emit a comprehensive Executive Delivery Report**.
+Upon completing all 13 gates (`0..12`, where `demo-create status --json` reports `is_complete: true`), the Parent Orchestrator **MUST synthesize all outputs and emit a comprehensive Executive Delivery Report**.
 
 The report must be emitted directly in chat as the final deliverable and saved to the project directory as `DELIVERY_REPORT.md` (or artifact).
 
@@ -531,22 +609,29 @@ Import and populate the canonical 7-section delivery report structure defined in
 
 ## 8. Modular CLI Execution & State Persistence
 
-When performing isolated operations or delegating granular tasks to specialized subagents, use the modular CLI subcommands. Execution state is persisted across invocations in `.demo-state.json` (auto-loaded and updated with CLI option overrides):
+When performing isolated operations or advancing through the 13-stage state machine, use the modular CLI subcommands. Execution state is persisted across invocations in `.demo-state.json` (auto-loaded and updated with CLI option overrides):
 
-| Command Group | Subcommand | Purpose | Key Flags |
-|---|---|---|---|
-| **`demo-create data`** | `generate` | Synthesizes local Parquet dataset tables | `--domain`, `--row-count`, `--output-dir` |
-| | `upload` | Creates dataset and uploads Parquet tables to BigQuery | `--parquet-dir`, `--gcp-project`, `--dataset`, `--location` |
-| | `inspect` | Introspects tables and schema in existing BigQuery dataset | `--gcp-project`, `--dataset` |
-| **`demo-create lookml`** | `model` | Generates LookML views, explores, and models from BigQuery (with Knowledge Catalog & PK/FK constraints) or Parquet | `--looker-project`, `--dataset`, `--parquet-dir`, `--connection`, `--output-dir` |
-| | `deploy` | Pushes staged LookML to dev workspace, validates, runs query tests, and deploys to production | `--looker-project`, `--lookml-dir`, `--looker-account` |
-| **`demo-create agent`** | `create` | Creates CA Agent, grounds golden queries, and optionally publishes to GE | `--model`, `--explore`, `--dashboard-id`, `--publish-ge` |
-| | `golden-queries` | Extracts queries from dashboard files/IDs and links as Golden Queries | `--agent-id`, `--dashboard-id`, `--dashboards-dir` |
-| | `publish` | Verifies GE config and publishes agent to connected GE apps | `--agent-id`, `--looker-account` |
-| **`demo-create embed`** | `scaffold` | Scaffolds React/Vite embed portal workspace with `.env` and theme tokens | `--looker-project`, `--dashboard-id`, `--agent-id`, `--brand-name`, `--target-dir` |
-| **`demo-create ge`** | `status` | Displays current Looker Gemini enablement and GE config | `--looker-account` |
-| | `configure` | Discovers GE apps on GCP, configures Looker GE settings, and grants IAM roles | `--instance-id`, `--location`, `--gcp-project` |
-
-
-
-
+| Command Group | Subcommand | Gate | Purpose | Key Flags |
+|---|---|---|---|---|
+| **Root (`demo-create`)** | `status` | — | Reports `completed_gates`, `current_gate` (`0..12`), `next_command`, and `requires_human_confirmation` | `--json`, `--state-file` |
+| | `pre-check` | **Gate 0** (`gate_0a_precheck`) | Audits GCP/ADC credentials, Looker auth, MCP configs, and global agent skills | `--fix`, `--gcp-project`, `--json` |
+| | `confirm-targets` | **Gate 1** (`gate_0b_confirm_targets`) | Records human-confirmed GCP account, GCP project, Looker account, and DB connection | `--gcp-account`, `--gcp-project`, `--looker-account`, `--connection`, `--json` |
+| **`demo-create data`** | `propose-schema` | **Gate 2** (`gate_1a_propose_schema`) | Validates `DomainBlueprint` JSON, generates Mermaid ERD & 5-row in-memory micro-sample preview | `--schema-file`, `--domain`, `--preview`, `--preview-rows`, `--json` |
+| | `approve-schema` | **Gate 3** (`gate_1b_approve_schema`) | Records user approval of the proposed schema ERD and target fact row volume | `--row-count`, `--dataset`, `--schema-file`, `--json` |
+| | `generate` | **Gate 4** (`gate_1c_generate_data`) | Synthesizes Parquet dataset via Modular DAG and uploads to BigQuery via ADC | `--schema-file`, `--domain`, `--row-count`, `--output-dir`, `--gcp-project`, `--dataset`, `--upload`, `--json-scorecard` |
+| | `upload` | **Gate 4** (`gate_1c_generate_data`) | Creates dataset and uploads local Parquet tables to BigQuery with Day Partitioning & Clustering | `--parquet-dir`, `--gcp-project`, `--dataset`, `--location`, `--verify-only` |
+| | `inspect` | — | Introspects tables and schema in an existing BigQuery dataset | `--gcp-project`, `--dataset`, `--location`, `--json` |
+| **`demo-create lookml`** | `model` | **Gate 5** (`gate_2a_lookml_model`) | Generates LookML views, explores, and draft dashboards from BigQuery or Parquet | `--looker-project`, `--dataset`, `--parquet-dir`, `--connection`, `--gcp-project`, `--output-dir` |
+| | `certify-polish` | **Gate 6** (`gate_2b_certify_polish`) | Audits dashboard LookML for 3-Pass Executive Polish and `SELECT DISTINCT` filtered measure grounding | `--lookml-dir`, `--strict`, `--json` |
+| | `optimize` | **Gate 7** (`gate_3a_optimize`) | Applies (or skips with `--skip`) Google Cloud LookML Server Performance optimizations | `--lookml-dir`, `--backup/--no-backup`, `--skip`, `--json` |
+| | `restore` | — | Restores LookML files from the `.backup_pre_opt` snapshot | `--lookml-dir`, `--json` |
+| | `clean-root` | — | Deletes duplicate root-level LookML files that shadow `views/` or `dashboards/` subfolders | `--looker-project`, `--looker-account`, `--dry-run`, `--json` |
+| | `deploy` | **Gate 8** (`gate_3b_deploy`) | Pushes staged LookML to dev workspace, validates, runs query tests, and deploys to production | `--looker-project`, `--lookml-dir`, `--looker-account`, `--json` |
+| | `approve-critique` | **Gate 9** (`gate_3c_critique`) | Records user approval of the post-deploy rendered dashboard layout (Pass 3 visual critique) | `--looker-project`, `--notes`, `--json` |
+| **`demo-create agent`** | `create` | **Gate 10** (`gate_4_agent`) | Creates CA Agent and grounds golden queries (or skips with `--skip`) | `--model`, `--explore`, `--dashboards-dir`, `--dashboard-id`, `--publish-ge`, `--skip`, `--json` |
+| | `golden-queries` | — | Extracts queries from dashboard files/IDs and links as Golden Queries | `--agent-id`, `--dashboard-id`, `--dashboards-dir`, `--json` |
+| | `publish` | **Gate 11** (`gate_5_publish`) | Verifies GE config and publishes CA Agent to Gemini Enterprise (or skips with `--skip`) | `--agent-id`, `--looker-account`, `--skip`, `--json` |
+| **`demo-create embed`** | `scaffold` | **Gate 12** (`gate_6_embed`) | Scaffolds React/Vite embed portal workspace with `.env` and theme tokens (or skips with `--skip`) | `--looker-project`, `--dashboard-id`, `--agent-id`, `--brand-name`, `--target-dir`, `--skip`, `--json` |
+| **`demo-create ge`** | `status` | — | Displays current Looker Gemini enablement and GE config | `--looker-account`, `--json` |
+| | `configure` | — | Discovers GE apps on GCP, configures Looker GE settings, and grants IAM roles | `--app-id`, `--location`, `--gcp-project`, `--json` |
+| | `publish` | **Gate 11** (`gate_5_publish`) | Alias for `agent publish` (supports `--skip`) | `--agent-id`, `--looker-account`, `--skip`, `--json` |

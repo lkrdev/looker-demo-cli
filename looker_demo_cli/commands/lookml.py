@@ -12,6 +12,7 @@ from looker_demo_cli.config import DEFAULT_GCP_PROJECT
 from looker_demo_cli.context import get_context
 from looker_demo_cli.error_boundary import ErrorHandlingGroup
 from looker_demo_cli.errors import ConfigError, StateError, ValidationError, missing_option
+from looker_demo_cli.gates import attach_next_gate_action
 from looker_demo_cli.generators.lookml_generator import LookMLGenerator, LookMLTableSpec
 from looker_demo_cli.output import CommandResult, ErrorDetail, emit
 from looker_demo_cli.services.deploy_service import deploy_lookml_project
@@ -23,6 +24,11 @@ from looker_demo_cli.services.optimizer_service import (
     restore_lookml_backup,
 )
 from looker_demo_cli.services.schema_service import extract_table_specs_from_parquet_dir
+from looker_demo_cli.services.validator_service import (
+    lint_dashboard_file,
+    lint_dashboard_file_warnings,
+    validate_filtered_measures_in_lookml,
+)
 from looker_demo_cli.utils.console import (
     console,
     print_error,
@@ -173,35 +179,40 @@ def lookml_model(
         tables=table_specs,
     )
 
+    fact_specs = [s.table_name for s in table_specs if s.table_type == "fact" or s.table_name.startswith("fct_")]
+    primary_explore = fact_specs[0] if fact_specs else table_specs[0].table_name
+
     state.looker_project_name = proj_name
     state.lookml_model_name = proj_name
+    state.primary_explore_name = primary_explore
     state.bq_dataset_id = ds_name
     state.looker_connection_name = conn_name
     state.lookml_output_dir = out_dir
+    state.polish_certified = False
+    state.optimizer_status = "pending"
     state.gcp_project_id = gcp_proj
     state.existing_tables = [s.table_name for s in table_specs]
     saved_path = app_ctx.save_state()
 
-    result = CommandResult.success(
-        "lookml model",
-        data={
-            "looker_project": proj_name,
-            "model": proj_name,
-            "dataset": ds_name,
-            "gcp_project": gcp_proj,
-            "connection": conn_name,
-            "source": source,
-            "output_dir": str(out_dir),
-            "tables": [s.table_name for s in table_specs],
-            "files": [str(f.relative_to(out_dir)) for f in written],
-            "state_file": str(saved_path),
-        },
-        warnings=warnings,
-    ).add_next_action(
-        "FIRST iterate on the draft `.dashboard.lookml` using `looker-visualizations` skills (1. Audit Highcharts `series_types` — use `column`/`line`/`area`, NEVER `looker_column`; 2. Inject `advanced_vis_config` geometry/transparent surface/tooltips; 3. Convert pies to donuts with curated palettes; 4. Upgrade grids to `table_theme: transparent` with in-cell data bars), THEN validate and deploy to Looker",
-        f"demo-create lookml deploy --looker-project {proj_name} --lookml-dir {out_dir}",
-        gate=3,
-        requires_human_confirmation=True,
+    result = attach_next_gate_action(
+        CommandResult.success(
+            "lookml model",
+            data={
+                "looker_project": proj_name,
+                "model": proj_name,
+                "primary_explore": primary_explore,
+                "dataset": ds_name,
+                "gcp_project": gcp_proj,
+                "connection": conn_name,
+                "source": source,
+                "output_dir": str(out_dir),
+                "tables": [s.table_name for s in table_specs],
+                "files": [str(f.relative_to(out_dir)) for f in written],
+                "state_file": str(saved_path),
+            },
+            warnings=warnings,
+        ),
+        state,
     )
 
     def render(res: CommandResult) -> None:
@@ -214,6 +225,79 @@ def lookml_model(
             "NOTE: The generated `.dashboard.lookml` is a RAW SCAFFOLDING DRAFT. "
             "Consult `looker-visualizations` skills to apply the 3-Pass Executive Polish before running `lookml deploy`."
         )
+        print_info(f"Updated state saved to `{saved_path}`")
+
+    return emit(result, json_output=output_json, human_renderer=render)
+
+
+@lookml_app.command(name="certify-polish")
+def lookml_certify_polish(
+    ctx: typer.Context,
+    lookml_dir: Annotated[Path | None, typer.Option("--lookml-dir", help="Directory containing LookML files")] = None,
+    strict: Annotated[
+        bool, typer.Option("--strict", help="Treat Executive Polish warnings as blocking validation errors")
+    ] = False,
+    output_json: Annotated[bool, typer.Option("--json", help="Emit the result envelope as JSON on stdout")] = False,
+    state_file: StateFileOption = None,
+):
+    """Audit dashboard LookML for 3-Pass Executive Polish and filtered measure distinct-value grounding (Gate 2B)."""
+    app_ctx = get_context(ctx)
+    app_ctx.use_state_file(state_file)
+    app_ctx.set_json_mode(output_json)
+
+    state = app_ctx.state
+    target_dir = lookml_dir or state.lookml_output_dir or Path("lookml")
+    if not target_dir.exists():
+        raise ConfigError(
+            f"LookML directory `{target_dir}` does not exist.",
+            remediation="Pass --lookml-dir <dir>, or run `demo-create lookml model` first.",
+            details={"lookml_dir": str(target_dir)},
+        )
+
+    dashboard_files = sorted(target_dir.glob("**/*.dashboard.lookml"))
+    errors: list[str] = []
+    warnings: list[str] = []
+    for df in dashboard_files:
+        errors.extend(lint_dashboard_file(df))
+        warnings.extend(lint_dashboard_file_warnings(df))
+
+    errors.extend(validate_filtered_measures_in_lookml(lookml_dir=target_dir, gcp_project=state.gcp_project_id))
+
+    if strict:
+        errors.extend(warnings)
+
+    if errors:
+        state.polish_certified = False
+        app_ctx.save_state()
+        raise ValidationError(
+            f"Dashboard polish certification failed with {len(errors)} error(s): {errors[0]}",
+            remediation="Fix the reported Highcharts/LookML/filtered-measure issues and re-run `demo-create lookml certify-polish`.",
+            details={"errors": errors, "warnings": warnings},
+        )
+
+    state.lookml_output_dir = target_dir
+    state.polish_certified = True
+    saved_path = app_ctx.save_state()
+
+    result = attach_next_gate_action(
+        CommandResult.success(
+            "lookml certify-polish",
+            data={
+                "lookml_dir": str(target_dir),
+                "certified": True,
+                "dashboards_checked": len(dashboard_files),
+                "warnings": warnings,
+                "state_file": str(saved_path),
+            },
+            warnings=warnings,
+        ),
+        state,
+    )
+
+    def render(res: CommandResult) -> None:
+        for warning in res.warnings:
+            print_warning(warning)
+        print_success(f"Dashboard polish certified across {len(dashboard_files)} dashboard(s) in `{target_dir}`.")
         print_info(f"Updated state saved to `{saved_path}`")
 
     return emit(result, json_output=output_json, human_renderer=render)
@@ -245,6 +329,7 @@ def lookml_deploy(
 
     Raises:
         ConfigError: No LookML directory could be resolved.
+        StateError: Precondition gates (Gate 2B or Gate 3A) have not been completed.
         ValidationError: The push, the LookML validator, or a dashboard tile
             query failed. Previously this exited 0, so an orchestrator chaining
             on ``&&`` would continue as though production had been updated.
@@ -254,6 +339,18 @@ def lookml_deploy(
     app_ctx.set_json_mode(output_json)
 
     state = app_ctx.state
+    if state.precheck_passed:
+        if not state.polish_certified:
+            raise StateError(
+                "Dashboard polish has not been certified yet (Gate 2B).",
+                remediation="Apply the 3-Pass Executive Dashboard Polish and run `demo-create lookml certify-polish` before deploying.",
+            )
+        if state.optimizer_status == "pending":
+            raise StateError(
+                "LookML Performance Optimizer gate has not been resolved yet (Gate 3A).",
+                remediation="Ask the user and run `demo-create lookml optimize` or `demo-create lookml optimize --skip` before deploying.",
+            )
+
     if lookml_dir:
         state.lookml_output_dir = lookml_dir
     if looker_project:
@@ -270,6 +367,8 @@ def lookml_deploy(
         )
 
     final_state = deploy_lookml_project(state)
+    if final_state.status != "failed":
+        final_state.critique_approved = False
     # The step returns the state it worked on; adopt it rather than assuming it
     # mutated `state` in place, so a future copy-on-write step cannot silently
     # drop its own results at save time.
@@ -290,24 +389,67 @@ def lookml_deploy(
             },
         )
 
-    result = CommandResult.success(
-        "lookml deploy",
-        data={
-            "looker_project": final_state.looker_project_name,
-            "model": final_state.lookml_model_name,
-            "lookml_dir": str(final_state.lookml_output_dir),
-            "instance_url": final_state.looker_instance_url,
-            "dashboard_url": final_state.deployed_dashboard_url,
-            "state_file": str(saved_path),
-        },
-    ).add_next_action(
-        "Provision the Conversational Analytics agent for the deployed model",
-        f"demo-create agent create --model {final_state.lookml_model_name}",
-        gate=4,
-        requires_human_confirmation=True,
+    result = attach_next_gate_action(
+        CommandResult.success(
+            "lookml deploy",
+            data={
+                "looker_project": final_state.looker_project_name,
+                "model": final_state.lookml_model_name,
+                "lookml_dir": str(final_state.lookml_output_dir),
+                "instance_url": final_state.looker_instance_url,
+                "dashboard_url": final_state.deployed_dashboard_url,
+                "state_file": str(saved_path),
+            },
+        ),
+        final_state,
     )
 
     def render(_: CommandResult) -> None:
+        print_info(f"Updated state saved to `{saved_path}`")
+
+    return emit(result, json_output=output_json, human_renderer=render)
+
+
+@lookml_app.command(name="approve-critique")
+def lookml_approve_critique(
+    ctx: typer.Context,
+    looker_project: Annotated[str | None, typer.Option("--looker-project", help="Looker project name")] = None,
+    notes: Annotated[str | None, typer.Option("--notes", help="Optional visual critique approval notes")] = None,
+    output_json: Annotated[bool, typer.Option("--json", help="Emit the result envelope as JSON on stdout")] = False,
+    state_file: StateFileOption = None,
+):
+    """Record user approval of the post-deploy dashboard screenshot critique (Gate 3C)."""
+    app_ctx = get_context(ctx)
+    app_ctx.use_state_file(state_file)
+    app_ctx.set_json_mode(output_json)
+
+    state = app_ctx.state
+    if not state.deployed_dashboard_url:
+        raise StateError(
+            "No deployed dashboard URL found in state (Gate 3B).",
+            remediation="Run `demo-create lookml deploy` before approving the post-deploy screenshot critique.",
+        )
+
+    state.looker_project_name = looker_project or state.looker_project_name
+    state.critique_approved = True
+    saved_path = app_ctx.save_state()
+
+    result = attach_next_gate_action(
+        CommandResult.success(
+            "lookml approve-critique",
+            data={
+                "looker_project": state.looker_project_name,
+                "dashboard_url": state.deployed_dashboard_url,
+                "critique_approved": True,
+                "notes": notes,
+                "state_file": str(saved_path),
+            },
+        ),
+        state,
+    )
+
+    def render(_: CommandResult) -> None:
+        print_success(f"Approved post-deploy dashboard critique for `{state.deployed_dashboard_url}`.")
         print_info(f"Updated state saved to `{saved_path}`")
 
     return emit(result, json_output=output_json, human_renderer=render)
@@ -320,6 +462,10 @@ def lookml_optimize(
         Path | None,
         typer.Option("--lookml-dir", help="Directory containing LookML files"),
     ] = None,
+    skip: Annotated[
+        bool,
+        typer.Option("--skip", help="Record decision to skip LookML server performance optimization"),
+    ] = False,
     output_json: Annotated[bool, typer.Option("--json", help="Emit the result envelope as JSON on stdout")] = False,
     backup: Annotated[
         bool, typer.Option("--backup/--no-backup", help="Snapshot LookML files into .backup_pre_opt before patching")
@@ -331,6 +477,7 @@ def lookml_optimize(
     Args:
         ctx: Typer context carrying the resolved :class:`AppContext`.
         lookml_dir: Directory of staged LookML files.
+        skip: Record decision to skip LookML server performance optimization.
         output_json: Emit the JSON envelope on stdout.
         backup: Snapshot the directory into ``.backup_pre_opt`` before patching,
             so ``demo-create lookml restore`` can roll the changes back.
@@ -348,6 +495,29 @@ def lookml_optimize(
 
     state = app_ctx.state
     target_dir = lookml_dir or state.lookml_output_dir or Path("lookml")
+    if skip:
+        state.optimizer_status = "skipped"
+        saved_path = app_ctx.save_state()
+        result = attach_next_gate_action(
+            CommandResult.success(
+                "lookml optimize",
+                data={
+                    "lookml_dir": str(target_dir),
+                    "skipped": True,
+                    "optimizer_status": "skipped",
+                    "state_file": str(saved_path),
+                },
+            ),
+            state,
+        )
+        return emit(
+            result,
+            json_output=output_json,
+            human_renderer=lambda _: print_info(
+                f"Skipped LookML performance optimization. Updated state saved to `{saved_path}`"
+            ),
+        )
+
     if not target_dir.exists():
         raise ConfigError(
             f"LookML directory `{target_dir}` does not exist.",
@@ -358,15 +528,26 @@ def lookml_optimize(
     print_info(f"Auditing and optimizing LookML files in `{target_dir}`...")
     report = optimize_lookml_project(target_dir, backup=backup)
 
+    state.optimizer_status = "applied"
+    state.lookml_output_dir = target_dir
+    saved_path = app_ctx.save_state()
+
     result = CommandResult.success(
         "lookml optimize",
-        data={"lookml_dir": str(target_dir), "backup": backup, **report},
+        data={
+            "lookml_dir": str(target_dir),
+            "backup": backup,
+            "optimizer_status": "applied",
+            "state_file": str(saved_path),
+            **report,
+        },
     )
     if backup:
         result.add_next_action(
             "Roll back the optimization if the patched LookML is unsatisfactory",
             f"demo-create lookml restore --lookml-dir {target_dir}",
         )
+        attach_next_gate_action(result, state)
 
     return emit(
         result,

@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 
-from looker_demo_cli.errors import ConfigError, RemoteApiError
+from looker_demo_cli.errors import ConfigError, RemoteApiError, StateError
 
 try:
     from conftest import FakeTable, FakeTableSchemaField, envelope, read_state
@@ -33,8 +33,31 @@ class FakeSynthesizer:
             domain_name=domain_name,
             description=f"fake blueprint for {domain_name}",
             entities=[
-                SimpleNamespace(table_name="dim_things", table_type="dimension", row_count=1000),
-                SimpleNamespace(table_name="fct_events", table_type="fact", row_count=5000),
+                SimpleNamespace(
+                    table_name="dim_things",
+                    table_type="dimension",
+                    row_count=1000,
+                    primary_key="thing_id",
+                    foreign_keys={},
+                    fields=[SimpleNamespace(name="thing_id", type="STRING", is_primary_key=True, is_foreign_key=False)],
+                ),
+                SimpleNamespace(
+                    table_name="fct_events",
+                    table_type="fact",
+                    row_count=5000,
+                    primary_key="event_id",
+                    foreign_keys={"thing_id": "dim_things.thing_id"},
+                    fields=[
+                        SimpleNamespace(name="event_id", type="STRING", is_primary_key=True, is_foreign_key=False),
+                        SimpleNamespace(
+                            name="thing_id",
+                            type="STRING",
+                            is_primary_key=False,
+                            is_foreign_key=True,
+                            foreign_reference="dim_things.thing_id",
+                        ),
+                    ],
+                ),
             ],
         )
 
@@ -47,10 +70,11 @@ class FakeSynthesizer:
         engine: str = "auto",
     ) -> list[Any]:
         self.generate_calls.append((target, Path(output_dir)))
-        Path(output_dir).mkdir(parents=True, exist_ok=True)
-        if self.write_files:
-            for name in self.table_names:
-                (Path(output_dir) / f"{name}.parquet").write_bytes(b"PAR1-fake")
+        if not micro_sample_only:
+            Path(output_dir).mkdir(parents=True, exist_ok=True)
+            if self.write_files:
+                for name in self.table_names:
+                    (Path(output_dir) / f"{name}.parquet").write_bytes(b"PAR1-fake")
         return [SimpleNamespace(table_name=n) for n in self.table_names]
 
 
@@ -60,6 +84,52 @@ def fake_synth(patch_cli) -> FakeSynthesizer:
     patch_cli("create_dynamic_blueprint_from_name", fake.create_blueprint)
     patch_cli("generate_domain_dataset", fake.generate)
     return fake
+
+
+# ===========================================================================
+# data propose-schema & data approve-schema
+# ===========================================================================
+
+
+def test_data_propose_and_approve_schema_and_generate_guards(
+    invoke, fake_synth, state_file, isolated_cwd: Path, tmp_path: Path
+) -> None:
+    """Covers Gate 1A `propose-schema`, Gate 1B `approve-schema`, and `StateError` precondition guards."""
+    # Gate 1A guard: precheck_passed=True without targets_confirmed=True raises StateError
+    state_file(precheck_passed=True, targets_confirmed=False)
+    unconfirmed = invoke(["data", "propose-schema", "--domain", "retail_ops", "--json"])
+    assert unconfirmed.exit_code == StateError.exit_code
+    assert "Gate 0B" in envelope(unconfirmed)["errors"][0]["message"]
+
+    # Gate 1B guard: approve-schema before propose-schema raises StateError
+    state_file(precheck_passed=True, targets_confirmed=True)
+    unproposed = invoke(["data", "approve-schema", "--row-count", "5000", "--json"])
+    assert unproposed.exit_code == StateError.exit_code
+    assert "Gate 1A" in envelope(unproposed)["errors"][0]["message"]
+
+    # Gate 1A happy path: propose-schema generates Mermaid ERD & table schemas and advances to Gate 3
+    (isolated_cwd / "SPEC.md").write_text("# Spec\n", encoding="utf-8")
+    prop = invoke(["data", "propose-schema", "--domain", "retail_ops", "--json"])
+    assert prop.exit_code == 0, prop.output
+    prop_payload = envelope(prop)
+    assert "erDiagram" in prop_payload["data"]["mermaid_erd"]
+    assert len(prop_payload["data"]["table_schemas"]) == 2
+    assert prop_payload["next_actions"][0]["gate"] == 3
+    assert "erDiagram" in (isolated_cwd / "SPEC.md").read_text(encoding="utf-8")
+
+    # Gate 1C guard: data generate before approve-schema raises StateError
+    unapproved = invoke(["data", "generate", "--domain", "retail_ops", "--output-dir", str(tmp_path / "out"), "--json"])
+    assert unapproved.exit_code == StateError.exit_code
+    assert "Gate 1B" in envelope(unapproved)["errors"][0]["message"]
+
+    # Gate 1B happy path: approve-schema records approval and advances to Gate 4
+    app_res = invoke(["data", "approve-schema", "--row-count", "7500", "--dataset", "retail_ds", "--json"])
+    assert app_res.exit_code == 0, app_res.output
+    app_payload = envelope(app_res)
+    assert app_payload["data"]["schema_approved"] is True
+    assert app_payload["data"]["approved_row_count"] == 7500
+    assert app_payload["next_actions"][0]["gate"] == 4
+    assert read_state(isolated_cwd)["schema_approved"] is True
 
 
 # ===========================================================================
@@ -80,7 +150,7 @@ def test_data_generate_json_and_human_happy_path(invoke, fake_synth, isolated_cw
     assert payload["data"]["domain"] == "retail_ops"
     assert payload["data"]["tables"] == ["dim_things", "fct_events"]
     assert payload["data"]["uploaded"] is False
-    assert payload["next_actions"][0]["gate"] == 1
+    assert payload["next_actions"][0]["gate"] == 4
 
     state = read_state(isolated_cwd)
     assert state["domain_name"] == "retail_ops"
@@ -117,7 +187,7 @@ def test_data_generate_with_upload(invoke, fake_synth, fake_bigquery, isolated_c
     payload = envelope(result)
     assert payload["data"]["uploaded"] is True
     assert payload["data"]["loaded_rows"] == {"dim_things": 42, "fct_events": 42}
-    assert payload["next_actions"] == []
+    assert payload["next_actions"][0]["gate"] == 5
     assert fake_bigquery.datasets == {"freight_ds": ["dim_things", "fct_events"]}
     assert read_state(isolated_cwd)["dataset_exists"] is True
 
@@ -194,7 +264,7 @@ def test_data_upload_happy_path_and_verify_only(
     assert payload["command"] == "data upload"
     assert payload["data"]["loaded_rows"] == {"dim_products": 42, "dim_users": 42, "fct_orders": 42}
     assert payload["data"]["total_rows"] == 126
-    assert payload["next_actions"][0]["gate"] == 2
+    assert payload["next_actions"][0]["gate"] == 5
     assert read_state(isolated_cwd)["dataset_exists"] is True
 
     # Human mode check

@@ -80,6 +80,7 @@ class FlowState(BaseModel):
     # "the environment audit passed" from "it was never run", which is not
     # otherwise observable from any other field.
     precheck_passed: bool = False
+    targets_confirmed: bool = False
 
     # Dataset & Intent
     dataset_exists: bool = False
@@ -87,26 +88,37 @@ class FlowState(BaseModel):
     existing_tables: list[str] = Field(default_factory=list)
     demo_scope: Literal["internal_looker", "external_embed"] = "internal_looker"
 
-    # Domain & Synthesis
+    # Domain & Synthesis (Gate 1 Co-Design & Approval)
     domain_name: str | None = None
+    schema_file_path: Path | None = None
+    schema_proposed: bool = False
+    schema_approved: bool = False
+    approved_row_count: int | None = None
     generated_parquet_dir: Path | None = None
     generated_tables: list[str] = Field(default_factory=list)
 
-    # Looker & LookML
+    # Looker & LookML (Gate 2 & Gate 3)
     looker_project_name: str | None = None
     lookml_model_name: str | None = None
+    primary_explore_name: str | None = None
     lookml_output_dir: Path | None = None
+    polish_certified: bool = False
+    optimizer_status: Literal["pending", "applied", "skipped"] = "pending"
     deployed_dashboard_id: str | None = None
     deployed_dashboard_url: str | None = None
+    critique_approved: bool = False
 
-    # Embed Demo
+    # Embed Demo (Gate 6)
     embed_workspace_dir: Path | None = None
     embed_portal_url: str | None = None
+    embed_status: Literal["pending", "scaffolded", "skipped"] = "pending"
 
-    # Conversational Analytics Agent & Gemini Enterprise
+    # Conversational Analytics Agent & Gemini Enterprise (Gate 4 & Gate 5)
     ca_agent_id: str | None = None
     ca_agent_name: str | None = None
+    ca_agent_status: Literal["pending", "created", "skipped"] = "pending"
     published_to_ge: bool = False
+    ge_publish_status: Literal["pending", "published", "skipped"] = "pending"
     golden_queries_count: int = 0
     ge_configured: bool = False
     ge_project_id: str | None = None

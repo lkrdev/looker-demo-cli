@@ -24,8 +24,8 @@ This skill defines the mandatory protocol for asynchronously authoring, continuo
 > Do not alert the user to minor field additions or routine metadata updates. **ONLY** notify the user or display diffs/excerpts in visible chat when a **significant structural change** has occurred (e.g., pivoting the business domain, major schema redesign with new entities, switching join topologies or NDT aggregation strategies, or when explicitly requested by the user).
 
 > [!TIP]
-> **Rule 3: Incremental Hydration Across Every Gate & Conversation**
-> `SPEC.md` is never created in one giant batch at the end. It is initialized at Gate 0 and progressively hydrated and updated during each gate and each subsequent user conversation. Every modification is recorded in the Revision History table.
+> **Rule 3: Incremental Hydration Across Every Gate (`0..12`) & Conversation**
+> `SPEC.md` is never created in one giant batch at the end. It is initialized at Gate 0/1 (`gate_0a_precheck` / `gate_0b_confirm_targets`) and progressively hydrated and updated across all 13 granular gates (`0..12`) and each subsequent user conversation. Every modification is recorded in the Revision History table.
 
 > [!IMPORTANT]
 > **Rule 4: `DELIVERY_REPORT.md` Must Always Link to `SPEC.md`**
@@ -33,30 +33,40 @@ This skill defines the mandatory protocol for asynchronously authoring, continuo
 
 ---
 
-## 2. Gate-by-Gate Hydration Lifecycle
+## 2. 13-Gate Hydration Lifecycle (`0..12`)
 
-The agent maintains `SPEC.md` along the following lifecycle:
+The agent maintains `SPEC.md` along the 13-stage `demo-create` state machine:
 
 ```mermaid
 graph TD
-    Gate0["Gate 0: Alignment & Scoping<br/>(Initialize SPEC.md)"] -->|Sections 1 & 2| Gate1["Gate 1: Data & Schema Co-Design<br/>(Hydrate Schema & Volumes)"]
-    Gate1 -->|Sections 3 & 4| Gate2["Gate 2: Semantic Modeling (LookML)<br/>(Hydrate Explores, NDTs & Dashboards)"]
-    Gate2 -->|Sections 5 & 6| Gate3["Gate 3: Deploy & Production Release<br/>(Hydrate Looker & BQ Deployment Meta)"]
-    Gate3 -->|Section 5 Validation| Gate4["Gate 4: CA AI Agent (Optional)<br/>(Hydrate CA Persona & Golden Queries)"]
-    Gate4 -->|Section 7| Gate5["Gate 5: External Embed Portal (Optional)<br/>(Hydrate Framework, Routes & Tokens)"]
-    Gate5 -->|Section 8| Report["Final Delivery: DELIVERY_REPORT.md<br/>(Links directly to SPEC.md)"]
+    Gate0["Gate 0 (gate_0a_precheck): Pre-Check Audit<br/>(demo-create pre-check --fix --gcp-project &lt;gcp-project&gt;)"] --> Gate1["Gate 1 (gate_0b_confirm_targets): 4-Target Confirmation<br/>(ask_question + demo-create confirm-targets)<br/>Initialize SPEC.md Sections 1 & 2"]
+    Gate1 --> Gate2["Gate 2 (gate_1a_propose_schema): Propose Schema & 5-Row Preview<br/>(demo-create data propose-schema --schema-file &lt;schema-file&gt; --preview)<br/>Hydrate SPEC.md Section 3"]
+    Gate2 --> Gate3["Gate 3 (gate_1b_approve_schema): Approve Schema & Volume<br/>(Render ERD & Samples in Chat -> ask_question -> demo-create data approve-schema)<br/>Hydrate SPEC.md Section 4"]
+    Gate3 --> Gate4["Gate 4 (gate_1c_generate_data): Modular DAG Synthesis & BigQuery Load<br/>(demo-create data generate ... --upload --json-scorecard)<br/>Update Section 4 Scorecard & Row Counts"]
+    Gate4 --> Gate5["Gate 5 (gate_2a_lookml_model): Semantic LookML Modeling<br/>(demo-create lookml model)<br/>Hydrate SPEC.md Section 5 & Data Dictionary"]
+    Gate5 --> Gate6["Gate 6 (gate_2b_certify_polish): 3-Pass Polish & Filtered Measure Audit<br/>(demo-create lookml certify-polish --lookml-dir &lt;lookml-dir&gt;)<br/>Hydrate SPEC.md Section 6"]
+    Gate6 --> Gate7["Gate 7 (gate_3a_optimize): Performance Optimizer Gate<br/>(ask_question + demo-create lookml optimize [--skip])<br/>Update Section 5 Caching & Pruning"]
+    Gate7 --> Gate8["Gate 8 (gate_3b_deploy): LookML Validation & Production Deploy<br/>(demo-create lookml deploy)<br/>Update Section 5 Deployment & Validation Audit"]
+    Gate8 --> Gate9["Gate 9 (gate_3c_critique): Post-Deploy Screenshot Critique (Pass 3)<br/>(ask_question + demo-create lookml approve-critique)<br/>Update Section 6 Visual Critique Sign-Off"]
+    Gate9 --> Gate10["Gate 10 (gate_4_agent): CA Agent & Golden Queries<br/>(ask_question + demo-create agent create [--skip])<br/>Hydrate SPEC.md Section 7"]
+    Gate10 --> Gate11["Gate 11 (gate_5_publish): Gemini Enterprise Publishing<br/>(ask_question + demo-create agent publish [--skip])<br/>Update Section 7 GE Status"]
+    Gate11 --> Gate12["Gate 12 (gate_6_embed): External Embed Portal Scaffolding<br/>(ask_question + demo-create embed scaffold [--skip])<br/>Hydrate SPEC.md Section 8"]
+    Gate12 --> Report["Final Delivery: DELIVERY_REPORT.md<br/>(Links directly to SPEC.md)"]
     Report --> Iterations["Post-Delivery Iterations<br/>(Every user turn updates SPEC.md quietly)"]
 ```
 
-| Lifecycle Phase | What to Hydrate / Update in `SPEC.md` | Chat Output Behavior |
-| :--- | :--- | :--- |
-| **Gate 0: Alignment & Scoping** | Initialize `SPEC.md` with: Header, Section 1 (Demo Metadata, Target Personas, Objectives) and Section 2 (Business Scenario, Analytical Questions), and initial entry in Section 9 (Revision History). | **Silent.** Confirm 4 targets with user via `ask_question`. Do NOT dump `SPEC.md`. |
-| **Gate 1: Schema Co-Design & Micro-Sampling** | Hydrate Section 3 (Relational Schema: tables, grain, columns, data types, PK/FK relationships, Mermaid ERD) and Section 4 (Data Volume Plan: row counts, statistical distributions, generation DAG). | Output proposed schema and micro-sample directly in chat for user confirmation. Quietly write/update `SPEC.md`. |
-| **Gate 2: Semantic Modeling (LookML)** | Hydrate Section 5 (LookML Architecture: explores, join trees, chasm/fan-trap mitigation, NDT rollups, measures, dimensions) and Section 6 (Dashboard Specification: tabs, KPI cards, chart types, filters). | **Silent.** Inform user model & dashboard files are staged. |
-| **Gate 3: Pre-Deploy & Production Release** | Update Section 5 with deployment confirmation: Looker instance URL, project, model, connection, and query validation audit scores. | **Silent.** Report deploy/validation progress directly in chat. |
-| **Gate 4: CA AI Agent Provisioning** | Hydrate Section 7 (CA Agent ID, name, persona instructions, pre-seeded golden queries). | **Silent.** |
-| **Gate 5: External Embed Portal** | Hydrate Section 8 (Scaffolded directory, framework, routes, Looker Embed SDK/components, CSS design tokens, branding). | **Silent.** |
-| **Post-Delivery Iterations** | Whenever the user requests additions or adjustments (new explore, modified KPI, additional table, updated portal styling), update the relevant section in `SPEC.md` and append a row to Section 9 (Revision History). | **Silent unless significant.** Acknowledge the user's specific request directly; only highlight `SPEC.md` if a major architectural pivot occurred. |
+| Gate `#` & ID | CLI Command | What to Hydrate / Update in `SPEC.md` | Chat Output Behavior |
+| :--- | :--- | :--- | :--- |
+| **Gate 0 (`gate_0a_precheck`) & Gate 1 (`gate_0b_confirm_targets`)** | `demo-create pre-check --fix --gcp-project <gcp-project>`<br/>`demo-create confirm-targets --gcp-account <gcp-account> --gcp-project <gcp-project> --looker-account <looker-account> --connection <connection-name>` | Initialize `SPEC.md` with: Header, Section 1 (Demo Metadata, Confirmed 4 Targets, Target Personas, Objectives), Section 2 (Business Scenario, Analytical Questions), and initial entry in Section 9 (Revision History). | **Silent.** Confirm 4 targets with user via `ask_question` and run `confirm-targets`. Do NOT dump `SPEC.md`. |
+| **Gate 2 (`gate_1a_propose_schema`) & Gate 3 (`gate_1b_approve_schema`)** | `demo-create data propose-schema --schema-file <schema-file> --preview`<br/>`demo-create data approve-schema --row-count <row-count> --dataset <dataset-id>` | Hydrate Section 3 (Relational Schema: tables, grain, columns, data types, PK/FK relationships, Mermaid ERD) and Section 4 (Approved target row volume, statistical distributions, generation DAG). | **Mandatory Visible Chat Output First:** Render proposed schema, `data.mermaid_erd`, and 5-row `data.samples` in chat BEFORE calling `ask_question` and running `data approve-schema`. Quietly update `SPEC.md`. |
+| **Gate 4 (`gate_1c_generate_data`)** | `demo-create data generate --schema-file <schema-file> --row-count <row-count> --gcp-project <gcp-project> --dataset <dataset-id> --upload --json-scorecard` | Update Section 4 with actual synthesized row counts, `TableValidator` scorecard (`pk_uniqueness`, `orphan_fks`, `records_per_second`), and BigQuery Day Partitioning / Clustering metadata. | Render verification scorecard and 5-row sample preview in chat. Quietly update `SPEC.md`. |
+| **Gate 5 (`gate_2a_lookml_model`)** | `demo-create lookml model --looker-project <looker-project> --dataset <dataset-id> --connection <connection-name> --gcp-project <gcp-project>` | Hydrate Section 3 (`## Data Dictionary & Semantic Context` via `bigquery-metadata` and `knowledge-catalog-metadata`) and Section 5 (LookML Architecture: explores, join trees, chasm/fan-trap mitigation, NDT rollups, measures, dimensions). | **Silent.** Inform user LookML model & draft dashboard files are generated. |
+| **Gate 6 (`gate_2b_certify_polish`)** | `demo-create lookml certify-polish --lookml-dir <lookml-dir>` | Hydrate Section 6 (Dashboard Specification: 3-tab layout, KPI scorecards, Highcharts `advanced_vis_config` geometry tokens, donut palettes, `table_theme: transparent`, and `SELECT DISTINCT`-grounded filtered measures). | **Silent.** Inform user 3-Pass Executive Dashboard Polish is certified. |
+| **Gate 7 (`gate_3a_optimize`)** | `demo-create lookml optimize --lookml-dir <lookml-dir>` *(or `--skip`)* | Update Section 5 with LookML Server Performance Optimizer status (`applied` or `skipped`: datagroup caching, partition pruning filters, static suggestions, foreign key hiding). | Prompt user via `ask_question` first, then run `lookml optimize` (or `--skip`). Quietly update `SPEC.md`. |
+| **Gate 8 (`gate_3b_deploy`) & Gate 9 (`gate_3c_critique`)** | `demo-create lookml deploy --looker-project <looker-project> --lookml-dir <lookml-dir>`<br/>`demo-create lookml approve-critique --looker-project <looker-project>` | Update Section 5 & Section 6 with deployment confirmation: Looker instance URL, deployed dashboard URL, `validate_project` (`0` errors), per-tile `HTTP 200 OK` audit scores, and Pass 3 screenshot critique sign-off (`critique_approved: true`). | Present `deployed_dashboard_url` in chat, invite user via `ask_question` for Pass 3 screenshot critique or approval, and run `lookml approve-critique`. Quietly update `SPEC.md`. |
+| **Gate 10 (`gate_4_agent`) & Gate 11 (`gate_5_publish`)** | `demo-create agent create --model <model-name> --explore <explore-name>` *(or `--skip`)*<br/>`demo-create agent publish --agent-id <agent-id>` *(or `--skip`)* | Hydrate Section 7 (CA Agent ID, name, persona instructions, pre-seeded golden queries, and Gemini Enterprise publication status `published` or `skipped`). | **Silent** after each sequential `ask_question` confirmation. |
+| **Gate 12 (`gate_6_embed`)** | `demo-create embed scaffold --looker-project <looker-project>` *(or `--skip`)* | Hydrate Section 8 (Scaffolded directory, React/Vite framework, routes, Looker Embed SDK/components, CSS design tokens, branding, or `skipped` status). | **Silent** after `ask_question` confirmation. |
+| **Post-Delivery Iterations** | Any modular `demo-create` subcommand | Whenever the user requests additions or adjustments (new explore, modified KPI, additional table, updated portal styling), update the relevant section in `SPEC.md` and append a row to Section 9 (Revision History). | **Silent unless significant.** Acknowledge the user's specific request directly; only highlight `SPEC.md` if a major architectural pivot occurred. |
 
 ---
 
@@ -82,9 +92,9 @@ When initializing or updating `./SPEC.md` or `./DELIVERY_REPORT.md`, import and 
 ## 4. Subagent Collaboration & Handoffs
 
 When specialized subagents are invoked:
-1. **`data-engineer`**: Reads Sections 3 & 4 of `SPEC.md` to know the exact schemas and volume constraints. Updates Section 4 with actual row counts or data generation scripts.
-2. **`lookml-snowflake-modeler`**: Reads Section 3 & 5. Formulates NDT rollups and records the Chasm Trap Mitigation Architecture into Section 5.
-3. **`lookml-dashboard-designer`**: Reads Section 5 & 6. Translates the KPI cards and chart specifications into LookML dashboard tiles.
-4. **`embed-portal-engineer`**: Reads Section 8 to construct the external portal with the correct routes, embedded dashboard IDs, and theme tokens.
+1. **`data-engineer`** (Gate 4 `gate_1c_generate_data`): Reads Sections 3 & 4 of `SPEC.md` for approved schemas and volume constraints. Updates Section 4 with actual row counts, `TableValidator` metrics, and BigQuery partitioning/clustering details.
+2. **`lookml-snowflake-modeler`** (Gate 5 `gate_2a_lookml_model`): Reads Sections 3 & 5. Formulates NDT rollups and records the Chasm Trap Mitigation Architecture into Section 5.
+3. **`lookml-dashboard-designer`** (Gate 6 `gate_2b_certify_polish` & Gate 9 `gate_3c_critique`): Reads Sections 5 & 6. Translates the KPI cards and chart specifications into polished LookML dashboard tiles and updates Section 6 prior to `demo-create lookml certify-polish`.
+4. **`embed-portal-engineer`** (Gate 12 `gate_6_embed`): Reads Section 8 to construct the external portal with the correct routes, embedded dashboard IDs, and theme tokens.
 
 All subagents update `SPEC.md` directly and quietly on disk, appending an entry to Section 9 (Revision History).

@@ -12,6 +12,7 @@ from looker_demo_cli.errors import (
     AuthError,
     ConfigError,
     RemoteApiError,
+    StateError,
     looker_not_authenticated,
 )
 from looker_demo_cli.state import STATE_FILE_NAME, FlowState
@@ -143,7 +144,7 @@ def test_ge_status_configured_unconfigured_and_errors(
     assert unconf.exit_code == 0
     payload = envelope(unconf)
     assert payload["data"]["configured"] is False
-    assert payload["next_actions"][0]["gate"] == 5
+    assert payload["next_actions"][0]["gate"] == 11
 
     patch_cli("get_looker_ge_config", Recorder({}))
     empty = invoke(["ge", "status", "--json"])
@@ -228,7 +229,7 @@ def test_agent_create_happy_path_and_golden_queries(
     payload = envelope(res)
     assert payload["data"]["agent_id"] == "42"
     assert payload["data"]["golden_queries_linked"] == 2
-    assert payload["next_actions"][0]["gate"] == 5
+    assert payload["next_actions"][0]["gate"] == 11
     assert read_state(isolated_cwd)["ca_agent_id"] == "42"
     assert read_state(isolated_cwd)["golden_queries_count"] == 2
 
@@ -350,3 +351,48 @@ def test_embed_scaffold_state_and_flag_precedence(
     assert opts.target_dir == patched_home / "looker-embed-retail_analytics"
     assert opts.brand_name == "Flag Brand"
     assert opts.agent_id == "1042"
+
+
+# ---------------------------------------------------------------------------
+# --skip terminal branches & Gate 3C critique guard
+# ---------------------------------------------------------------------------
+
+
+def test_agent_publish_and_embed_skip_branches_and_critique_guard(
+    invoke, state_file, isolated_cwd: Path
+):
+    """Covers Gate 3C critique guard on agent create, and --skip on agent create, ge publish, and embed scaffold."""
+    state_file(
+        precheck_passed=True,
+        deployed_dashboard_url="https://fake.cloud.looker.com/dashboards/42",
+        critique_approved=False,
+    )
+    unapproved = invoke(["agent", "create", "--json"])
+    assert unapproved.exit_code == StateError.exit_code
+    assert "Gate 3C" in envelope(unapproved)["errors"][0]["message"]
+
+    # Approve critique, then skip agent create -> jumps directly to Gate 12 (embed scaffold)
+    state_file(
+        precheck_passed=True,
+        deployed_dashboard_url="https://fake.cloud.looker.com/dashboards/42",
+        critique_approved=True,
+    )
+    skip_ca = invoke(["agent", "create", "--skip", "--json"])
+    assert skip_ca.exit_code == 0, skip_ca.output
+    assert envelope(skip_ca)["data"]["skipped"] is True
+    assert envelope(skip_ca)["next_actions"][0]["gate"] == 12
+    assert read_state(isolated_cwd)["ca_agent_status"] == "skipped"
+
+    # ge publish --skip
+    skip_ge = invoke(["ge", "publish", "--skip", "--json"])
+    assert skip_ge.exit_code == 0, skip_ge.output
+    assert envelope(skip_ge)["data"]["skipped"] is True
+    assert read_state(isolated_cwd)["ge_publish_status"] == "skipped"
+
+    # embed scaffold --skip -> finishes pipeline (next_actions == [])
+    skip_embed = invoke(["embed", "scaffold", "--skip", "--json"])
+    assert skip_embed.exit_code == 0, skip_embed.output
+    assert envelope(skip_embed)["data"]["skipped"] is True
+    assert envelope(skip_embed)["next_actions"] == []
+    assert read_state(isolated_cwd)["embed_status"] == "skipped"
+

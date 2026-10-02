@@ -319,6 +319,42 @@ def test_pre_check_blocking_conditions_and_fix_mode(invoke, precheck_doubles) ->
     assert precheck_doubles.venv_init_calls == [Path.cwd()]
 
 
+def test_confirm_targets_guards_and_spec_initialization(invoke, state_file, isolated_cwd: Path) -> None:
+    """`confirm-targets` requires `precheck_passed=True`, validates required targets, persists state, and initializes SPEC.md."""
+    # Fails with StateError (exit 7) when pre-check hasn't passed
+    unready = invoke(["confirm-targets", "--gcp-project", "p1", "--connection", "c1", "--json"])
+    assert unready.exit_code == StateError.exit_code
+    assert envelope(unready)["errors"][0]["code"] == "STATE_ERROR"
+
+    # Missing --connection raises ConfigError (exit 4)
+    state_file(precheck_passed=True, gcp_project_id="p1")
+    missing_conn = invoke(["confirm-targets", "--json"])
+    assert missing_conn.exit_code == ConfigError.exit_code
+
+    # Happy path persists targets, initializes SPEC.md, and points to Gate 2 (gate_1a_propose_schema)
+    ok = invoke(
+        [
+            "confirm-targets",
+            "--gcp-account",
+            "analyst@acme.com",
+            "--gcp-project",
+            "acme-analytics",
+            "--looker-account",
+            "acme-looker",
+            "--connection",
+            "acme_bq",
+            "--json",
+        ]
+    )
+    assert ok.exit_code == 0, ok.output
+    payload = envelope(ok)
+    assert payload["data"]["targets_confirmed"] is True
+    assert payload["next_actions"][0]["gate"] == 2
+    assert (isolated_cwd / "SPEC.md").exists()
+    assert "acme-analytics" in (isolated_cwd / "SPEC.md").read_text(encoding="utf-8")
+
+
+
 # ---------------------------------------------------------------------------
 # MCP pruning & Skills organization
 # ---------------------------------------------------------------------------

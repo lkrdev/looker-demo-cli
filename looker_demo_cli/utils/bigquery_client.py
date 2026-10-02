@@ -78,14 +78,17 @@ class BigQueryOptimizationAdvisor:
             return None
 
         preferred_order = [
+            "date",
+            "session_date",
+            "activity_date",
+            "purchase_date",
+            "order_date",
+            "event_date",
+            "created_date",
             "timestamp",
             "event_time",
             "created_at",
             "session_start_time",
-            "order_date",
-            "event_date",
-            "date",
-            "created_date",
         ]
         for pref in preferred_order:
             if pref in temporal_cols:

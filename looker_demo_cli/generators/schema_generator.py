@@ -77,6 +77,14 @@ class DynamicDataSynthesizer:
                 current_time=now,
             )
 
+            # Ensure timestamps use microsecond precision for BigQuery compatibility
+            for col in df.columns:
+                if pd.api.types.is_datetime64_any_dtype(df[col]):
+                    try:
+                        df[col] = df[col].dt.as_unit("us")
+                    except Exception:
+                        pass
+
             # Write parquet
             parquet_path = output_dir / f"{entity.table_name}.parquet"
             df.to_parquet(parquet_path, index=False)

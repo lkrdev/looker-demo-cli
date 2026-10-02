@@ -12,6 +12,7 @@ from looker_demo_cli.config import DEFAULT_GCP_PROJECT
 from looker_demo_cli.context import get_context
 from looker_demo_cli.error_boundary import ErrorHandlingGroup
 from looker_demo_cli.errors import RemoteApiError
+from looker_demo_cli.gates import attach_next_gate_action  # noqa: F401
 from looker_demo_cli.output import CommandResult, emit
 from looker_demo_cli.services.ge_service import (
     ensure_gemini_enterprise_configured,
@@ -76,7 +77,7 @@ def ge_status(
         result.add_next_action(
             "Configure Gemini Enterprise in Looker",
             "demo-create ge configure --gcp-project <gcp-project-id>",
-            gate=5,
+            gate=11,
             requires_human_confirmation=True,
         )
 
@@ -171,7 +172,7 @@ def ge_configure(
     ).add_next_action(
         "Publish the Conversational Analytics agent to Gemini Enterprise",
         "demo-create agent publish --agent-id <agent-id>",
-        gate=5,
+        gate=11,
         requires_human_confirmation=True,
     )
 
@@ -191,6 +192,10 @@ def ge_publish(
     non_interactive: Annotated[
         bool,
         typer.Option("--non-interactive", help="Run non-interactively without prompting for GE reconfigurations"),
+    ] = False,
+    skip: Annotated[
+        bool,
+        typer.Option("--skip", help="Skip Gemini Enterprise publishing and advance to the next gate"),
     ] = False,
     account: Annotated[
         str | None,
@@ -219,6 +224,7 @@ def ge_publish(
         ctx: Typer context carrying the resolved :class:`AppContext`.
         agent_id: Target CA agent. Falls back to the agent in prior state.
         non_interactive: Never prompt during GE configuration.
+        skip: Skip Gemini Enterprise publishing and advance to the next gate.
         account: Saved ``lkr`` OAuth account alias.
         instance_url: Looker instance base URL.
         output_json: Emit the JSON envelope on stdout.
@@ -240,4 +246,5 @@ def ge_publish(
         account=account,
         instance_url=instance_url,
         output_json=output_json,
+        skip=skip,
     )

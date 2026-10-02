@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -12,7 +13,8 @@ from looker_demo_cli.commands.options import StateFileOption
 from looker_demo_cli.config import DEFAULT_GCP_PROJECT
 from looker_demo_cli.context import get_context
 from looker_demo_cli.error_boundary import ErrorHandlingGroup
-from looker_demo_cli.errors import ConfigError, RemoteApiError, missing_option
+from looker_demo_cli.errors import ConfigError, RemoteApiError, StateError, missing_option
+from looker_demo_cli.gates import attach_next_gate_action
 from looker_demo_cli.generators.schema_generator import (
     DomainBlueprint,
     create_dynamic_blueprint_from_name,
@@ -27,6 +29,251 @@ data_app = typer.Typer(
     no_args_is_help=True,
     cls=ErrorHandlingGroup,
 )
+
+
+def _generate_mermaid_erd(blueprint: DomainBlueprint) -> str:
+    """Build a Mermaid erDiagram string from a DomainBlueprint."""
+    lines: list[str] = ["erDiagram"]
+    entities = getattr(blueprint, "entities", [])
+    for entity in entities:
+        fks: dict[str, str] = dict(getattr(entity, "foreign_keys", {}) or {})
+        for f in getattr(entity, "fields", []):
+            if getattr(f, "is_foreign_key", False) and getattr(f, "foreign_reference", None):
+                fks.setdefault(f.name, str(f.foreign_reference))
+        for fk_col, ref in fks.items():
+            parent_table = ref.split(".")[0] if "." in ref else ref
+            if parent_table:
+                lines.append(f'    {parent_table} ||--o{{ {entity.table_name} : "{fk_col}"')
+
+    for entity in entities:
+        lines.append(f"    {entity.table_name} {{")
+        pk = getattr(entity, "primary_key", None)
+        fks = getattr(entity, "foreign_keys", {}) or {}
+        for f in getattr(entity, "fields", []):
+            if getattr(f, "is_primary_key", False) or (pk and f.name == pk):
+                key_tag = " PK"
+            elif getattr(f, "is_foreign_key", False) or f.name in fks:
+                key_tag = " FK"
+            else:
+                key_tag = ""
+            lines.append(f"        {f.type} {f.name}{key_tag}")
+        lines.append("    }")
+
+    return "\n".join(lines)
+
+
+def _extract_table_schemas(blueprint: DomainBlueprint) -> list[dict[str, Any]]:
+    """Extract structured table schema metadata from a DomainBlueprint."""
+    schemas: list[dict[str, Any]] = []
+    for entity in getattr(blueprint, "entities", []):
+        pk = getattr(entity, "primary_key", None)
+        fks = dict(getattr(entity, "foreign_keys", {}) or {})
+        columns: list[dict[str, Any]] = []
+        for f in getattr(entity, "fields", []):
+            is_pk = bool(getattr(f, "is_primary_key", False) or (pk and f.name == pk))
+            is_fk = bool(getattr(f, "is_foreign_key", False) or f.name in fks)
+            fk_ref = fks.get(f.name) or getattr(f, "foreign_reference", None)
+            columns.append(
+                {
+                    "name": f.name,
+                    "type": f.type,
+                    "is_primary_key": is_pk,
+                    "is_foreign_key": is_fk,
+                    "foreign_reference": fk_ref,
+                    "description": getattr(f, "description", None),
+                }
+            )
+        schemas.append(
+            {
+                "table_name": entity.table_name,
+                "table_type": getattr(entity, "table_type", "dimension"),
+                "primary_key": pk,
+                "foreign_keys": fks,
+                "row_count": getattr(entity, "row_count", 1000),
+                "columns": columns,
+                "fields": columns,
+            }
+        )
+    return schemas
+
+
+@data_app.command(name="propose-schema")
+def data_propose_schema(
+    ctx: typer.Context,
+    schema_file: Annotated[
+        Path | None, typer.Option("--schema-file", help="Path to JSON DomainBlueprint schema specification")
+    ] = None,
+    domain: Annotated[
+        str | None, typer.Option("--domain", help="Domain theme name when generating a default blueprint")
+    ] = None,
+    preview: Annotated[
+        bool,
+        typer.Option("--preview/--no-preview", help="Synthesize a 5-row micro-sample preview across tables"),
+    ] = True,
+    preview_rows: Annotated[
+        int,
+        typer.Option("--preview-rows", "-n", help="Number of sample rows to include per table"),
+    ] = 5,
+    output_json: Annotated[bool, typer.Option("--json", help="Emit the result envelope as JSON on stdout")] = False,
+    state_file: StateFileOption = None,
+):
+    """Validate a schema blueprint and synthesize a 5-row micro-sample preview & Mermaid ERD (Gate 1A)."""
+    app_ctx = get_context(ctx)
+    app_ctx.use_state_file(state_file)
+    app_ctx.set_json_mode(output_json)
+    state = app_ctx.state
+
+    if state.precheck_passed and not state.targets_confirmed:
+        raise StateError(
+            "Environment targets have not been confirmed yet (Gate 0B).",
+            remediation="Confirm the 4 targets with the user and run `demo-create confirm-targets` first.",
+        )
+
+    resolved_domain = domain or state.domain_name or "logistics_analytics"
+    if schema_file:
+        if not schema_file.exists():
+            raise ConfigError(
+                f"Schema file `{schema_file}` does not exist.",
+                remediation="Pass a valid path to a DomainBlueprint JSON file via --schema-file.",
+                details={"schema_file": str(schema_file)},
+            )
+        blueprint = DomainBlueprint.model_validate_json(schema_file.read_text(encoding="utf-8"))
+        resolved_schema_path = schema_file
+    else:
+        blueprint = create_dynamic_blueprint_from_name(resolved_domain)
+        resolved_schema_path = Path.cwd() / "schema_blueprint.json"
+        if hasattr(blueprint, "model_dump_json"):
+            resolved_schema_path.write_text(blueprint.model_dump_json(indent=2), encoding="utf-8")
+        else:
+            resolved_schema_path.write_text(
+                json.dumps({"domain_name": getattr(blueprint, "domain_name", resolved_domain)}, indent=2),
+                encoding="utf-8",
+            )
+
+    mermaid_erd = _generate_mermaid_erd(blueprint)
+    table_schemas = _extract_table_schemas(blueprint)
+    table_names = [e.table_name for e in getattr(blueprint, "entities", [])]
+    samples: dict[str, list[dict[str, Any]]] = {}
+    dag_res = None
+
+    if preview:
+        for entity in getattr(blueprint, "entities", []):
+            entity.row_count = max(preview_rows * 2, 20)
+        scratch_dir = Path.home() / "scratch" / "demo_create" / "preview"
+        specs = generate_domain_dataset(
+            target=blueprint,
+            output_dir=scratch_dir,
+            micro_sample_only=True,
+            engine="modular-dag",
+        )
+        if specs:
+            table_names = [s.table_name for s in specs]
+            dag_res = getattr(specs[0], "_dag_result", None)
+        if dag_res is not None:
+            for t_name, df in dag_res.tables.items():
+                samples[t_name] = df.head(preview_rows).astype(str).to_dict(orient="records")
+
+    actual_domain = getattr(blueprint, "domain_name", None) or resolved_domain
+    state.domain_name = actual_domain
+    state.bq_dataset_id = state.bq_dataset_id or actual_domain
+    state.schema_file_path = resolved_schema_path
+    state.schema_proposed = True
+    state.schema_approved = False
+    saved_path = app_ctx.save_state()
+
+    spec_path = Path.cwd() / "SPEC.md"
+    if spec_path.exists():
+        existing_spec = spec_path.read_text(encoding="utf-8")
+        section_3 = f"\n## 3. Relational Schema & Mermaid ERD\n\n```mermaid\n{mermaid_erd}\n```\n"
+        if "## 3. Relational Schema" not in existing_spec:
+            spec_path.write_text(existing_spec.rstrip() + "\n" + section_3, encoding="utf-8")
+
+    result = attach_next_gate_action(
+        CommandResult.success(
+            "data propose-schema",
+            data={
+                "domain": actual_domain,
+                "schema_file": str(resolved_schema_path),
+                "tables": table_names,
+                "table_schemas": table_schemas,
+                "mermaid_erd": mermaid_erd,
+                "samples": samples,
+                "state_file": str(saved_path),
+            },
+        ),
+        state,
+    )
+
+    def render(_: CommandResult) -> None:
+        print_success(f"Proposed schema for domain `{actual_domain}` ({len(table_names)} tables): {table_names}")
+        console.print(f"\n```mermaid\n{mermaid_erd}\n```\n")
+        if dag_res is not None:
+            for t_name, df in dag_res.tables.items():
+                tbl_view = Table(
+                    title=f"Preview: {t_name} (showing {min(preview_rows, len(df))} of {len(df)} rows)",
+                    show_header=True,
+                    header_style="bold cyan",
+                )
+                for col in df.columns:
+                    tbl_view.add_column(str(col))
+                for _, row in df.head(preview_rows).iterrows():
+                    tbl_view.add_row(*[str(val) for val in row.values])
+                console.print(tbl_view)
+        print_info(f"Updated state saved to `{saved_path}`")
+
+    return emit(result, json_output=output_json, human_renderer=render)
+
+
+@data_app.command(name="approve-schema")
+def data_approve_schema(
+    ctx: typer.Context,
+    row_count: Annotated[int, typer.Option("--row-count", help="Approved target fact row count")] = 5000,
+    dataset: Annotated[str | None, typer.Option("--dataset", help="Target BigQuery dataset ID")] = None,
+    schema_file: Annotated[
+        Path | None, typer.Option("--schema-file", help="Path to approved JSON DomainBlueprint schema file")
+    ] = None,
+    output_json: Annotated[bool, typer.Option("--json", help="Emit the result envelope as JSON on stdout")] = False,
+    state_file: StateFileOption = None,
+):
+    """Record user approval of the proposed schema and target row volume (Gate 1B)."""
+    app_ctx = get_context(ctx)
+    app_ctx.use_state_file(state_file)
+    app_ctx.set_json_mode(output_json)
+    state = app_ctx.state
+
+    if not state.schema_proposed and not schema_file:
+        raise StateError(
+            "No schema has been proposed yet (Gate 1A).",
+            remediation="Run `demo-create data propose-schema --schema-file <path> --preview` and present the ERD and sample rows in chat before approving.",
+        )
+
+    if schema_file:
+        state.schema_file_path = schema_file
+    state.schema_proposed = True
+    state.schema_approved = True
+    state.approved_row_count = row_count
+    state.bq_dataset_id = dataset or state.bq_dataset_id or state.domain_name
+    saved_path = app_ctx.save_state()
+
+    result = attach_next_gate_action(
+        CommandResult.success(
+            "data approve-schema",
+            data={
+                "schema_approved": True,
+                "approved_row_count": row_count,
+                "dataset": state.bq_dataset_id,
+                "schema_file": str(state.schema_file_path) if state.schema_file_path else None,
+                "state_file": str(saved_path),
+            },
+        ),
+        state,
+    )
+
+    def render(_: CommandResult) -> None:
+        print_success(f"Approved schema and target row volume ({row_count:,} rows).")
+        print_info(f"Updated state saved to `{saved_path}`")
+
+    return emit(result, json_output=output_json, human_renderer=render)
 
 
 @data_app.command(name="generate")
@@ -114,6 +361,13 @@ def data_generate(
     app_ctx.use_state_file(state_file)
     app_ctx.set_json_mode(output_json)
     state = app_ctx.state
+
+    if not preview and not validate_only and state.precheck_passed and not state.schema_approved:
+        raise StateError(
+            "Schema and row volume have not been approved yet (Gate 1B).",
+            remediation="Present the proposed schema ERD & preview to the user, then run `demo-create data approve-schema --row-count <count>` before generating data.",
+        )
+
     target_dir = output_dir or (Path.home() / "scratch" / "demo_create" / (dataset or domain))
 
     if not preview:
@@ -205,16 +459,22 @@ def data_generate(
         # test has to replace is `looker_demo_cli.context.BigQueryHelper`.
         bq_helper = app_ctx.bigquery(project_id=state.gcp_project_id, location=state.gcp_location)
         bq_helper.ensure_dataset(state.bq_dataset_id)
+        entity_map = {e.table_name: e for e in getattr(blueprint, "entities", [])}
         for t_name in table_names:
             p_file = target_dir / f"{t_name}.parquet"
             if p_file.exists():
                 df_sample = dag_res.tables.get(t_name) if dag_res is not None else None
+                entity = entity_map.get(t_name)
+                part_field = getattr(entity, "partition_field", None) if entity else None
+                cluster_fields = getattr(entity, "cluster_fields", None) if entity else None
                 if hasattr(bq_helper, "load_parquet_table_optimized"):
                     load_info = bq_helper.load_parquet_table_optimized(
                         state.bq_dataset_id,
                         t_name,
                         p_file,
                         df_sample=df_sample,
+                        partition_field=part_field,
+                        clustering_fields=cluster_fields,
                     )
                     loaded_rows[t_name] = load_info["rows"]
                     if load_info.get("partition_field"):
@@ -270,14 +530,10 @@ def data_generate(
         data_payload["clustered_tables"] = clustered_tables
         data_payload["scorecard"] = scorecard
 
-    result = CommandResult.success("data generate", data=data_payload)
-    if not should_upload:
-        result.add_next_action(
-            "Load the generated Parquet tables into BigQuery",
-            f"demo-create data upload --parquet-dir {target_dir} --dataset {state.bq_dataset_id}",
-            gate=1,
-            requires_human_confirmation=True,
-        )
+    result = attach_next_gate_action(
+        CommandResult.success("data generate", data=data_payload),
+        state,
+    )
 
     def render(_: CommandResult) -> None:
         print_success(f"Generated {len(table_names)} tables in `{target_dir}`: {table_names}")
@@ -382,22 +638,20 @@ def data_upload(
     state.gcp_location = location
     saved_path = app_ctx.save_state()
 
-    result = CommandResult.success(
-        "data upload",
-        data={
-            "gcp_project": proj_id,
-            "dataset": ds_id,
-            "location": location,
-            "parquet_dir": str(p_dir),
-            "loaded_rows": loaded_rows,
-            "total_rows": sum(loaded_rows.values()),
-            "state_file": str(saved_path),
-        },
-    ).add_next_action(
-        "Generate the LookML model, explores, and dashboards",
-        f"demo-create lookml model --dataset {ds_id} --gcp-project {proj_id}",
-        gate=2,
-        requires_human_confirmation=True,
+    result = attach_next_gate_action(
+        CommandResult.success(
+            "data upload",
+            data={
+                "gcp_project": proj_id,
+                "dataset": ds_id,
+                "location": location,
+                "parquet_dir": str(p_dir),
+                "loaded_rows": loaded_rows,
+                "total_rows": sum(loaded_rows.values()),
+                "state_file": str(saved_path),
+            },
+        ),
+        state,
     )
 
     def render(_: CommandResult) -> None:
