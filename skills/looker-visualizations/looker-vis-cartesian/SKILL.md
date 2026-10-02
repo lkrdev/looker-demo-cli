@@ -43,6 +43,10 @@ Looker applies internal rules when determining default visualizations:
 
 ## 2. Quick Parameter Cheatsheet
 
+> [!IMPORTANT]
+> **LOOKML SERIES TYPES COMPATIBILITY**:
+> Looker only supports a limited set of series types in `series_types:` (`column`, `bar`, `line`, `area`, `scatter`). Unsupported series types like `spline` or `areaspline` will cause client-side rendering failures in the browser. To render smooth curves, set `series_types: { field: line }` or `series_types: { field: area }`, and configure smoothing or styling properties via `advanced_vis_config` under `plotOptions.line` or `plotOptions.series`.
+
 Here are the most critical LookML parameters used in cartesian dashboard elements:
 
 ```yaml
@@ -61,9 +65,9 @@ Here are the most critical LookML parameters used in cartesian dashboard element
   label_density: 25             # Value label density (1 - 50)
 
   # --- Series Type Mixing & Styling ---
-  # CRITICAL HIGHCHARTS RULE: Inside `series_types:`, ALWAYS use bare Highcharts names
-  # (`column`, `bar`, `line`, `area`, `scatter`) — NEVER Looker wrapper names like `looker_column`!
-  # `series_types: { ...: looker_column }` passes LookML/SQL validation (HTTP 200 OK) but crashes Highcharts in the browser.
+  # CRITICAL HIGHCHARTS RULE: Inside `series_types:`, ALWAYS use bare Looker-supported series names
+  # (`column`, `bar`, `line`, `area`, `scatter`) — NEVER Looker wrapper names (`looker_column`)
+  # and NEVER unsupported Highcharts types (`spline`, `areaspline`)!
   series_types:
     orders.total_revenue: area  # Render total_revenue as area while others remain line/column
     orders.order_count: column

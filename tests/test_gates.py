@@ -120,13 +120,13 @@ def test_gate_structural_invariants() -> None:
         "gate_1a_propose_schema",
         "gate_1c_generate_data",
         "gate_2a_lookml_model",
-        "gate_2b_certify_polish",
         "gate_3b_deploy",
     ]
     pausing = [g.id for g in GATES if g.requires_human_confirmation]
     assert pausing == [
         "gate_0b_confirm_targets",
         "gate_1b_approve_schema",
+        "gate_2b_certify_polish",
         "gate_3a_optimize",
         "gate_3c_critique",
         "gate_4_agent",

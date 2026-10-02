@@ -534,3 +534,59 @@ def test_certify_polish_optimize_skip_deploy_guards_and_approve_critique(
     assert critique_payload["next_actions"][0]["gate"] == 10
     assert read_state(isolated_cwd)["critique_approved"] is True
 
+
+def test_certify_polish_blocks_raw_scaffold_and_allows_force_or_custom(
+    invoke, sample_parquet_dir: Path, tmp_path: Path, isolated_cwd: Path
+):
+    """Gate 2B certify-polish rejects uncustomized LookMLGenerator scaffolding with FAILED_POLISH_CHECK and agent_guidance."""
+    out = tmp_path / "scaffold_lookml"
+    gen_res = invoke(
+        [
+            "lookml",
+            "model",
+            "--parquet-dir",
+            str(sample_parquet_dir),
+            "--output-dir",
+            str(out),
+            "--looker-project",
+            "gaming_demo",
+            "--dataset",
+            "gaming_raw",
+            "--gcp-project",
+            "unit-test-project",
+            "--connection",
+            "default_bigquery_connection",
+            "--json",
+        ]
+    )
+    assert gen_res.exit_code == 0, gen_res.output
+
+    # 1. Running certify-polish immediately on raw LookMLGenerator output fails with FAILED_POLISH_CHECK (exit code 6)
+    blocked_json = invoke(["lookml", "certify-polish", "--lookml-dir", str(out), "--json"])
+    assert blocked_json.exit_code == ValidationError.exit_code
+    payload = envelope(blocked_json)
+    assert payload["status"] == "FAILED_POLISH_CHECK"
+    assert payload["data"]["certified"] is False
+    assert len(payload["data"]["scaffolding_issues"]) > 0
+    guidance = payload["data"]["agent_guidance"]
+    assert guidance["action_required"] == "CONSULT_VISUALIZATION_SKILLS"
+    assert "skills/looker-visualizations/SKILL.md" in guidance["recommended_skills"]
+    assert "lookml-dashboard-designer.md" in guidance["subagent_command"]["type"]
+    assert read_state(isolated_cwd)["polish_certified"] is False
+
+    # 2. Human mode outputs actionable Rich guidance panel
+    blocked_human = invoke(["lookml", "certify-polish", "--lookml-dir", str(out)])
+    assert blocked_human.exit_code == ValidationError.exit_code
+    assert "ACTION REQUIRED: DASHBOARD CONTAINS UNCUSTOMIZED SCAFFOLDING DRAFT" in blocked_human.output
+    assert "lookml-dashboard-designer" in blocked_human.output
+
+    # 3. --force-scaffold overrides scaffolding check when explicitly requested
+    forced = invoke(["lookml", "certify-polish", "--lookml-dir", str(out), "--force-scaffold", "--json"])
+    assert forced.exit_code == 0, forced.output
+    forced_payload = envelope(forced)
+    assert forced_payload["status"] == "SUCCESS"
+    assert forced_payload["data"]["certified"] is True
+    assert forced_payload["data"]["force_scaffold"] is True
+    assert read_state(isolated_cwd)["polish_certified"] is True
+
+

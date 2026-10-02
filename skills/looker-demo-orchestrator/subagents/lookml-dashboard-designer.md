@@ -48,9 +48,9 @@ The parent orchestrator invokes you with:
 > [!CAUTION]
 > **STRICT HIGHCHARTS `series_types` RULE (PREVENTS BROWSER CRASHES)**
 > - Element root `type:` uses Looker wrapper names (`looker_column`, `looker_bar`, `looker_line`, `looker_area`, `looker_pie`, `looker_grid`, `single_value`).
-> - Inside `series_types:` (which overrides individual series on mixed/combo Cartesian charts), **Looker passes the string directly to Highcharts**.
-> - **NEVER use `looker_column`, `looker_line`, `looker_area`, or `looker_bar` inside `series_types:`!** Doing so passes LookML/SQL syntax validation (`HTTP 200 OK`) yet crashes Highcharts in the browser.
-> - **ALWAYS use bare Highcharts series names inside `series_types:`**: `column`, `line`, `area`, `bar`, `scatter`.
+> - Inside `series_types:` (which overrides individual series on mixed/combo Cartesian charts), **Looker only supports 5 base series types**: `column`, `line`, `area`, `bar`, `scatter`.
+> - **NEVER use `looker_column`, `looker_line`, `looker_area`, `looker_bar`, `spline`, or `areaspline` inside `series_types:`!** Doing so passes LookML/SQL syntax validation (`HTTP 200 OK`) yet crashes Highcharts in the browser (`TypeError: S[e.type] is not a constructor`).
+> - **ALWAYS use bare Looker-supported series names inside `series_types:`**: `column`, `line`, `area`, `bar`, `scatter`.
 
 > [!CAUTION]
 > **MANDATORY DOUBLE-QUOTED STRINGS FOR TITLES & LABELS (YAML SAFETY RULE)**

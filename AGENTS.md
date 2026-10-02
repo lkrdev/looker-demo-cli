@@ -39,7 +39,7 @@ persisted state, so it cannot drift from what has actually happened.
 | **3** | `gate_1b_approve_schema` | **`true`** | `demo-create data approve-schema --row-count <row-count> --dataset <dataset-id>` |
 | **4** | `gate_1c_generate_data` | `false` | `demo-create data generate --schema-file <schema-file> --row-count <row-count> --gcp-project <gcp-project> --dataset <dataset-id> --upload --json-scorecard` |
 | **5** | `gate_2a_lookml_model` | `false` | `demo-create lookml model --looker-project <looker-project> --dataset <dataset-id> --connection <connection-name> --gcp-project <gcp-project>` |
-| **6** | `gate_2b_certify_polish` | `false` | `demo-create lookml certify-polish --lookml-dir <lookml-dir>` |
+| **6** | `gate_2b_certify_polish` | **`true`** | `demo-create lookml certify-polish --lookml-dir <lookml-dir>` |
 | **7** | `gate_3a_optimize` | **`true`** | `demo-create lookml optimize --lookml-dir <lookml-dir>` *(or `--skip`)* |
 | **8** | `gate_3b_deploy` | `false` | `demo-create lookml deploy --looker-project <looker-project> --lookml-dir <lookml-dir>` |
 | **9** | `gate_3c_critique` | **`true`** | `demo-create lookml approve-critique --looker-project <looker-project>` |
@@ -72,8 +72,8 @@ invoke it*. Read `SKILL.md` before orchestrating a build.
 > co-design and volume confirmation. Orchestrate the gated subcommands one at a
 > time, pausing wherever `requires_human_confirmation` is `true` and recording
 > explicit user decisions via `confirm-targets`, `data approve-schema`,
-> `lookml optimize [--skip]`, `lookml approve-critique`, `agent create [--skip]`,
-> `agent publish [--skip]`, and `embed scaffold [--skip]`.
+> `lookml certify-polish`, `lookml optimize [--skip]`, `lookml approve-critique`,
+> `agent create [--skip]`, `agent publish [--skip]`, and `embed scaffold [--skip]`.
 
 > [!CAUTION]
 > **Never call `ask_question` for schema approval without printing the schema, ERD, and 5-row preview in chat first.**
@@ -89,8 +89,8 @@ invoke it*. Read `SKILL.md` before orchestrating a build.
 
 > [!CAUTION]
 > **Never treat `demo-create lookml model` dashboard output as finished or rely solely on HTTP 200 query validation — ALWAYS trigger `looker-visualizations` skills and run `demo-create lookml certify-polish` at Gate 6 (`gate_2b_certify_polish`) before Gate 8 (`lookml deploy`).**
-> The CLI's built-in dashboard generator produces raw functional scaffolding only, and Looker's `validate_project` / `run_inline_query` (`HTTP 200 OK`) only checks LookML and SQL syntax — NOT client-side Highcharts rendering (e.g., `series_types: { ...: looker_column }` passes SQL/LookML validation with `HTTP 200 OK` yet crashes Highcharts in the browser because Highcharts requires bare `column`). Between Gate 5 (`gate_2a_lookml_model`) and Gate 6 (`gate_2b_certify_polish`), and whenever iterating on any `.dashboard.lookml` file, you **MUST** consult the visualization skills ([`looker-visualizations`](skills/looker-visualizations/SKILL.md), [`looker-vis-advanced-config`](skills/looker-visualizations/looker-vis-advanced-config/SKILL.md), [`looker-vis-cartesian`](skills/looker-visualizations/looker-vis-cartesian/SKILL.md), [`looker-vis-tabular-kpi`](skills/looker-visualizations/looker-vis-tabular-kpi/SKILL.md), [`looker-vis-specialty-maps`](skills/looker-visualizations/looker-vis-specialty-maps/SKILL.md)), apply the 4 default polish rules below, and certify them with `demo-create lookml certify-polish --lookml-dir <lookml-dir>`:
-> 1. **Audit chart types and `series_types` against Highcharts specs** (avoid invalid wrapper names like `looker_column` inside `series_types`; use bare Highcharts types `column`, `line`, `area`, `bar`, `scatter`).
+> The CLI's built-in dashboard generator produces raw functional scaffolding only (which `lookml certify-polish` actively detects and rejects with `FAILED_POLISH_CHECK`), and Looker's `validate_project` / `run_inline_query` (`HTTP 200 OK`) only checks LookML and SQL syntax — NOT client-side Highcharts rendering (e.g., `series_types: { ...: looker_column }` or `spline` / `areaspline` passes SQL/LookML validation with `HTTP 200 OK` yet crashes Highcharts in the browser because Looker's Highcharts adapter only permits `column`, `bar`, `line`, `area`, and `scatter`). Never run `demo-create lookml certify-polish` in the same step as `demo-create lookml model` without customizing the dashboard first. Between Gate 5 (`gate_2a_lookml_model`) and Gate 6 (`gate_2b_certify_polish`), and whenever iterating on any `.dashboard.lookml` file, you **MUST** consult the visualization skills ([`looker-visualizations`](skills/looker-visualizations/SKILL.md), [`looker-vis-advanced-config`](skills/looker-visualizations/looker-vis-advanced-config/SKILL.md), [`looker-vis-cartesian`](skills/looker-visualizations/looker-vis-cartesian/SKILL.md), [`looker-vis-tabular-kpi`](skills/looker-visualizations/looker-vis-tabular-kpi/SKILL.md), [`looker-vis-specialty-maps`](skills/looker-visualizations/looker-vis-specialty-maps/SKILL.md)), replace generic scaffolding titles with domain-specific KPIs from `SPEC.md`, apply the 4 default polish rules below, and certify them with `demo-create lookml certify-polish --lookml-dir <lookml-dir>`:
+> 1. **Audit chart types and `series_types` against Looker's 5 permitted series types** (avoid invalid wrapper names like `looker_column` and unsupported Highcharts curve types `spline` / `areaspline` inside `series_types`; use ONLY `column`, `line`, `area`, `bar`, `scatter`).
 > 2. **Inject modern geometry tokens via `advanced_vis_config`** (rounded bar corners `borderRadius: 4`, chart `borderRadius: 8`, transparent chart surfaces `"backgroundColor": "transparent"`, and shadow `tooltip`).
 > 3. **Convert default pie charts to donuts** (`type: looker_pie`, `show_donut: true`, `inner_radius: 50`) with curated palettes.
 > 4. **Upgrade tables to `table_theme: transparent`** with in-cell data bars (`series_cell_visualizations`).

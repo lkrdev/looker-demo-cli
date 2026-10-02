@@ -6,8 +6,8 @@ This shared resource defines the **4 Mandatory Default Polish Rules**, YAML safe
 
 ## 1. Why Dashboard Polish Must Never Be Skipped Between Gate 2 and Gate 3
 
-1. **CLI Scaffolding Is a Raw Draft**: `demo-create lookml model` generates functional baseline `.dashboard.lookml` scaffolding — never treat it as a finished product.
-2. **`HTTP 200 OK` Query Validation Does Not Check Highcharts**: Looker's `validate_project` and `run_inline_query` only validate LookML/SQL syntax. For example, `series_types: { ...: looker_column }` passes SQL validation with `HTTP 200 OK` yet **crashes Highcharts in the browser** because Highcharts expects bare `'column'`, `'line'`, `'area'`, `'bar'`, or `'scatter'` inside `series_types`.
+1. **CLI Scaffolding Is a Raw Draft**: `demo-create lookml model` generates functional baseline `.dashboard.lookml` scaffolding — never treat it as a finished product. `demo-create lookml certify-polish` actively rejects uncustomized scaffolding drafts.
+2. **`HTTP 200 OK` Query Validation Does Not Check Highcharts**: Looker's `validate_project` and `run_inline_query` only validate LookML/SQL syntax. For example, `series_types: { ...: looker_column }` or `series_types: { ...: spline }` / `areaspline` passes SQL validation with `HTTP 200 OK` yet **crashes Highcharts in the browser** because Looker only supports bare `'column'`, `'line'`, `'area'`, `'bar'`, or `'scatter'` inside `series_types:`.
 3. **YAML Quoting Safety**: Unquoted colons followed by spaces (`title: Daily Spend: Cost vs Tokens`) break PyYAML parsing. **Always wrap `title`, `name`, `tab_name`, `label`, `title_text`, and `subtitle_text` in double quotes**, and never use periods (`.`) in tile `name:` attributes.
 4. **Root Cross-Filtering Attribute**: Always use `crossfilter_enabled: true` at the dashboard root level. Never use deprecated `crossfilter: true`.
 
@@ -17,7 +17,7 @@ This shared resource defines the **4 Mandatory Default Polish Rules**, YAML safe
 
 1. **Audit Chart Types & `series_types` Against Highcharts Specs ([`looker-vis-cartesian`](../looker-visualizations/looker-vis-cartesian/SKILL.md))**:
    - Element root `type:` uses Looker wrappers (`looker_column`, `looker_bar`, `looker_line`, `looker_area`, `looker_pie`, `looker_grid`, `single_value`).
-   - Inside `series_types:` (for mixed/combo Cartesian charts), **ALWAYS use bare Highcharts series names** (`column`, `bar`, `line`, `area`, `scatter`) — **NEVER** `looker_column`, `looker_line`, or `looker_area`.
+   - Inside `series_types:` (for mixed/combo Cartesian charts), **ALWAYS use only the 5 Looker-supported series names** (`column`, `bar`, `line`, `area`, `scatter`) — **NEVER** `looker_column`, `looker_line`, `looker_area`, and **NEVER** `spline` or `areaspline`.
 2. **Inject Modern Geometry Tokens via `advanced_vis_config` ([`looker-vis-advanced-config`](../looker-visualizations/looker-vis-advanced-config/SKILL.md))**:
    - Apply rounded bar corners (`"plotOptions": {"series": {"borderRadius": 4}}`), rounded container & transparent chart surfaces (`"chart": {"backgroundColor": "transparent", "borderRadius": 8}`), shadow tooltips (`"tooltip": {"borderRadius": 8, "shadow": true}`), and centered legends (`"legend": {"align": "center", "verticalAlign": "bottom"}`).
    - Never use JavaScript function callbacks (`formatter: function()`) or attach `advanced_vis_config` to `single_value` or `looker_grid` tiles.

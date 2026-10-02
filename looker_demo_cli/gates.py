@@ -471,8 +471,13 @@ GATES: Final[tuple[Gate, ...]] = (
         number=6,
         id="gate_2b_certify_polish",
         title="3-Pass Executive Dashboard Polish & filtered measure audit",
-        requires_human_confirmation=False,
-        human_checkpoint=None,
+        requires_human_confirmation=True,
+        human_checkpoint=(
+            "MANDATORY DASHBOARD POLISH: Do NOT deploy the raw scaffold. Invoke the `looker-visualizations` "
+            "skill suite (or `lookml-dashboard-designer` subagent) to tailor chart types, custom palettes, "
+            "KPI single-values, and modern Highcharts tokens to the domain. Run `demo-create lookml certify-polish` "
+            "and review the design with the user before proceeding."
+        ),
         _is_complete=_gate_2b_complete,
         _command=_gate_2b_command,
     ),

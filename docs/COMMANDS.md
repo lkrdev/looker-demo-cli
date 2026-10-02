@@ -490,6 +490,7 @@ demo-create lookml certify-polish [OPTIONS]
 | :--- | :--- | :--- |
 | `--lookml-dir` | Directory containing LookML files |  |
 | `--strict` | Treat Executive Polish warnings as blocking validation errors |  |
+| `--force-scaffold` | Allow certifying uncustomized LookMLGenerator scaffolding draft dashboards |  |
 | `--json` | Emit the result envelope as JSON on stdout |  |
 | `--state-file` | Path to .demo-state.json. Defaults to discovering it in the current directory. |  |
 
