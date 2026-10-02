@@ -48,7 +48,10 @@ from looker_demo_cli.state import FlowState
 # pins that no generated command contains a brace.
 
 _PLACEHOLDER_GCP_PROJECT: Final[str] = "<gcp-project>"
+_PLACEHOLDER_GCP_ACCOUNT: Final[str] = "<gcp-account>"
+_PLACEHOLDER_LOOKER_ACCOUNT: Final[str] = "<looker-account>"
 _PLACEHOLDER_DOMAIN: Final[str] = "<domain>"
+_PLACEHOLDER_SCHEMA_FILE: Final[str] = "<schema-file>"
 _PLACEHOLDER_ROW_COUNT: Final[str] = "<row-count>"
 _PLACEHOLDER_OUTPUT_DIR: Final[str] = "<output-dir>"
 _PLACEHOLDER_PARQUET_DIR: Final[str] = "<parquet-dir>"
@@ -70,7 +73,7 @@ COMMAND_PREFIX: Final[str] = "demo-create "
 _DASHBOARDS_SUBDIR: Final[str] = "dashboards"
 
 
-def _resolved(value: str | Path | None, placeholder: str) -> str:
+def _resolved(value: str | int | Path | None, placeholder: str) -> str:
     """Render a state value for interpolation, or fall back to a placeholder.
 
     Empty strings are treated as unknown, not as values. ``FlowState`` defaults
@@ -96,49 +99,77 @@ def _resolved(value: str | Path | None, placeholder: str) -> str:
 # Completion predicates
 # ---------------------------------------------------------------------------
 #
-# Each predicate reads the *one* field the corresponding command actually
-# writes on success. Deliberately not a compound condition: a gate that
-# required two signals would report incomplete forever if a later refactor
-# stopped writing one of them, and an agent would loop re-running a step that
-# had already succeeded.
+# Each predicate reads the *one* field (or canonical status union) the
+# corresponding command writes on success.
 
 
-def _gate_0_complete(state: FlowState) -> bool:
+def _gate_0a_complete(state: FlowState) -> bool:
     """Whether ``pre-check`` has reported an unblocked environment."""
     return state.precheck_passed
 
 
-def _gate_1_complete(state: FlowState) -> bool:
-    """Whether synthesized tables have reached BigQuery.
+def _gate_0b_complete(state: FlowState) -> bool:
+    """Whether the human has confirmed the 4 environment targets via ``confirm-targets``."""
+    return state.targets_confirmed
 
-    Keyed on the dataset rather than on ``generated_parquet_dir``: local
-    Parquet is an intermediate, and modelling reads the warehouse.
-    """
+
+def _gate_1a_complete(state: FlowState) -> bool:
+    """Whether a schema blueprint has been proposed and micro-sampled via ``data propose-schema``."""
+    return state.schema_proposed or state.dataset_exists
+
+
+def _gate_1b_complete(state: FlowState) -> bool:
+    """Whether the proposed schema and target row volume have been approved via ``data approve-schema``."""
+    return state.schema_approved or state.dataset_exists
+
+
+def _gate_1c_complete(state: FlowState) -> bool:
+    """Whether synthesized tables have reached BigQuery."""
     return state.dataset_exists
 
 
-def _gate_2_complete(state: FlowState) -> bool:
+def _gate_2a_complete(state: FlowState) -> bool:
     """Whether ``lookml model`` has written a LookML tree."""
     return state.lookml_output_dir is not None
 
 
-def _gate_3_complete(state: FlowState) -> bool:
-    """Whether a dashboard is live in production.
+def _gate_2b_complete(state: FlowState) -> bool:
+    """Whether the 3-Pass Executive Dashboard Polish and filtered measure checks passed ``lookml certify-polish``."""
+    return state.polish_certified
 
-    The deployed URL, not the project name: ``lookml deploy`` only records the
-    URL after the validator and every dashboard tile query have passed.
-    """
+
+def _gate_3a_complete(state: FlowState) -> bool:
+    """Whether the human has made an explicit decision on ``lookml optimize`` (applied or skipped)."""
+    return state.optimizer_status in ("applied", "skipped")
+
+
+def _gate_3b_complete(state: FlowState) -> bool:
+    """Whether a dashboard is live in production."""
     return state.deployed_dashboard_url is not None
 
 
+def _gate_3c_complete(state: FlowState) -> bool:
+    """Whether the post-deploy visual layout critique (Pass 3) has been approved via ``lookml approve-critique``."""
+    return state.critique_approved
+
+
 def _gate_4_complete(state: FlowState) -> bool:
-    """Whether a Conversational Analytics agent has been provisioned."""
-    return state.ca_agent_id is not None
+    """Whether a Conversational Analytics agent has been provisioned or explicitly skipped."""
+    return state.ca_agent_id is not None or state.ca_agent_status in ("created", "skipped")
 
 
 def _gate_5_complete(state: FlowState) -> bool:
-    """Whether the agent has been published to Gemini Enterprise."""
-    return state.published_to_ge
+    """Whether the agent has been published to Gemini Enterprise or explicitly skipped."""
+    return (
+        state.published_to_ge
+        or state.ge_publish_status in ("published", "skipped")
+        or state.ca_agent_status == "skipped"
+    )
+
+
+def _gate_6_complete(state: FlowState) -> bool:
+    """Whether the external embed portal has been scaffolded or explicitly skipped."""
+    return state.embed_workspace_dir is not None or state.embed_status in ("scaffolded", "skipped")
 
 
 # ---------------------------------------------------------------------------
@@ -146,70 +177,58 @@ def _gate_5_complete(state: FlowState) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def _gate_0_command(state: FlowState) -> str:
-    """Build the gate 0 command: audit the environment, repairing what it can.
-
-    ``--fix`` is always included. Gate 0 is re-entrant -- it is the command an
-    agent runs *again* after the user authenticates -- and the repairing form
-    is the one the recovery path needs. No ``--json``: like every other gate
-    command, the output mode is the caller's choice, not this module's.
-
-    Args:
-        state: Current flow state.
-
-    Returns:
-        A literal ``demo-create pre-check`` invocation.
-    """
+def _gate_0a_command(state: FlowState) -> str:
+    """Build the gate 0A command: audit the environment, repairing what it can."""
     project = _resolved(state.gcp_project_id, _PLACEHOLDER_GCP_PROJECT)
     return f"demo-create pre-check --fix --gcp-project {project}"
 
 
-def _gate_1_command(state: FlowState) -> str:
-    """Build the gate 1 command: synthesize the data, then load it.
+def _gate_0b_command(state: FlowState) -> str:
+    """Build the gate 0B command: record the 4 human-confirmed environment targets."""
+    account = _resolved(state.gcp_account, _PLACEHOLDER_GCP_ACCOUNT)
+    project = _resolved(state.gcp_project_id, _PLACEHOLDER_GCP_PROJECT)
+    looker_account = _resolved(state.looker_account, _PLACEHOLDER_LOOKER_ACCOUNT)
+    connection = _resolved(state.looker_connection_name, _PLACEHOLDER_CONNECTION)
+    return (
+        f"demo-create confirm-targets --gcp-account {account} "
+        f"--gcp-project {project} --looker-account {looker_account} --connection {connection}"
+    )
 
-    Gate 1 is the one gate with two commands, so the branch is on evidence: if
-    Parquet has already been written, the remaining work is the upload, and
-    re-running ``data generate`` would discard a dataset the user has already
-    reviewed at Phase 2.
 
-    ``--row-count`` stays a placeholder even when tables exist, because the
-    volume is a Phase 3 decision belonging to the human, not a value the state
-    is entitled to supply on their behalf.
+def _gate_1a_command(state: FlowState) -> str:
+    """Build the gate 1A command: validate schema blueprint, generate 5-row micro-sample & Mermaid ERD."""
+    schema_file = _resolved(state.schema_file_path, _PLACEHOLDER_SCHEMA_FILE)
+    return f"demo-create data propose-schema --schema-file {schema_file} --preview"
 
-    Args:
-        state: Current flow state.
 
-    Returns:
-        A literal ``demo-create data upload`` invocation when Parquet exists,
-        otherwise a ``demo-create data generate`` invocation.
-    """
+def _gate_1b_command(state: FlowState) -> str:
+    """Build the gate 1B command: record user approval of the schema and target row volume."""
+    row_count = _resolved(state.approved_row_count, _PLACEHOLDER_ROW_COUNT)
+    dataset = _resolved(state.bq_dataset_id or state.domain_name, _PLACEHOLDER_DATASET)
+    return f"demo-create data approve-schema --row-count {row_count} --dataset {dataset}"
+
+
+def _gate_1c_command(state: FlowState) -> str:
+    """Build the gate 1C command: synthesize the approved dataset and load it into BigQuery."""
     if state.generated_parquet_dir is not None:
         parquet_dir = _resolved(state.generated_parquet_dir, _PLACEHOLDER_PARQUET_DIR)
         project = _resolved(state.gcp_project_id, _PLACEHOLDER_GCP_PROJECT)
         dataset = _resolved(state.bq_dataset_id, _PLACEHOLDER_DATASET)
         return f"demo-create data upload --parquet-dir {parquet_dir} --gcp-project {project} --dataset {dataset}"
 
-    domain = _resolved(state.domain_name, _PLACEHOLDER_DOMAIN)
+    schema_file = _resolved(state.schema_file_path, _PLACEHOLDER_SCHEMA_FILE)
+    row_count = _resolved(state.approved_row_count, _PLACEHOLDER_ROW_COUNT)
+    project = _resolved(state.gcp_project_id, _PLACEHOLDER_GCP_PROJECT)
+    dataset = _resolved(state.bq_dataset_id or state.domain_name, _PLACEHOLDER_DATASET)
     return (
-        f"demo-create data generate --domain {domain} "
-        f"--row-count {_PLACEHOLDER_ROW_COUNT} --output-dir {_PLACEHOLDER_OUTPUT_DIR}"
+        f"demo-create data generate --schema-file {schema_file} "
+        f"--row-count {row_count} --gcp-project {project} --dataset {dataset} "
+        f"--upload --json-scorecard"
     )
 
 
-def _gate_2_command(state: FlowState) -> str:
-    """Build the gate 2 command: generate views, explores, and dashboards.
-
-    ``--dataset`` is passed explicitly even though ``lookml model`` would fall
-    back to state, because the fallback path emits a warning: the dataset name
-    is baked into every ``sql_table_name``, so being wrong here produces a
-    model that validates cleanly and reads the wrong tables.
-
-    Args:
-        state: Current flow state.
-
-    Returns:
-        A literal ``demo-create lookml model`` invocation.
-    """
+def _gate_2a_command(state: FlowState) -> str:
+    """Build the gate 2A command: generate views, explores, and draft dashboards."""
     looker_project = _resolved(state.looker_project_name, _PLACEHOLDER_LOOKER_PROJECT)
     dataset = _resolved(state.bq_dataset_id, _PLACEHOLDER_DATASET)
     connection = _resolved(state.looker_connection_name, _PLACEHOLDER_CONNECTION)
@@ -220,20 +239,20 @@ def _gate_2_command(state: FlowState) -> str:
     )
 
 
-def _gate_3_command(state: FlowState) -> str:
-    """Build the gate 3 command: push, validate, query-test, and release.
+def _gate_2b_command(state: FlowState) -> str:
+    """Build the gate 2B command: certify 3-Pass Dashboard Polish and filtered measure grounding."""
+    lookml_dir = _resolved(state.lookml_output_dir, _PLACEHOLDER_LOOKML_DIR)
+    return f"demo-create lookml certify-polish --lookml-dir {lookml_dir}"
 
-    ``--looker-account`` is appended only when an account was recorded. The
-    flag is optional and resolves from the saved ``lkr`` session otherwise;
-    emitting ``--looker-account <account>`` unconditionally would invite an
-    agent to invent an alias that does not exist in ``~/.lkr/auth.db``.
 
-    Args:
-        state: Current flow state.
+def _gate_3a_command(state: FlowState) -> str:
+    """Build the gate 3A command: run (or skip with --skip) the LookML server performance optimizer."""
+    lookml_dir = _resolved(state.lookml_output_dir, _PLACEHOLDER_LOOKML_DIR)
+    return f"demo-create lookml optimize --lookml-dir {lookml_dir}"
 
-    Returns:
-        A literal ``demo-create lookml deploy`` invocation.
-    """
+
+def _gate_3b_command(state: FlowState) -> str:
+    """Build the gate 3B command: push, validate, query-test, and release to production."""
     looker_project = _resolved(state.looker_project_name, _PLACEHOLDER_LOOKER_PROJECT)
     lookml_dir = _resolved(state.lookml_output_dir, _PLACEHOLDER_LOOKML_DIR)
     command = f"demo-create lookml deploy --looker-project {looker_project} --lookml-dir {lookml_dir}"
@@ -242,26 +261,27 @@ def _gate_3_command(state: FlowState) -> str:
     return command
 
 
-def _gate_4_command(state: FlowState) -> str:
-    """Build the gate 4 command: provision the CA agent and ground it.
+def _gate_3c_command(state: FlowState) -> str:
+    """Build the gate 3C command: record user approval of the rendered dashboard layout (Pass 3 critique)."""
+    looker_project = _resolved(state.looker_project_name, _PLACEHOLDER_LOOKER_PROJECT)
+    return f"demo-create lookml approve-critique --looker-project {looker_project}"
 
-    The explore is guessed the same way ``agent create`` guesses it -- first
-    generated table, else the model name -- so that the command an agent is
-    shown produces the same agent as running the command with the flag omitted.
 
-    ``--dashboards-dir`` is used rather than ``--dashboard-file``: the golden
-    queries come from *every* dashboard tile, and the individual filenames are
-    not recorded in state.
-
-    Args:
-        state: Current flow state.
-
-    Returns:
-        A literal ``demo-create agent create`` invocation.
-    """
-    model = _resolved(state.lookml_model_name, _PLACEHOLDER_MODEL)
+def _resolve_primary_explore(state: FlowState) -> str | None:
+    """Resolve the primary explore name from state, preferring primary_explore_name over fct_ tables."""
+    if state.primary_explore_name:
+        return state.primary_explore_name
     tables = state.generated_tables or state.existing_tables
-    explore = _resolved(tables[0] if tables else None, _PLACEHOLDER_EXPLORE)
+    if not tables:
+        return None
+    fact_tables = [t for t in tables if t.startswith("fct_")]
+    return fact_tables[0] if fact_tables else tables[0]
+
+
+def _gate_4_command(state: FlowState) -> str:
+    """Build the gate 4 command: provision the CA agent and ground it (or pass --skip)."""
+    model = _resolved(state.lookml_model_name, _PLACEHOLDER_MODEL)
+    explore = _resolved(_resolve_primary_explore(state), _PLACEHOLDER_EXPLORE)
     command = f"demo-create agent create --model {model} --explore {explore}"
     if state.lookml_output_dir is not None:
         command += f" --dashboards-dir {Path(state.lookml_output_dir) / _DASHBOARDS_SUBDIR}"
@@ -269,16 +289,15 @@ def _gate_4_command(state: FlowState) -> str:
 
 
 def _gate_5_command(state: FlowState) -> str:
-    """Build the gate 5 command: publish the agent to Gemini Enterprise.
-
-    Args:
-        state: Current flow state.
-
-    Returns:
-        A literal ``demo-create agent publish`` invocation.
-    """
+    """Build the gate 5 command: publish the agent to Gemini Enterprise (or pass --skip)."""
     agent_id = _resolved(state.ca_agent_id, _PLACEHOLDER_AGENT_ID)
     return f"demo-create agent publish --agent-id {agent_id}"
+
+
+def _gate_6_command(state: FlowState) -> str:
+    """Build the gate 6 command: scaffold the external embedded analytics portal (or pass --skip)."""
+    looker_project = _resolved(state.looker_project_name, _PLACEHOLDER_LOOKER_PROJECT)
+    return f"demo-create embed scaffold --looker-project {looker_project}"
 
 
 # ---------------------------------------------------------------------------
@@ -292,7 +311,7 @@ class Gate:
 
     Attributes:
         number: Position in the pipeline, contiguous from 0.
-        id: Stable machine-readable identifier, e.g. ``"gate_2_model"``. Safe
+        id: Stable machine-readable identifier, e.g. ``"gate_2a_model"``. Safe
             to branch on; the ``title`` is not.
         title: Short human-readable name.
         requires_human_confirmation: Whether an orchestrator must pause and ask
@@ -387,82 +406,148 @@ class GateStatus:
 GATES: Final[tuple[Gate, ...]] = (
     Gate(
         number=0,
-        id="gate_0_environment",
-        title="Environment audit & 4-target confirmation",
-        requires_human_confirmation=True,
-        human_checkpoint=(
-            "Confirm all four targets before anything else runs: the GCP user account, the target Google Cloud "
-            "project, the Looker instance / OAuth account, and the Looker database connection name."
-        ),
-        _is_complete=_gate_0_complete,
-        _command=_gate_0_command,
+        id="gate_0a_precheck",
+        title="Environment, credential & skill-tree audit",
+        requires_human_confirmation=False,
+        human_checkpoint=None,
+        _is_complete=_gate_0a_complete,
+        _command=_gate_0a_command,
     ),
     Gate(
         number=1,
-        id="gate_1_data",
-        title="Schema co-design, synthesis & BigQuery load",
+        id="gate_0b_confirm_targets",
+        title="4-target environment confirmation",
         requires_human_confirmation=True,
         human_checkpoint=(
-            "MANDATORY: Write out the full proposed schema (tables, columns, types, primary/foreign keys) and "
-            "Mermaid ERD diagram in visible chat text FIRST. Only AFTER rendering the schema in chat, call "
-            "ask_question to confirm user approval. Once approved, prioritize data-designer MCP tools "
-            "(validate_builder, preview_dataset, generate_dataset, export_to_bigquery) first, falling back to "
-            "demo-create data generate only if data-designer MCP is unavailable."
+            "Prompt the user via `ask_question` to confirm all four environment targets before designing schemas "
+            "or running any synthesis: (1) GCP user account, (2) target Google Cloud project ID, (3) Looker instance "
+            "/ OAuth account, and (4) Looker database connection name. Then record them with `demo-create confirm-targets`."
         ),
-        _is_complete=_gate_1_complete,
-        _command=_gate_1_command,
+        _is_complete=_gate_0b_complete,
+        _command=_gate_0b_command,
     ),
     Gate(
         number=2,
-        id="gate_2_model",
-        title="Semantic modeling & dashboard generation",
-        # No pause: the workflow's only branch here -- whether a 3NF snowflake
-        # schema needs NDT rollups -- is decided from the schema itself, by a
-        # subagent, not by asking the user.
+        id="gate_1a_propose_schema",
+        title="Schema blueprint authoring & 5-row micro-sample preview",
         requires_human_confirmation=False,
         human_checkpoint=None,
-        _is_complete=_gate_2_complete,
-        _command=_gate_2_command,
+        _is_complete=_gate_1a_complete,
+        _command=_gate_1a_command,
     ),
     Gate(
         number=3,
-        id="gate_3_deploy",
-        title="Dashboard polish, optimization, validation & production release",
+        id="gate_1b_approve_schema",
+        title="Schema ERD & target row volume approval",
         requires_human_confirmation=True,
         human_checkpoint=(
-            "MANDATORY: Ensure lookml-dashboard-designer has applied the 3-Pass Executive Polish protocol "
-            "(theme-inheriting text headers, centered legends, dual-axis formatting, transparent grids) and all "
-            "filtered measures are grounded via SELECT DISTINCT (lookml-filtered-measures). Then call ask_question "
-            "to confirm whether to run the LookML performance optimizer before validation and production release."
+            "MANDATORY: Write out the full proposed relational schema (tables, columns, types, primary/foreign keys), "
+            "Mermaid ERD diagram (`data.mermaid_erd`), and 5-row micro-sample preview (`data.samples`) directly in "
+            "visible chat text FIRST. Only AFTER rendering the schema and preview in chat, call `ask_question` to "
+            "confirm user approval and target row volume, then record approval via `demo-create data approve-schema`."
         ),
-        _is_complete=_gate_3_complete,
-        _command=_gate_3_command,
+        _is_complete=_gate_1b_complete,
+        _command=_gate_1b_command,
     ),
     Gate(
         number=4,
-        id="gate_4_agent",
-        title="Post-deploy screenshot critique & Conversational Analytics agent grounding",
+        id="gate_1c_generate_data",
+        title="Modular DAG synthesis & BigQuery load",
+        requires_human_confirmation=False,
+        human_checkpoint=None,
+        _is_complete=_gate_1c_complete,
+        _command=_gate_1c_command,
+    ),
+    Gate(
+        number=5,
+        id="gate_2a_lookml_model",
+        title="Semantic LookML modeling & draft dashboard scaffolding",
+        requires_human_confirmation=False,
+        human_checkpoint=None,
+        _is_complete=_gate_2a_complete,
+        _command=_gate_2a_command,
+    ),
+    Gate(
+        number=6,
+        id="gate_2b_certify_polish",
+        title="3-Pass Executive Dashboard Polish & filtered measure audit",
+        requires_human_confirmation=False,
+        human_checkpoint=None,
+        _is_complete=_gate_2b_complete,
+        _command=_gate_2b_command,
+    ),
+    Gate(
+        number=7,
+        id="gate_3a_optimize",
+        title="LookML Server Performance Optimizer gate",
         requires_human_confirmation=True,
         human_checkpoint=(
-            "MANDATORY POST-DEPLOY CRITIQUE: First, present the live deployed_dashboard_url in chat and call "
-            "ask_question inviting the user to share a screenshot for Pass 3 visual critique/refinement or approve "
-            "the dashboard as-is. Once approved, confirm whether to provision a Conversational Analytics agent "
-            "grounded with golden queries extracted from the dashboard tiles."
+            "Call `ask_question` to confirm whether to run the Google Cloud Looker Server Performance Optimizer "
+            "(`demo-create lookml optimize --lookml-dir <dir>`) or skip optimization "
+            "(`demo-create lookml optimize --lookml-dir <dir> --skip`)."
+        ),
+        _is_complete=_gate_3a_complete,
+        _command=_gate_3a_command,
+    ),
+    Gate(
+        number=8,
+        id="gate_3b_deploy",
+        title="Pre-deployment LookML validation, query testing & production release",
+        requires_human_confirmation=False,
+        human_checkpoint=None,
+        _is_complete=_gate_3b_complete,
+        _command=_gate_3b_command,
+    ),
+    Gate(
+        number=9,
+        id="gate_3c_critique",
+        title="Post-deploy dashboard screenshot critique (Pass 3)",
+        requires_human_confirmation=True,
+        human_checkpoint=(
+            "MANDATORY POST-DEPLOY CRITIQUE: Present the live `deployed_dashboard_url` in chat and call `ask_question` "
+            "inviting the user to upload a screenshot for Pass 3 visual critique/refinement or approve the dashboard "
+            "layout as-is. Once approved, run `demo-create lookml approve-critique`."
+        ),
+        _is_complete=_gate_3c_complete,
+        _command=_gate_3c_command,
+    ),
+    Gate(
+        number=10,
+        id="gate_4_agent",
+        title="Conversational Analytics agent provisioning & golden queries",
+        requires_human_confirmation=True,
+        human_checkpoint=(
+            "Call `ask_question` to confirm whether to provision a Looker Conversational Analytics agent grounded "
+            "with golden queries extracted from the dashboard tiles (`demo-create agent create ...`) or skip "
+            "(`demo-create agent create --skip`)."
         ),
         _is_complete=_gate_4_complete,
         _command=_gate_4_command,
     ),
     Gate(
-        number=5,
+        number=11,
         id="gate_5_publish",
         title="Gemini Enterprise publishing",
         requires_human_confirmation=True,
         human_checkpoint=(
-            "Confirm that the Conversational Analytics agent should be published to Gemini Enterprise, which may "
-            "also patch Looker settings and grant the Looker service account an IAM role."
+            "Call `ask_question` to confirm whether the Conversational Analytics agent should be published to "
+            "Gemini Enterprise (`demo-create agent publish --agent-id <id>`) or skipped "
+            "(`demo-create agent publish --skip`)."
         ),
         _is_complete=_gate_5_complete,
         _command=_gate_5_command,
+    ),
+    Gate(
+        number=12,
+        id="gate_6_embed",
+        title="External Embedded Analytics portal scaffolding",
+        requires_human_confirmation=True,
+        human_checkpoint=(
+            "Call `ask_question` to confirm whether to scaffold the external branded embedded analytics portal "
+            "(`demo-create embed scaffold --looker-project <project>`) or skip (`demo-create embed scaffold --skip`)."
+        ),
+        _is_complete=_gate_6_complete,
+        _command=_gate_6_command,
     ),
 )
 
@@ -535,3 +620,61 @@ def is_pipeline_complete(state: FlowState) -> bool:
         True when no gate remains incomplete.
     """
     return current_gate(state) is None
+
+
+_COMMAND_TO_GATE_ID: Final[dict[str, str]] = {
+    "pre-check": "gate_0a_precheck",
+    "confirm-targets": "gate_0b_confirm_targets",
+    "data propose-schema": "gate_1a_propose_schema",
+    "data approve-schema": "gate_1b_approve_schema",
+    "data generate": "gate_1c_generate_data",
+    "data upload": "gate_1c_generate_data",
+    "lookml model": "gate_2a_lookml_model",
+    "lookml certify-polish": "gate_2b_certify_polish",
+    "lookml optimize": "gate_3a_optimize",
+    "lookml deploy": "gate_3b_deploy",
+    "lookml approve-critique": "gate_3c_critique",
+    "agent create": "gate_4_agent",
+    "agent publish": "gate_5_publish",
+    "ge publish": "gate_5_publish",
+    "embed scaffold": "gate_6_embed",
+}
+
+
+def attach_next_gate_action(result: Any, state: FlowState) -> Any:
+    """Populate ``result.next_actions`` from the first incomplete gate at or after
+    the command's own stage so command envelopes and ``demo-create status --json``
+    share one source of truth.
+
+    Args:
+        result: A :class:`~looker_demo_cli.output.CommandResult` instance.
+        state: The updated :class:`FlowState`.
+
+    Returns:
+        The mutated ``result`` for chaining.
+    """
+    cmd_name = getattr(result, "command", "")
+    gate_id = _COMMAND_TO_GATE_ID.get(cmd_name)
+    start_idx = 0
+    if gate_id is not None:
+        for idx, g in enumerate(GATES):
+            if g.id == gate_id:
+                start_idx = idx
+                break
+
+    nxt: Gate | None = None
+    for gate in GATES[start_idx:]:
+        if not gate.is_complete(state):
+            nxt = gate
+            break
+
+    if nxt is not None:
+        result.add_next_action(
+            f"Gate {nxt.number} ({nxt.id}): {nxt.title}",
+            nxt.command(state),
+            gate=nxt.number,
+            requires_human_confirmation=nxt.requires_human_confirmation,
+        )
+    return result
+
+

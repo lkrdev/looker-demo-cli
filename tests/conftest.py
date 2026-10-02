@@ -1,60 +1,19 @@
-"""Shared pytest fixtures for the ``looker-demo-cli`` test suite.
-
-This module provides the in-memory fakes and isolation fixtures that let every
-CLI command be exercised via :class:`typer.testing.CliRunner` with **zero
-network access, zero subprocess spawning, and zero host dependencies**.
-
-Three external boundaries are faked here. They are the same three boundaries
-formalized as ``Protocol`` ports in :mod:`looker_demo_cli.ports`:
-
-===================  ==========================================================
-Boundary             Fake
-===================  ==========================================================
-Looker REST API      :class:`FakeLookerApi`   (patches ``get_looker_auth_context``)
-BigQuery             :class:`FakeBigQueryHelper` (patches ``BigQueryHelper``)
-Shell / subprocess   :class:`FakeShellRunner` (patches ``subprocess.run``)
-===================  ==========================================================
-
-The fakes are installed via the :func:`patch_cli` fixture, which replaces a
-symbol in *every* command module that holds it. Tests therefore never name the
-file a command currently lives in -- the coupling that broke every one of them
-when the commands moved out of ``cli.py``. The fake classes are real classes
-rather than ``MagicMock`` so that a signature change fails loudly.
-"""
+"""Shared pytest fixtures and in-memory fakes for the ``looker-demo-cli`` test suite."""
 
 from __future__ import annotations
 
 import importlib
+import json
 import os
+import shutil
 from pathlib import Path
 from typing import Any
 
 import pytest
 from typer.testing import CliRunner
 
-# ---------------------------------------------------------------------------
-# Collection-time credential isolation
-# ---------------------------------------------------------------------------
-#
-# This MUST run at conftest import time, before any `looker_demo_cli` module is
-# imported anywhere in the session.
-#
-# `looker_demo_cli/config.py` freezes module-level constants from the
-# environment at *import* time::
-#
-#     DEFAULT_GCP_PROJECT = os.getenv("GOOGLE_CLOUD_PROJECT", "")
-#
-# Those constants are then baked into Typer option defaults, which are
-# themselves evaluated at decoration time. By the time a function-scoped
-# fixture could call `monkeypatch.delenv`, the value is already captured and
-# unchangeable. A developer with `GOOGLE_CLOUD_PROJECT` exported would
-# therefore get different CLI defaults than CI, silently.
-#
-# Stripping here -- at collection, before the first import -- makes the frozen
-# constants deterministic for every test in the session.
-#
-# Still required: `config.py` reads the environment at import time, so the
-# stripping must happen before any `looker_demo_cli` import, not in a fixture.
+# Strip credential env vars at collection time before `looker_demo_cli.config`
+# freezes module-level defaults at import time.
 _CREDENTIAL_ENV_VARS = (
     "GOOGLE_CLOUD_PROJECT",
     "GOOGLE_APPLICATION_CREDENTIALS",
@@ -67,21 +26,44 @@ _CREDENTIAL_ENV_VARS = (
 for _var in _CREDENTIAL_ENV_VARS:
     os.environ.pop(_var, None)
 
+
 # ---------------------------------------------------------------------------
-# Environment isolation
+# Shared test helpers
+# ---------------------------------------------------------------------------
+
+
+def envelope(result: Any) -> dict[str, Any]:
+    """Parse the JSON envelope written to ``result.stdout`` under ``--json``."""
+    return json.loads(result.stdout)
+
+
+def read_state(cwd: Path) -> dict[str, Any]:
+    """Read the ``.demo-state.json`` file persisted into ``cwd``."""
+    from looker_demo_cli.state import STATE_FILE_NAME
+
+    path = cwd / STATE_FILE_NAME
+    assert path.exists(), f"Expected {path} to exist in {cwd}"
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+# ---------------------------------------------------------------------------
+# Environment & state isolation
 # ---------------------------------------------------------------------------
 
 
 @pytest.fixture(autouse=True)
-def _stable_console_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Pin Rich's rendering so captured output is deterministic.
+def _reset_json_mode():
+    """Reset the ``--json`` ContextVar before and after each test."""
+    from looker_demo_cli.output import set_json_mode
 
-    ``looker_demo_cli.utils.console.console`` is a module-level ``Console()``
-    singleton constructed at import time. Rich auto-detects terminal width and
-    colour support, which makes assertions on captured output flaky across
-    machines and CI runners. Forcing a wide, dumb, colourless terminal keeps
-    output stable and prevents mid-word line wrapping in assertions.
-    """
+    set_json_mode(False)
+    yield
+    set_json_mode(False)
+
+
+@pytest.fixture(autouse=True)
+def _stable_console_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pin Rich rendering width and disable ANSI color for deterministic output."""
     monkeypatch.setenv("COLUMNS", "200")
     monkeypatch.setenv("TERM", "dumb")
     monkeypatch.setenv("NO_COLOR", "1")
@@ -90,50 +72,21 @@ def _stable_console_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture(autouse=True)
 def isolated_cwd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Run every test in a throwaway working directory.
-
-    Nearly every command calls ``load_flow_state()`` / ``save_flow_state()``,
-    which resolve ``.demo-state.json`` relative to :func:`Path.cwd`. Without
-    this fixture the test suite would read and clobber the state file of the
-    repository it is running in.
-
-    Returns:
-        The temporary directory that is now the process working directory.
-    """
+    """Run every test in an isolated temporary working directory."""
     monkeypatch.chdir(tmp_path)
     return tmp_path
 
 
 @pytest.fixture(autouse=True)
 def _no_ambient_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Re-strip credential env vars for every test.
-
-    The module-level strip above handles import-time constants. This fixture
-    additionally protects against a test (or imported library) re-setting a
-    variable mid-session and leaking it into a later test.
-    """
+    """Re-strip credential env vars for every test."""
     for var in _CREDENTIAL_ENV_VARS:
         monkeypatch.delenv(var, raising=False)
 
 
 @pytest.fixture
 def patched_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Redirect :func:`Path.home` to an empty temporary directory.
-
-    Several commands derive destructive default paths from the real home
-    directory -- ``embed scaffold`` defaults ``--target-dir`` to
-    ``~/looker-embed-<project>``, and ``data generate`` / ``lookml model``
-    default their output under ``~/scratch/demo_create/``. A test that exercises
-    those defaults without this fixture writes into the developer's actual home.
-
-    Note this does **not** retroactively affect ``looker_demo_cli.config``,
-    whose ``HOME_DIR``-derived constants are frozen at import time; it only
-    covers runtime ``Path.home()`` calls.
-
-    Returns:
-        The temporary directory now standing in for ``$HOME``. Assert it is
-        still empty at the end of a test to prove nothing escaped.
-    """
+    """Redirect ``Path.home()`` to an empty temporary directory."""
     fake_home = tmp_path / "fake-home"
     fake_home.mkdir()
     monkeypatch.setattr(Path, "home", classmethod(lambda _cls: fake_home))
@@ -141,13 +94,9 @@ def patched_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 # ---------------------------------------------------------------------------
-# Patching command-module symbols
+# Command-module symbol patching & CLI invocation
 # ---------------------------------------------------------------------------
 
-#: Every module that pulls service functions into its namespace at import time.
-#: Order is irrelevant -- ``patch_cli`` patches *all* modules that hold the
-#: name, which is what makes it correct when two command groups import the same
-#: service.
 _COMMAND_MODULES = (
     "looker_demo_cli.cli",
     "looker_demo_cli.context",
@@ -164,24 +113,7 @@ _COMMAND_MODULES = (
 
 @pytest.fixture
 def patch_cli(monkeypatch: pytest.MonkeyPatch):
-    """Return a callable that replaces a symbol in every command module holding it.
-
-    Command modules import service functions **by value** at import time, so
-    patching the defining module has no effect -- the name the command body
-    resolves is the local one.
-
-    Searching :data:`_COMMAND_MODULES` rather than naming a single module is
-    deliberate. It keeps tests from encoding *which file* a command currently
-    lives in, which is exactly the coupling that broke every one of these tests
-    when the commands moved out of ``cli.py``. It also handles the case where
-    two groups import the same service, where patching one site silently leaves
-    the other live.
-
-    Raises:
-        AttributeError: No command module defines the name. This preserves the
-            protection of ``monkeypatch.setattr(..., raising=True)``: a typo in
-            a symbol name fails loudly instead of silently patching nothing.
-    """
+    """Replace a symbol across all command modules that imported it by value."""
 
     def _patch(name: str, value: Any) -> Any:
         patched = []
@@ -200,25 +132,15 @@ def patch_cli(monkeypatch: pytest.MonkeyPatch):
     return _patch
 
 
-# ---------------------------------------------------------------------------
-# CLI invocation
-# ---------------------------------------------------------------------------
-
-
 @pytest.fixture
 def runner() -> CliRunner:
-    """A Typer ``CliRunner`` used to drive commands in-process."""
+    """Return a Typer ``CliRunner``."""
     return CliRunner()
 
 
 @pytest.fixture
 def invoke(runner: CliRunner):
-    """Return a callable that invokes the ``demo-create`` app with ``args``.
-
-    Example:
-        >>> result = invoke(["data", "inspect", "--json"])
-        >>> assert result.exit_code == 1
-    """
+    """Return a callable that invokes the ``demo-create`` app with ``args``."""
     from looker_demo_cli.cli import app
 
     def _invoke(args: list[str], **kwargs: Any):
@@ -233,18 +155,7 @@ def invoke(runner: CliRunner):
 
 
 class FakeLookerApi:
-    """In-memory stand-in for the Looker REST API.
-
-    Commands obtain credentials through ``get_looker_auth_context()``, which
-    returns an ``(headers, base_url)`` tuple. Installing this fake makes that
-    call succeed without touching ``~/.lkr/auth.db`` or the network.
-
-    Attributes:
-        base_url: The instance URL reported to the command under test.
-        headers: The auth headers reported to the command under test.
-        responses: Maps ``(method, url_suffix)`` to a canned JSON payload.
-        calls: Ordered log of every request the code under test attempted.
-    """
+    """In-memory stand-in for the Looker REST API."""
 
     def __init__(self, base_url: str = "https://fake.cloud.looker.com", authenticated: bool = True):
         self.base_url = base_url if authenticated else ""
@@ -257,7 +168,7 @@ class FakeLookerApi:
         return self.headers, self.base_url
 
     def stub(self, method: str, url_suffix: str, payload: Any) -> None:
-        """Register a canned response for a request the command will make."""
+        """Register a canned response for a request."""
         self.responses[(method.upper(), url_suffix)] = payload
 
     def record(self, method: str, url: str) -> Any:
@@ -271,37 +182,25 @@ class FakeLookerApi:
 
 @pytest.fixture
 def fake_looker() -> FakeLookerApi:
-    """An authenticated :class:`FakeLookerApi` (not yet installed)."""
+    """An authenticated :class:`FakeLookerApi`."""
     return FakeLookerApi()
 
 
 @pytest.fixture
 def unauthenticated_looker() -> FakeLookerApi:
-    """A :class:`FakeLookerApi` reporting no configured instance.
-
-    Drives the ``No Looker instance URL configured`` error path that seven
-    separate commands duplicate today.
-    """
+    """A :class:`FakeLookerApi` reporting no configured instance."""
     return FakeLookerApi(authenticated=False)
 
 
 @pytest.fixture
 def install_looker_auth(monkeypatch: pytest.MonkeyPatch):
-    """Return a callable that patches ``get_looker_auth_context`` everywhere.
-
-    The symbol is imported into several modules by value, so patching the
-    definition alone is not enough -- each import site must be patched too.
-
-    ``looker_demo_cli.context`` is the important one: it is where every command
-    now resolves credentials. ``ge_service`` retains its own import because
-    ``ensure_gemini_enterprise_configured`` re-resolves internally.
-    """
+    """Patch ``get_looker_auth_context`` across all import sites."""
 
     def _install(fake: FakeLookerApi) -> FakeLookerApi:
-        targets = [
+        targets = (
             "looker_demo_cli.context",
             "looker_demo_cli.services.ge_service",
-        ]
+        )
         patched = 0
         for target in targets:
             module = importlib.import_module(target)
@@ -309,10 +208,7 @@ def install_looker_auth(monkeypatch: pytest.MonkeyPatch):
                 monkeypatch.setattr(module, "get_looker_auth_context", fake.auth_context)
                 patched += 1
         if not patched:
-            raise AttributeError(
-                "get_looker_auth_context was not found at any known import site; "
-                "the real resolver would run and hit the network."
-            )
+            raise AttributeError("get_looker_auth_context was not found at any known import site.")
         return fake
 
     return _install
@@ -343,7 +239,7 @@ class FakeTable:
 
 
 class FakeBigQueryClient:
-    """Stand-in for ``bigquery.Client`` exposing only what the CLI touches."""
+    """Stand-in for ``bigquery.Client``."""
 
     def __init__(self, tables: dict[str, FakeTable]):
         self._tables = tables
@@ -366,23 +262,10 @@ class FakeBigQueryClient:
 
 
 class FakeBigQueryHelper:
-    """In-memory replacement for :class:`~looker_demo_cli.utils.bigquery_client.BigQueryHelper`.
+    """In-memory replacement for ``BigQueryHelper``."""
 
-    The real helper calls ``google.auth.default()`` and constructs a live
-    ``bigquery.Client`` in ``__init__``, so it cannot be instantiated at all in
-    a hermetic environment. This fake records every mutation so tests can assert
-    on *intent* (which datasets/tables the command tried to create) rather than
-    on side effects.
-
-    Behavior is shaped through class attributes because the CLI constructs the
-    helper itself and tests never get a reference to the instance.
-    """
-
-    #: Dataset IDs that exist, mapped to the table IDs they contain.
     datasets: dict[str, list[str]] = {}
-    #: Table ID -> :class:`FakeTable`, consulted by ``client.get_table``.
     tables: dict[str, FakeTable] = {}
-    #: Row count reported by every ``load_parquet_table`` call.
     rows_per_load: int = 42
 
     def __init__(self, project_id: str = "fake-project", credentials: Any = None, location: str = "US"):
@@ -421,11 +304,37 @@ class FakeBigQueryHelper:
         self.loaded.append((dataset_id, table_name, Path(parquet_file), rows))
         return rows
 
+    def load_parquet_table_optimized(
+        self,
+        dataset_id: str,
+        table_name: str,
+        parquet_file: Path,
+        df_sample: Any = None,
+        partition_field: str | None = None,
+        clustering_fields: list[str] | None = None,
+    ) -> dict[str, Any]:
+        from looker_demo_cli.utils.bigquery_client import BigQueryOptimizationAdvisor
 
-#: Modules holding a ``BigQueryHelper`` reference that must be swapped for the
-#: fake. ``looker_demo_cli.context`` is the important one: ``AppContext.bigquery``
-#: defaults to a factory that resolves ``BigQueryHelper`` from that module's
-#: globals, so it is what every command now constructs through.
+        source = df_sample if df_sample is not None else Path(parquet_file)
+        part_col = partition_field or BigQueryOptimizationAdvisor.infer_partition_field(table_name, source)
+        cluster_cols = clustering_fields or BigQueryOptimizationAdvisor.infer_cluster_fields(
+            table_name, source, part_col
+        )
+        rows = self.load_parquet_table(
+            dataset_id,
+            table_name,
+            parquet_file,
+            clustering_fields=cluster_cols,
+            partition_field=part_col,
+        )
+        return {
+            "table_name": table_name,
+            "rows": rows,
+            "partition_field": part_col,
+            "clustering_fields": cluster_cols,
+        }
+
+
 _BIGQUERY_PATCH_TARGETS = (
     "looker_demo_cli.context",
     "looker_demo_cli.services.schema_service",
@@ -434,24 +343,7 @@ _BIGQUERY_PATCH_TARGETS = (
 
 @pytest.fixture
 def fake_bigquery(monkeypatch: pytest.MonkeyPatch):
-    """Install :class:`FakeBigQueryHelper` at every import site.
-
-    Yields the fake *class* (not an instance) because the CLI constructs the
-    helper itself. Tests shape behavior via the class attributes::
-
-        fake_bigquery.datasets = {"retail": ["orders"]}
-
-    State is reset before and after each test so class-level config cannot leak
-    between tests.
-
-    Raises:
-        AttributeError: No target module holds a ``BigQueryHelper``. This guard
-            replaces an earlier ``raising=False``, which turned a stale target
-            into *silence*: the patch would apply nowhere, the real helper would
-            be constructed, and it calls ``google.auth.default()`` in its
-            constructor. A hermetic test would have reached for real GCP
-            credentials and failed with something unrecognisable.
-    """
+    """Install :class:`FakeBigQueryHelper` at every import site."""
     FakeBigQueryHelper.datasets = {}
     FakeBigQueryHelper.tables = {}
     FakeBigQueryHelper.rows_per_load = 42
@@ -463,10 +355,7 @@ def fake_bigquery(monkeypatch: pytest.MonkeyPatch):
             monkeypatch.setattr(module, "BigQueryHelper", FakeBigQueryHelper)
             patched.append(target)
     if not patched:
-        raise AttributeError(
-            f"BigQueryHelper was not found in any of {_BIGQUERY_PATCH_TARGETS}; "
-            "the real client would be constructed and would try to authenticate."
-        )
+        raise AttributeError(f"BigQueryHelper was not found in any of {_BIGQUERY_PATCH_TARGETS}.")
 
     yield FakeBigQueryHelper
 
@@ -490,17 +379,7 @@ class FakeCompletedProcess:
 
 
 class FakeShellRunner:
-    """Records shell invocations instead of executing them.
-
-    The CLI shells out to ``gcloud``, ``lkr``, and ``uv``. Executing those for
-    real makes tests slow, non-hermetic, and capable of mutating the
-    developer's actual cloud resources.
-
-    Attributes:
-        calls: Ordered log of every command list/string passed to ``run``.
-        results: Maps a substring of the command to a canned result.
-        default_result: Returned when no ``results`` entry matches.
-    """
+    """Records shell invocations instead of executing them."""
 
     def __init__(self) -> None:
         self.calls: list[Any] = []
@@ -528,11 +407,7 @@ class FakeShellRunner:
 
 @pytest.fixture
 def fake_shell(monkeypatch: pytest.MonkeyPatch) -> FakeShellRunner:
-    """Install a :class:`FakeShellRunner` over ``subprocess.run``.
-
-    Patched at the ``subprocess`` module level so it covers every call site,
-    including those inside helpers the CLI delegates to.
-    """
+    """Install a :class:`FakeShellRunner` over ``subprocess.run``."""
     import subprocess
 
     fake = FakeShellRunner()
@@ -541,18 +416,13 @@ def fake_shell(monkeypatch: pytest.MonkeyPatch) -> FakeShellRunner:
 
 
 # ---------------------------------------------------------------------------
-# Filesystem sample data
+# Filesystem sample data & state fixture
 # ---------------------------------------------------------------------------
 
 
 @pytest.fixture
 def sample_parquet_dir(tmp_path: Path) -> Path:
-    """A directory of small, valid Parquet files forming a realistic star schema.
-
-    Exercises the PK/FK inference heuristics: ``dim_users`` and ``dim_products``
-    are dimensions with singular-to-plural foreign key relationships, and
-    ``fct_orders`` is a fact table referencing both.
-    """
+    """A directory of small Parquet files forming a star schema."""
     import pandas as pd
 
     out = tmp_path / "parquet"
@@ -574,12 +444,7 @@ def sample_parquet_dir(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def sample_lookml_dir(tmp_path: Path) -> Path:
-    """A minimal but structurally valid LookML project tree.
-
-    Contains one view with a primary key and a low-cardinality dimension, which
-    is exactly the shape the optimizer service looks for when deciding where to
-    add ``suggestable: no`` and static ``suggestions``.
-    """
+    """A minimal but structurally valid LookML project tree."""
     root = tmp_path / "lookml"
     (root / "views").mkdir(parents=True)
     (root / "models").mkdir()
@@ -616,11 +481,7 @@ explore: users {}
 
 @pytest.fixture
 def state_file(isolated_cwd: Path):
-    """Return a callable that writes a ``.demo-state.json`` into the test CWD.
-
-    Many commands read prior pipeline state to fill in omitted options. This
-    fixture makes that precondition explicit and greppable in each test.
-    """
+    """Write a ``.demo-state.json`` into the isolated test working directory."""
 
     def _write(**fields: Any) -> Path:
         from looker_demo_cli.state import STATE_FILE_NAME, FlowState
@@ -634,18 +495,11 @@ def state_file(isolated_cwd: Path):
 
 
 # ---------------------------------------------------------------------------
-# Host capability detection (for integration-marked tests)
+# Host capability detection (for integration tests)
 # ---------------------------------------------------------------------------
 
-
-def _binary_available(name: str) -> bool:
-    import shutil
-
-    return shutil.which(name) is not None
-
-
-requires_uv = pytest.mark.skipif(not _binary_available("uv"), reason="requires the `uv` binary on PATH")
-requires_gcloud = pytest.mark.skipif(not _binary_available("gcloud"), reason="requires the `gcloud` binary on PATH")
+requires_uv = pytest.mark.skipif(shutil.which("uv") is None, reason="requires the `uv` binary on PATH")
+requires_gcloud = pytest.mark.skipif(shutil.which("gcloud") is None, reason="requires the `gcloud` binary on PATH")
 
 
 @pytest.fixture(scope="session")
@@ -656,11 +510,7 @@ def repo_root() -> Path:
 
 @pytest.fixture(scope="session")
 def package_env() -> dict[str, str]:
-    """Environment for subprocess-based integration tests.
-
-    Ensures the package under test is importable in the child process even when
-    the suite runs from a directory other than the repo root.
-    """
+    """Environment for subprocess-based integration tests."""
     env = dict(os.environ)
     env["PYTHONPATH"] = str(Path(__file__).resolve().parent.parent)
     return env

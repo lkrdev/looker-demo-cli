@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -16,7 +17,8 @@ from looker_demo_cli.commands.env import render_env_tables
 from looker_demo_cli.commands.options import StateFileOption
 from looker_demo_cli.config import DEFAULT_GCP_PROJECT, GEMINI_SKILLS_DIR
 from looker_demo_cli.context import AppContext, get_context
-from looker_demo_cli.errors import AuthError
+from looker_demo_cli.errors import AuthError, StateError, missing_option
+from looker_demo_cli.gates import attach_next_gate_action
 from looker_demo_cli.output import CommandResult, ErrorDetail, emit
 from looker_demo_cli.precheck.env_checker import (
     RuntimeEnvironmentStatus,
@@ -38,6 +40,7 @@ from looker_demo_cli.precheck.looker_auth import (
 )
 from looker_demo_cli.precheck.mcp_checker import MCPStatus, check_mcp_servers, patch_mcp_config
 from looker_demo_cli.precheck.skills_organizer import SkillInstallStatus, audit_and_organize_skills
+from looker_demo_cli.state import FlowState
 from looker_demo_cli.utils.console import (
     console,
     print_banner,
@@ -50,16 +53,17 @@ from looker_demo_cli.utils.console import (
 def register(app: typer.Typer) -> None:
     """Register this module's root-level commands on the given app.
 
-    ``pre-check`` and ``skills`` are not a command *group* -- they sit directly
-    under ``demo-create`` -- so there is no ``typer.Typer`` to hand to
-    ``add_typer``. Registering here rather than decorating at definition keeps
-    the module free of a module-level dependency on the root app, which would
+    ``pre-check``, ``confirm-targets``, and ``skills`` are not a command *group* --
+    they sit directly under ``demo-create`` -- so there is no ``typer.Typer`` to
+    hand to ``add_typer``. Registering here rather than decorating at definition
+    keeps the module free of a module-level dependency on the root app, which would
     be a circular import.
 
     Args:
         app: The root ``demo-create`` Typer application.
     """
     app.command(name="pre-check")(pre_check)
+    app.command(name="confirm-targets")(confirm_targets)
     app.command(name="skills")(list_skills)
 
 
@@ -329,7 +333,7 @@ def _build_report(findings: _AuditFindings) -> dict[str, Any]:
     }
 
 
-def _build_json_result(findings: _AuditFindings) -> CommandResult:
+def _build_json_result(findings: _AuditFindings, state: FlowState) -> CommandResult:
     """Wrap the report in the standard envelope.
 
     Each blocker becomes its own ``errors[]`` entry rather than one collapsed
@@ -338,11 +342,12 @@ def _build_json_result(findings: _AuditFindings) -> CommandResult:
 
     Args:
         findings: The collected observations.
+        state: The updated flow state after recording the gate 0 verdict.
 
     Returns:
         A ``BLOCKED`` envelope (which exits with :class:`AuthError`'s code, 3)
         when anything blocks, otherwise a ``SUCCESS`` envelope carrying the
-        gate 1 follow-up.
+        next gate follow-up.
     """
     blocking_reasons = findings.blocking_reasons
     is_blocked = findings.is_blocked
@@ -363,11 +368,7 @@ def _build_json_result(findings: _AuditFindings) -> CommandResult:
         ],
     )
     if not is_blocked:
-        result.add_next_action(
-            "Confirm the four environment targets with the user, then design the schema",
-            gate=1,
-            requires_human_confirmation=True,
-        )
+        attach_next_gate_action(result, state)
     return result
 
 
@@ -455,8 +456,15 @@ def _render_mcp_section(mcp_statuses: list[MCPStatus]) -> None:
     t_mcp.add_column("Details")
 
     for m in mcp_statuses:
-        status_label = "[green]CONFIGURED[/green]" if m.is_configured else "[red]MISSING[/red]"
-        details = ", ".join(m.issues) if m.issues else "Ready"
+        if m.details.get("mode") == "cli_skill":
+            status_label = "[green]CLI-ONLY (PRUNED)[/green]"
+            details = "Migrated to direct CLI skill execution"
+        elif m.is_configured:
+            status_label = "[green]CONFIGURED[/green]"
+            details = ", ".join(m.issues) if m.issues else "Ready"
+        else:
+            status_label = "[yellow]DEPRECATED[/yellow]" if any("Deprecated" in i for i in m.issues) else "[red]MISSING[/red]"
+            details = ", ".join(m.issues) if m.issues else "Ready"
         t_mcp.add_row(m.server_name, status_label, details)
     console.print(t_mcp)
 
@@ -709,7 +717,7 @@ def pre_check(
     _persist_gate_zero_verdict(app_ctx, findings)
 
     if output_json:
-        return emit(_build_json_result(findings), json_output=True)
+        return emit(_build_json_result(findings, app_ctx.state), json_output=True)
 
     _render_human_report(findings, fix=fix)
 
@@ -717,6 +725,111 @@ def pre_check(
         _render_blocked_guidance(findings)
         # Matches the --json path: blocked means "re-authenticate", exit 3.
         raise typer.Exit(code=AuthError.exit_code)
+
+
+def confirm_targets(
+    ctx: typer.Context,
+    gcp_account: Annotated[str | None, typer.Option("--gcp-account", help="Confirmed GCP user account email")] = None,
+    gcp_project: Annotated[str | None, typer.Option("--gcp-project", help="Confirmed Google Cloud Project ID")] = None,
+    looker_account: Annotated[
+        str | None, typer.Option("--looker-account", help="Confirmed Looker OAuth account or instance alias")
+    ] = None,
+    connection: Annotated[
+        str | None, typer.Option("--connection", help="Confirmed Looker database connection name")
+    ] = None,
+    looker_project: Annotated[
+        str | None, typer.Option("--looker-project", help="Optional Looker project/model name")
+    ] = None,
+    instance_url: Annotated[str | None, typer.Option("--instance", help="Optional Looker instance URL")] = None,
+    output_json: Annotated[bool, typer.Option("--json", help="Emit the result envelope as JSON on stdout")] = False,
+    state_file: StateFileOption = None,
+):
+    """Record the 4 human-confirmed environment targets and initialize SPEC.md (Gate 0B).
+
+    Args:
+        ctx: Typer context carrying the resolved :class:`AppContext`.
+        gcp_account: Confirmed GCP user account email.
+        gcp_project: Confirmed Google Cloud Project ID.
+        looker_account: Confirmed Looker OAuth account or instance alias.
+        connection: Confirmed Looker database connection name.
+        looker_project: Optional Looker project/model name.
+        instance_url: Optional Looker instance URL.
+        output_json: Emit the JSON envelope on stdout.
+        state_file: Optional explicit path to ``.demo-state.json``.
+    """
+    app_ctx = get_context(ctx)
+    app_ctx.use_state_file(state_file)
+    app_ctx.set_json_mode(output_json)
+    state = app_ctx.state
+
+    if not state.precheck_passed:
+        raise StateError(
+            "Environment audit (`pre-check`) has not passed yet.",
+            remediation="Run `demo-create pre-check --fix` and resolve any auth blockers before confirming targets.",
+        )
+
+    resolved_project = gcp_project or state.gcp_project_id
+    resolved_conn = connection or state.looker_connection_name
+    resolved_gcp_acct = gcp_account or state.gcp_account
+    resolved_looker_acct = looker_account or state.looker_account
+
+    if not resolved_project:
+        raise missing_option("--gcp-project", purpose="the confirmed Google Cloud project ID")
+    if not resolved_conn:
+        raise missing_option("--connection", purpose="the confirmed Looker database connection name")
+
+    state.gcp_project_id = resolved_project
+    state.looker_connection_name = resolved_conn
+    state.gcp_account = resolved_gcp_acct
+    state.looker_account = resolved_looker_acct
+    state.targets_confirmed = True
+    if looker_project:
+        state.looker_project_name = looker_project
+        state.lookml_model_name = looker_project
+    if instance_url:
+        state.looker_instance_url = instance_url
+    saved_path = app_ctx.save_state()
+
+    spec_path = Path.cwd() / "SPEC.md"
+    if not spec_path.exists():
+        ts = datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%d %H:%M UTC")
+        spec_content = (
+            f"# {state.looker_project_name or state.domain_name or 'Looker Demo'} — Technical Specification (SPEC.md)\n\n"
+            f"> **Status**: Draft\n"
+            f"> **Last Updated**: {ts}\n\n"
+            "## 1. Demo Metadata & Confirmed Environment Targets\n\n"
+            "| Target | Confirmed Value |\n"
+            "| :--- | :--- |\n"
+            f"| **GCP Account** | `{resolved_gcp_acct or 'default'}` |\n"
+            f"| **GCP Project ID** | `{resolved_project}` |\n"
+            f"| **Looker Account / Instance** | `{resolved_looker_acct or state.looker_instance_url}` |\n"
+            f"| **Database Connection** | `{resolved_conn}` |\n"
+        )
+        spec_path.write_text(spec_content, encoding="utf-8")
+
+    result = attach_next_gate_action(
+        CommandResult.success(
+            "confirm-targets",
+            data={
+                "targets_confirmed": True,
+                "gcp_account": resolved_gcp_acct,
+                "gcp_project": resolved_project,
+                "looker_account": resolved_looker_acct,
+                "connection": resolved_conn,
+                "looker_project": state.looker_project_name,
+                "instance_url": state.looker_instance_url,
+                "spec_file": str(spec_path),
+                "state_file": str(saved_path),
+            },
+        ),
+        state,
+    )
+
+    def render(_: CommandResult) -> None:
+        print_success(f"Confirmed environment targets: project=`{resolved_project}`, connection=`{resolved_conn}`.")
+        print_info(f"Updated state saved to `{saved_path}`")
+
+    return emit(result, json_output=output_json, human_renderer=render)
 
 
 def list_skills(

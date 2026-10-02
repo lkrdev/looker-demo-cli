@@ -11,6 +11,7 @@ from looker_demo_cli.commands.options import StateFileOption
 from looker_demo_cli.context import get_context
 from looker_demo_cli.error_boundary import ErrorHandlingGroup
 from looker_demo_cli.errors import missing_option
+from looker_demo_cli.gates import attach_next_gate_action
 from looker_demo_cli.generators.embed_scaffolder import EmbedConfigOptions, EmbedScaffolder
 from looker_demo_cli.output import CommandResult, emit
 from looker_demo_cli.utils.console import print_info, print_success
@@ -37,6 +38,10 @@ def embed_scaffold(
     agent_id: Annotated[str | None, typer.Option("--agent-id", help="Looker CA Agent ID to embed")] = None,
     brand_name: Annotated[str | None, typer.Option("--brand-name", help="Customer brand display name")] = None,
     instance_url: Annotated[str | None, typer.Option("--instance", help="Looker instance URL")] = None,
+    skip: Annotated[
+        bool,
+        typer.Option("--skip", help="Skip external embed portal scaffolding and complete the pipeline"),
+    ] = False,
     output_json: Annotated[bool, typer.Option("--json", help="Emit the result envelope as JSON on stdout")] = False,
     state_file: StateFileOption = None,
 ):
@@ -53,6 +58,7 @@ def embed_scaffold(
         agent_id: Looker Conversational Analytics Agent ID to embed on /conversational-analytics.
         brand_name: Customer brand display name.
         instance_url: Looker instance URL baked into the generated ``.env``.
+        skip: Skip external embed portal scaffolding and complete the pipeline.
         output_json: Emit the JSON envelope on stdout.
         state_file: Optional explicit path to ``.demo-state.json``.
 
@@ -66,6 +72,27 @@ def embed_scaffold(
     app_ctx.use_state_file(state_file)
     app_ctx.set_json_mode(output_json)
     state = app_ctx.state
+
+    if skip:
+        state.embed_status = "skipped"
+        saved_path = app_ctx.save_state()
+        result = CommandResult.success(
+            "embed scaffold",
+            data={
+                "skipped": True,
+                "embed_status": "skipped",
+                "state_file": str(saved_path),
+            },
+        )
+        attach_next_gate_action(result, state)
+        return emit(
+            result,
+            json_output=output_json,
+            human_renderer=lambda _: print_info(
+                f"Skipped external embed portal scaffolding. Updated state saved to `{saved_path}`"
+            ),
+        )
+
     proj_name = looker_project or state.looker_project_name
     if not proj_name:
         # Everything below is named after this: the workspace directory, the
@@ -96,6 +123,7 @@ def embed_scaffold(
 
     scaffolded_dir = EmbedScaffolder.scaffold_demo_workspace(opts)
     state.embed_workspace_dir = scaffolded_dir
+    state.embed_status = "scaffolded"
     state.embed_portal_url = "http://localhost:8008"
     state.demo_scope = "external_embed"
     saved_path = app_ctx.save_state()
@@ -113,6 +141,7 @@ def embed_scaffold(
             "state_file": str(saved_path),
         },
     )
+    attach_next_gate_action(result, state)
 
     def render(_: CommandResult) -> None:
         print_success(f"External Embed Portal configured at: `{scaffolded_dir}`")

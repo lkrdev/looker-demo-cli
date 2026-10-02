@@ -10,7 +10,8 @@ import typer
 from looker_demo_cli.commands.options import StateFileOption
 from looker_demo_cli.context import AppContext, get_context
 from looker_demo_cli.error_boundary import ErrorHandlingGroup
-from looker_demo_cli.errors import RemoteApiError, missing_option
+from looker_demo_cli.errors import RemoteApiError, StateError, missing_option
+from looker_demo_cli.gates import _resolve_primary_explore, attach_next_gate_action
 from looker_demo_cli.output import CommandResult, ErrorDetail, emit
 from looker_demo_cli.services.agent_service import (
     extract_golden_queries_from_dashboard_id,
@@ -75,6 +76,7 @@ def publish_agent(
     account: str | None,
     instance_url: str | None,
     output_json: bool,
+    skip: bool = False,
 ) -> CommandResult:
     """Publish a CA agent to Gemini Enterprise.
 
@@ -94,6 +96,7 @@ def publish_agent(
         account: Saved ``lkr`` OAuth account alias.
         instance_url: Looker instance base URL.
         output_json: Emit the JSON envelope on stdout.
+        skip: Record decision to skip Gemini Enterprise publishing.
 
     Returns:
         The emitted result envelope.
@@ -104,6 +107,29 @@ def publish_agent(
         RemoteApiError: Gemini Enterprise rejected the publish.
     """
     state = app_ctx.state
+    if skip:
+        state.ge_publish_status = "skipped"
+        saved_path = app_ctx.save_state()
+        result = attach_next_gate_action(
+            CommandResult.success(
+                command,
+                data={
+                    "skipped": True,
+                    "published_to_ge": False,
+                    "ge_publish_status": "skipped",
+                    "state_file": str(saved_path),
+                },
+            ),
+            state,
+        )
+        return emit(
+            result,
+            json_output=output_json,
+            human_renderer=lambda _: print_info(
+                f"Skipped Gemini Enterprise publishing. Updated state saved to `{saved_path}`"
+            ),
+        )
+
     target_id = agent_id or state.ca_agent_id
     if not target_id:
         raise missing_option(
@@ -118,6 +144,8 @@ def publish_agent(
     app_ctx.set_state(state)
     published = publish_agent_to_ge(auth.base_url, target_id, auth.headers)
     state.published_to_ge = published
+    if published:
+        state.ge_publish_status = "published"
     saved_path = app_ctx.save_state()
 
     if not published:
@@ -134,15 +162,18 @@ def publish_agent(
             },
         )
 
-    result = CommandResult.success(
-        command,
-        data={
-            "agent_id": target_id,
-            "ge_configured": state.ge_configured,
-            "ge_instance_id": state.ge_instance_id,
-            "published_to_ge": True,
-            "state_file": str(saved_path),
-        },
+    result = attach_next_gate_action(
+        CommandResult.success(
+            command,
+            data={
+                "agent_id": target_id,
+                "ge_configured": state.ge_configured,
+                "ge_instance_id": state.ge_instance_id,
+                "published_to_ge": True,
+                "state_file": str(saved_path),
+            },
+        ),
+        state,
     )
 
     def render(_: CommandResult) -> None:
@@ -182,6 +213,10 @@ def agent_create(
         bool,
         typer.Option("--non-interactive", help="Run non-interactively without prompting for GE reconfigurations"),
     ] = False,
+    skip: Annotated[
+        bool,
+        typer.Option("--skip", help="Skip Conversational Analytics agent creation and advance to the next gate"),
+    ] = False,
     account: Annotated[
         str | None,
         typer.Option("--looker-account", help="Saved Looker OAuth account alias"),
@@ -203,6 +238,7 @@ def agent_create(
         instructions: Custom system prompt instructions.
         publish_ge: Also configure and publish to Gemini Enterprise.
         non_interactive: Never prompt during GE configuration.
+        skip: Skip Conversational Analytics agent creation and advance to the next gate.
         account: Saved ``lkr`` OAuth account alias.
         instance_url: Looker instance base URL.
         output_json: Emit the JSON envelope on stdout.
@@ -210,6 +246,7 @@ def agent_create(
 
     Raises:
         ConfigError: No LookML model could be resolved.
+        StateError: Post-deploy dashboard critique (Gate 3C) has not been approved.
         AuthError: No usable Looker credentials.
         RemoteApiError: Looker refused to provision the agent.
     """
@@ -218,6 +255,35 @@ def agent_create(
     app_ctx.set_json_mode(output_json)
 
     state = app_ctx.state
+    if state.precheck_passed and state.deployed_dashboard_url and not state.critique_approved:
+        raise StateError(
+            "Post-deploy dashboard screenshot critique has not been approved yet (Gate 3C).",
+            remediation="Present the live dashboard URL to the user for Pass 3 critique, then run `demo-create lookml approve-critique`.",
+        )
+
+    if skip:
+        state.ca_agent_status = "skipped"
+        state.ge_publish_status = "skipped"
+        saved_path = app_ctx.save_state()
+        result = attach_next_gate_action(
+            CommandResult.success(
+                "agent create",
+                data={
+                    "skipped": True,
+                    "ca_agent_status": "skipped",
+                    "state_file": str(saved_path),
+                },
+            ),
+            state,
+        )
+        return emit(
+            result,
+            json_output=output_json,
+            human_renderer=lambda _: print_info(
+                f"Skipped Conversational Analytics agent creation. Updated state saved to `{saved_path}`"
+            ),
+        )
+
     auth = app_ctx.looker_auth(instance_url, account)
     state.looker_instance_url = auth.base_url
 
@@ -228,10 +294,7 @@ def agent_create(
             purpose="the LookML model the agent queries",
             hint="Or run `demo-create lookml model` first, which records the model name it generated.",
         )
-    # The first generated table is the conventional base explore of a generated
-    # model; falling back to the model name after that matches the single-explore
-    # convention `lookml model` emits for a one-table dataset.
-    explore_name = explore or (state.generated_tables[0] if state.generated_tables else model_name)
+    explore_name = explore or _resolve_primary_explore(state) or model_name
 
     print_info(f"Provisioning Looker CA Agent for model `{model_name}` on explore `{explore_name}`...")
     agent_id = provision_ca_agent(
@@ -252,6 +315,7 @@ def agent_create(
 
     state.ca_agent_id = agent_id
     state.ca_agent_name = name or f"{model_name.replace('_', ' ').title()} Assistant"
+    state.ca_agent_status = "created"
 
     golden_queries: list[dict[str, Any]] = []
     if dashboard_id:
@@ -280,6 +344,8 @@ def agent_create(
         state = ensure_gemini_enterprise_configured(state, auth.headers, interactive=not non_interactive)
         app_ctx.set_state(state)
         state.published_to_ge = publish_agent_to_ge(auth.base_url, agent_id, auth.headers)
+        if state.published_to_ge:
+            state.ge_publish_status = "published"
 
     saved_path = app_ctx.save_state()
     chat_url = f"{auth.base_url}/conversational-analytics/agents/{agent_id}"
@@ -315,12 +381,7 @@ def agent_create(
     else:
         result = CommandResult.success("agent create", data=data)
         if not publish_ge:
-            result.add_next_action(
-                "Publish the agent to Gemini Enterprise",
-                f"demo-create agent publish --agent-id {agent_id}",
-                gate=5,
-                requires_human_confirmation=True,
-            )
+            attach_next_gate_action(result, state)
 
     def render(res: CommandResult) -> None:
         print_success(f"Conversational Analytics Agent Chat URL: {chat_url}")
@@ -407,9 +468,7 @@ def agent_golden_queries(
             extract_golden_queries_from_dashboards(
                 lookml_dir=project_dir,
                 default_model=model_name,
-                # The first generated table is the conventional base explore of a
-                # generated model, and is what `agent create` grounds on as well.
-                default_explore=explore or (state.generated_tables[0] if state.generated_tables else model_name),
+                default_explore=explore or _resolve_primary_explore(state) or model_name,
             )
         )
 
@@ -453,6 +512,10 @@ def agent_publish(
         bool,
         typer.Option("--non-interactive", help="Run non-interactively without prompting for GE reconfigurations"),
     ] = False,
+    skip: Annotated[
+        bool,
+        typer.Option("--skip", help="Skip Gemini Enterprise publishing and advance to the next gate"),
+    ] = False,
     account: Annotated[
         str | None,
         typer.Option("--looker-account", help="Saved Looker OAuth account alias"),
@@ -470,6 +533,7 @@ def agent_publish(
         ctx: Typer context carrying the resolved :class:`AppContext`.
         agent_id: Target CA agent. Falls back to the agent in prior state.
         non_interactive: Never prompt during GE configuration.
+        skip: Skip Gemini Enterprise publishing and advance to the next gate.
         account: Saved ``lkr`` OAuth account alias.
         instance_url: Looker instance base URL.
         output_json: Emit the JSON envelope on stdout.
@@ -491,4 +555,5 @@ def agent_publish(
         account=account,
         instance_url=instance_url,
         output_json=output_json,
+        skip=skip,
     )

@@ -23,17 +23,17 @@ SKILLS_CACHE_DIR = GEMINI_CONFIG_DIR / "cache" / "skills-repos"
 SYNTHETIC_DATA_GEN_REPO = Path(os.getenv("SYNTHETIC_DATA_GEN_PATH", str(HOME_DIR / "synthetic-data-generator")))
 LOOKER_EMBED_DEMO_REPO = Path(os.getenv("LOOKER_EMBED_DEMO_PATH", str(HOME_DIR / "looker-embed-demo")))
 
+# Deprecated DataDesigner / A/B testing skills actively pruned during pre-check --fix
+DEPRECATED_SKILLS: tuple[str, ...] = (
+    "data-designer",
+    "data-designer-architect",
+    "data-designer-engineer",
+    "data-designer-evaluator",
+    "vertex-ai",
+)
+
 # Remote Repositories for Automatic Skill Syncing
 SKILL_GIT_REPOSITORIES: dict[str, dict[str, Any]] = {
-    "synthetic-data-generator": {
-        "urls": [
-            "https://github.com/lkrdev/synthetic-data-generator.git",
-            "https://github.com/LukaFontanilla/synthetic-data-generator.git",
-        ],
-        "skills_subpath": "skills",
-        "env_var": "SYNTHETIC_DATA_GEN_PATH",
-        "local_default": HOME_DIR / "synthetic-data-generator",
-    },
     "looker-embed-demo": {
         "urls": [
             "https://github.com/lkrdev/looker-embed-demo.git",
@@ -56,10 +56,9 @@ SKILL_GIT_REPOSITORIES: dict[str, dict[str, Any]] = {
 # Intent-Based Skill Mappings (category -> skill_name -> (repo_key, relative_skill_subfolder))
 INTENT_SKILL_DEFINITIONS: dict[str, dict[str, tuple[str, str]]] = {
     "data-design": {
-        "data-designer": ("synthetic-data-generator", "data-designer"),
-        "data-designer-architect": ("synthetic-data-generator", "data-designer-architect"),
-        "data-designer-engineer": ("synthetic-data-generator", "data-designer-engineer"),
-        "data-designer-evaluator": ("synthetic-data-generator", "data-designer-evaluator"),
+        "synthetic-data-authoring": ("local_cli", "synthetic-data-authoring"),
+        "bigquery-metadata": ("local_cli", "bigquery-metadata"),
+        "knowledge-catalog-metadata": ("local_cli", "knowledge-catalog-metadata"),
     },
     "lookml": {
         "lkr-code-mode": ("lkr-cli", "lkr-code-mode"),

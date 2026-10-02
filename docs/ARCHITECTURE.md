@@ -223,12 +223,10 @@ I/O shell — load state, ask the gate model, emit the envelope.
 Purity is what buys the testing:
 
 - Every branch is reachable by constructing a `FlowState` in memory.
-- `tests/test_gates_command_validity.py` takes each generated command string,
+- `tests/test_gates.py` takes each generated command string,
   resolves it against the **real Click command tree** (`typer.main.get_command(app)`)
   and checks every flag against the target command's declared `Parameter.opts`.
-  It introspects; it never invokes. That is the only check that cannot drift:
-  `test_gates.py` pins the strings against literals written in the same sitting,
-  so a flag wrong in both places passes both.
+  It introspects; it never invokes. That is the only check that cannot drift.
 
 Two conventions worth knowing before you edit a gate:
 

@@ -111,9 +111,89 @@ def generated_dashboard(orders_table_spec: LookMLTableSpec) -> str:
 
 @pytest.mark.unit
 def test_generated_dashboard_applies_rounded_highcharts_geometry(generated_dashboard: str) -> None:
-    """Cartesian tiles carry the house-style ``borderRadius`` override."""
+    """Cartesian tiles carry rounded geometry, transparent chart surfaces, shadow tooltips, and bare Highcharts series_types."""
     assert "advanced_vis_config:" in generated_dashboard
-    assert '"chart": {"borderRadius": 8}' in generated_dashboard
+    assert '"chart": {"backgroundColor": "transparent", "borderRadius": 8}' in generated_dashboard
+    assert '"tooltip": {"borderRadius": 8, "shadow": true}' in generated_dashboard
+    assert "series_types:" in generated_dashboard
+    assert "fct_orders.count: column" in generated_dashboard
+    assert "fct_orders.count: looker_column" not in generated_dashboard
+
+
+@pytest.mark.unit
+def test_validator_catches_looker_wrapper_in_series_types() -> None:
+    """Highcharts crashes in the browser when series_types uses `looker_column` instead of `column`."""
+    from looker_demo_cli.services.validator_service import lint_dashboard_structure
+
+    bad_series_types = {
+        "dashboard": "bad_series",
+        "title": "Bad Series Types",
+        "elements": [
+            {
+                "title": "Combo Chart",
+                "type": "looker_line",
+                "fields": ["orders.created_month", "orders.total_revenue", "orders.count"],
+                "series_types": {
+                    "orders.total_revenue": "area",
+                    "orders.count": "looker_column",
+                },
+            }
+        ],
+    }
+    diagnostics = lint_dashboard_structure(bad_series_types)
+    assert len(diagnostics) == 1
+    assert "series_types['orders.count']: looker_column" in diagnostics[0]
+    assert "`column`" in diagnostics[0]
+
+
+@pytest.mark.unit
+def test_validator_catches_bare_highcharts_name_at_root_type() -> None:
+    """Element root `type` requires Looker wrapper names (`looker_column`), not bare `column`."""
+    from looker_demo_cli.services.validator_service import lint_dashboard_structure
+
+    bad_root_type = {
+        "dashboard": "bad_root",
+        "title": "Bad Root Type",
+        "elements": [
+            {
+                "title": "Column Chart",
+                "type": "column",
+                "fields": ["orders.category", "orders.count"],
+            }
+        ],
+    }
+    diagnostics = lint_dashboard_structure(bad_root_type)
+    assert len(diagnostics) == 1
+    assert "uses bare Highcharts `type: column` at the element root" in diagnostics[0]
+    assert "looker_column" in diagnostics[0]
+
+
+@pytest.mark.unit
+def test_generator_normalizes_looker_series_types_to_bare_highcharts() -> None:
+    """LookMLGenerator automatically strips `looker_` prefixes inside `series_types`."""
+    from looker_demo_cli.generators.lookml_generator import DashboardSpec, DashboardTileSpec, LookMLGenerator
+
+    gen = LookMLGenerator(project_id="proj", dataset_id="ds")
+    spec = DashboardSpec(
+        dashboard_name="test_dash",
+        title="Test Dashboard",
+        elements=[
+            DashboardTileSpec(
+                title="Combo",
+                name="combo",
+                model="m",
+                explore="e",
+                type="looker_line",
+                fields=["e.date", "e.rev", "e.cnt"],
+                series_types={"e.rev": "looker_area", "e.cnt": "looker_column"},
+            )
+        ],
+    )
+    rendered = gen.generate_dashboard_from_spec(spec)
+    assert "e.rev: area" in rendered
+    assert "e.cnt: column" in rendered
+    assert "e.rev: looker_area" not in rendered
+    assert "e.cnt: looker_column" not in rendered
 
 
 @pytest.mark.unit
@@ -271,6 +351,12 @@ def test_validator_warns_on_non_centered_legends_and_non_transparent_grids() -> 
                 "legend_position": "right",
             },
             {
+                "title": "Plain Pie",
+                "type": "looker_pie",
+                "legend_position": "center",
+                "advanced_vis_config": '{"chart": {"borderRadius": 8}}',
+            },
+            {
                 "title": "White Grid",
                 "type": "looker_grid",
                 "table_theme": "white",
@@ -278,10 +364,12 @@ def test_validator_warns_on_non_centered_legends_and_non_transparent_grids() -> 
         ],
     }
     warnings = lint_dashboard_warnings(unpolished_dash)
-    assert len(warnings) == 3
     assert any("hardcoded HTML background/gradient" in w for w in warnings)
     assert any("legend_position: right" in w for w in warnings)
+    assert any("missing `advanced_vis_config`" in w for w in warnings)
+    assert any("not configured as a donut" in w for w in warnings)
     assert any("table_theme: white" in w for w in warnings)
+    assert any("missing `series_cell_visualizations`" in w for w in warnings)
 
 
 @pytest.mark.unit

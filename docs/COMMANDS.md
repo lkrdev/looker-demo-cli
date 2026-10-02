@@ -40,6 +40,7 @@ Failures are reported by exit code, so a caller never has to parse prose:
 | :--- | :--- |
 | [`status`](#demo-create-status) | Report the completed gates, the current gate, and the exact next command. |
 | [`pre-check`](#demo-create-pre-check) | Audit GCP/ADC credentials, MCP server definitions, and agent skill folders. |
+| [`confirm-targets`](#demo-create-confirm-targets) | Record the 4 human-confirmed environment targets and initialize SPEC.md (Gate 0B). |
 | [`skills`](#demo-create-skills) | View and manage intent-based global agent skills. |
 | [`run-script`](#demo-create-run-script) | Execute a Python script using the CLI's bundled runtime and dependencies. |
 | [`python`](#demo-create-python) | Execute Python within the CLI's environment (e.g. `demo-create python -c '...'`). |
@@ -88,6 +89,27 @@ demo-create pre-check [OPTIONS]
 | `--fix` | Automatically install missing MCP configs and organize global skills |  |
 | `--json` | Emit the result envelope as JSON on stdout |  |
 | `--gcp-project` | Target Google Cloud Project ID |  |
+| `--state-file` | Path to .demo-state.json. Defaults to discovering it in the current directory. |  |
+
+---
+
+## `demo-create confirm-targets`
+
+Record the 4 human-confirmed environment targets and initialize SPEC.md (Gate 0B).
+
+```bash
+demo-create confirm-targets [OPTIONS]
+```
+
+| Option | Description | Default |
+| :--- | :--- | :--- |
+| `--gcp-account` | Confirmed GCP user account email |  |
+| `--gcp-project` | Confirmed Google Cloud Project ID |  |
+| `--looker-account` | Confirmed Looker OAuth account or instance alias |  |
+| `--connection` | Confirmed Looker database connection name |  |
+| `--looker-project` | Optional Looker project/model name |  |
+| `--instance` | Optional Looker instance URL |  |
+| `--json` | Emit the result envelope as JSON on stdout |  |
 | `--state-file` | Path to .demo-state.json. Defaults to discovering it in the current directory. |  |
 
 ---
@@ -159,6 +181,7 @@ demo-create agent create [OPTIONS]
 | `--instructions` | Custom system prompt instructions |  |
 | `--publish-ge` | Automatically configure and publish to Gemini Enterprise |  |
 | `--non-interactive` | Run non-interactively without prompting for GE reconfigurations |  |
+| `--skip` | Skip Conversational Analytics agent creation and advance to the next gate |  |
 | `--looker-account` | Saved Looker OAuth account alias |  |
 | `--instance` | Looker instance base URL |  |
 | `--json` | Emit the result envelope as JSON on stdout |  |
@@ -197,6 +220,7 @@ demo-create agent publish [OPTIONS]
 | :--- | :--- | :--- |
 | `--agent-id` | Target CA Agent ID to publish |  |
 | `--non-interactive` | Run non-interactively without prompting for GE reconfigurations |  |
+| `--skip` | Skip Gemini Enterprise publishing and advance to the next gate |  |
 | `--looker-account` | Saved Looker OAuth account alias |  |
 | `--instance` | Looker instance base URL |  |
 | `--json` | Emit the result envelope as JSON on stdout |  |
@@ -258,6 +282,7 @@ demo-create ge publish [OPTIONS]
 | :--- | :--- | :--- |
 | `--agent-id` | Target CA Agent ID to publish |  |
 | `--non-interactive` | Run non-interactively without prompting for GE reconfigurations |  |
+| `--skip` | Skip Gemini Enterprise publishing and advance to the next gate |  |
 | `--looker-account` | Saved Looker OAuth account alias |  |
 | `--instance` | Looker instance base URL |  |
 | `--json` | Emit the result envelope as JSON on stdout |  |
@@ -322,9 +347,27 @@ Design, synthesize, inspect, and upload BigQuery demo datasets.
 
 | Subcommand | Description |
 | :--- | :--- |
+| [`approve-schema`](#demo-create-data-approve-schema) | Record user approval of the proposed schema and target row volume (Gate 1B). |
 | [`generate`](#demo-create-data-generate) | Synthesize high-fidelity relational Parquet dataset tables locally. |
 | [`inspect`](#demo-create-data-inspect) | Inspect tables, schemas, and metadata in a BigQuery dataset. |
-| [`upload`](#demo-create-data-upload) | Upload local Parquet tables into a BigQuery dataset. |
+| [`propose-schema`](#demo-create-data-propose-schema) | Validate a schema blueprint and synthesize a 5-row micro-sample preview & Mermaid ERD (Gate 1A). |
+| [`upload`](#demo-create-data-upload) | Upload local Parquet tables into a BigQuery dataset via ADC with automated partitioning & clustering. |
+
+### `demo-create data approve-schema`
+
+Record user approval of the proposed schema and target row volume (Gate 1B).
+
+```bash
+demo-create data approve-schema [OPTIONS]
+```
+
+| Option | Description | Default |
+| :--- | :--- | :--- |
+| `--row-count` | Approved target fact row count | `5000` |
+| `--dataset` | Target BigQuery dataset ID |  |
+| `--schema-file` | Path to approved JSON DomainBlueprint schema file |  |
+| `--json` | Emit the result envelope as JSON on stdout |  |
+| `--state-file` | Path to .demo-state.json. Defaults to discovering it in the current directory. |  |
 
 ### `demo-create data generate`
 
@@ -339,9 +382,15 @@ demo-create data generate [OPTIONS]
 | `--domain` | Domain theme name (e.g. supply_chain, trucking_iot) | `logistics_analytics` |
 | `--row-count` | Target fact row count | `1000` |
 | `--output-dir` | Local directory to write Parquet files |  |
-| `--builder-script` | Path to DataDesigner Python builder script |  |
-| `--engine` | Synthesis engine priority: auto, data-designer, or fallback | `auto` |
-| `--upload` | Automatically upload synthesized Parquet tables to BigQuery |  |
+| `--schema-file` | Path to JSON DomainBlueprint schema specification |  |
+| `--script` | Path to LLM-authored Python generator script |  |
+| `--builder-script` | Path to DataDesigner or custom Python builder script |  |
+| `--engine` | Synthesis engine priority: modular-dag, auto, data-designer, or fallback | `modular-dag` |
+| `--preview` | Inspect sampled rows across generated tables without disk or BigQuery commit |  |
+| `--preview-rows`, `-n` | Number of sample rows to display in --preview mode | `5` |
+| `--validate-only` | Execute topological DAG and in-memory validation gates without uploading to BigQuery |  |
+| `--upload` | Automatically upload synthesized Parquet tables to BigQuery via ADC |  |
+| `--json-scorecard` | Include structured verification scorecard and emit JSON envelope on stdout |  |
 | `--gcp-project` | Target GCP Project ID if uploading |  |
 | `--dataset` | Target BigQuery dataset ID if uploading |  |
 | `--json` | Emit the result envelope as JSON on stdout |  |
@@ -363,9 +412,26 @@ demo-create data inspect [OPTIONS]
 | `--json` | Emit the result envelope as JSON on stdout |  |
 | `--state-file` | Path to .demo-state.json. Defaults to discovering it in the current directory. |  |
 
+### `demo-create data propose-schema`
+
+Validate a schema blueprint and synthesize a 5-row micro-sample preview & Mermaid ERD (Gate 1A).
+
+```bash
+demo-create data propose-schema [OPTIONS]
+```
+
+| Option | Description | Default |
+| :--- | :--- | :--- |
+| `--schema-file` | Path to JSON DomainBlueprint schema specification |  |
+| `--domain` | Domain theme name when generating a default blueprint |  |
+| `--preview`, `--no-preview` | Synthesize a 5-row micro-sample preview across tables | `true` |
+| `--preview-rows`, `-n` | Number of sample rows to include per table | `5` |
+| `--json` | Emit the result envelope as JSON on stdout |  |
+| `--state-file` | Path to .demo-state.json. Defaults to discovering it in the current directory. |  |
+
 ### `demo-create data upload`
 
-Upload local Parquet tables into a BigQuery dataset.
+Upload local Parquet tables into a BigQuery dataset via ADC with automated partitioning & clustering.
 
 ```bash
 demo-create data upload [OPTIONS]
@@ -377,6 +443,7 @@ demo-create data upload [OPTIONS]
 | `--dataset` | Target BigQuery dataset ID |  |
 | `--gcp-project` | Target GCP Project ID |  |
 | `--location` | BigQuery dataset location | `US` |
+| `--verify-only` | Verify tables already loaded in BigQuery and sync state without re-uploading Parquet files |  |
 | `--json` | Emit the result envelope as JSON on stdout |  |
 | `--state-file` | Path to .demo-state.json. Defaults to discovering it in the current directory. |  |
 
@@ -388,11 +455,43 @@ Generate LookML models from BigQuery/Knowledge Catalog or Parquet, and deploy.
 
 | Subcommand | Description |
 | :--- | :--- |
+| [`approve-critique`](#demo-create-lookml-approve-critique) | Record user approval of the post-deploy dashboard screenshot critique (Gate 3C). |
+| [`certify-polish`](#demo-create-lookml-certify-polish) | Audit dashboard LookML for 3-Pass Executive Polish and filtered measure distinct-value grounding (Gate 2B). |
 | [`clean-root`](#demo-create-lookml-clean-root) | Delete duplicate root-level LookML files that shadow their subfolder copies. |
 | [`deploy`](#demo-create-lookml-deploy) | Push local LookML to the dev workspace, validate it, and deploy to production. |
 | [`model`](#demo-create-lookml-model) | Generate LookML views, explores, and dashboards from BigQuery or Parquet. |
 | [`optimize`](#demo-create-lookml-optimize) | Patch staged LookML in place with Google Cloud server performance best practices. |
 | [`restore`](#demo-create-lookml-restore) | Restore LookML files from the `.backup_pre_opt` snapshot. |
+
+### `demo-create lookml approve-critique`
+
+Record user approval of the post-deploy dashboard screenshot critique (Gate 3C).
+
+```bash
+demo-create lookml approve-critique [OPTIONS]
+```
+
+| Option | Description | Default |
+| :--- | :--- | :--- |
+| `--looker-project` | Looker project name |  |
+| `--notes` | Optional visual critique approval notes |  |
+| `--json` | Emit the result envelope as JSON on stdout |  |
+| `--state-file` | Path to .demo-state.json. Defaults to discovering it in the current directory. |  |
+
+### `demo-create lookml certify-polish`
+
+Audit dashboard LookML for 3-Pass Executive Polish and filtered measure distinct-value grounding (Gate 2B).
+
+```bash
+demo-create lookml certify-polish [OPTIONS]
+```
+
+| Option | Description | Default |
+| :--- | :--- | :--- |
+| `--lookml-dir` | Directory containing LookML files |  |
+| `--strict` | Treat Executive Polish warnings as blocking validation errors |  |
+| `--json` | Emit the result envelope as JSON on stdout |  |
+| `--state-file` | Path to .demo-state.json. Defaults to discovering it in the current directory. |  |
 
 ### `demo-create lookml clean-root`
 
@@ -461,6 +560,7 @@ demo-create lookml optimize [OPTIONS]
 | Option | Description | Default |
 | :--- | :--- | :--- |
 | `--lookml-dir` | Directory containing LookML files |  |
+| `--skip` | Record decision to skip LookML server performance optimization |  |
 | `--json` | Emit the result envelope as JSON on stdout |  |
 | `--backup`, `--no-backup` | Snapshot LookML files into .backup_pre_opt before patching | `true` |
 | `--state-file` | Path to .demo-state.json. Defaults to discovering it in the current directory. |  |
@@ -505,5 +605,6 @@ demo-create embed scaffold [OPTIONS]
 | `--agent-id` | Looker CA Agent ID to embed |  |
 | `--brand-name` | Customer brand display name |  |
 | `--instance` | Looker instance URL |  |
+| `--skip` | Skip external embed portal scaffolding and complete the pipeline |  |
 | `--json` | Emit the result envelope as JSON on stdout |  |
 | `--state-file` | Path to .demo-state.json. Defaults to discovering it in the current directory. |  |

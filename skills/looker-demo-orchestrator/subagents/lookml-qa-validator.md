@@ -80,19 +80,7 @@ for err in errors:
 ```
 
 > [!IMPORTANT]
-> **Monty Sandbox Execution Rules & Function Cheat-Sheet**:
-> - Looker SDK methods are exposed directly as **bare top-level functions** in the sandbox.
-> - **DO NOT USE**: `globals()`, `sdk()`, `client = sdk()`, or `import looker_sdk` (these will raise `NameError` or `TypeError`).
-> - **RESTRICTED ENVIRONMENT - NO SYSTEM IMPORTS**:
->   - **NEVER IMPORT**: `import time`, `import os`, `import sys`, `import requests`, or external standard library modules (raises `ModuleNotFoundError: No module named 'time'`).
->   - Standard builtins (`len`, `range`, `print`, `dict`, `list`, `str`, `int`) are natively available.
->   - Do not call `time.sleep()`.
-> - **Available Top-Level Functions**:
->   - `validate_project(project_id="<project>")`: Validates project and returns `{"errors": [...], "project_digest": "..."}`.
->   - `run_inline_query(result_format="json", body={...})`: Executes query directly against the dev workspace.
->   - `all_project_files(project_id="<project>")`: Lists staged files in dev mode.
->   - `session()` and `update_session(body={"workspace_id": "dev"})`: Gets/updates session state.
-> - **Explore View Includes**: Ensure all `.explore.lkml` files include `include: "/views/*.view.lkml"` so Looker can resolve joined fields without throwing `Could not find a field named ...`.
+> **Monty Sandbox Execution Rules**: Follow **[`lkr-code-mode-reference.md`](../../resources/lkr-code-mode-reference.md)** — Looker SDK methods (`validate_project`, `run_inline_query`, `all_project_files`, `session`, `update_session`) are exposed directly as **bare top-level functions** in `lkr code-mode sandbox`. Never use `sdk()`, `globals()`, `import looker_sdk`, or system imports (`import time`, `import os`, `import sys`). Ensure all `.explore.lkml` files include `include: "/views/*.view.lkml"`.
 
 ### Phase 3: Exhaustive Dashboard Query Verification
 - Extract every inline query from all `*.dashboard.lookml` files.
