@@ -538,50 +538,74 @@ If a CA Agent was provisioned at Gate 10, check Looker GE settings (`demo-create
 
 ---
 
-## 6. External Embedded Portal Scaffolding (Gate 12: `gate_6_embed`)
+## 6. External Embedded Portal Scaffolding & Instance Provisioning (Gate 12: `gate_6_embed`)
 
 > [!IMPORTANT]
-> **Conditional Subagent Trigger**:
-> The **[`embed-portal-engineer`](subagents/embed-portal-engineer.md)** subagent is **ONLY spawned if the user explicitly confirms external embed portal creation** at Gate 12 (`gate_6_embed`).
+> **Conditional Subagent Trigger & Headless Service Account Requirement**:
+> 1. The **[`embed-portal-engineer`](subagents/embed-portal-engineer.md)** subagent is **ONLY spawned if the user explicitly confirms external embed portal creation** at Gate 12 (`gate_6_embed`).
+> 2. **Headless Backend Looker API Service Account Credentials vs Developer CLI OAuth**:
+>    - Personal developer CLI sessions (`~/.lkr/auth.db`) use short-lived interactive 3-legged OAuth, which **cannot** run headless backend SSO/cookieless session acquisition (`acquire_embed_cookieless_session`) or sudo impersonation on Looker Core.
+>    - Looker Core instances specifically require a headless **API Service Account credential pair** (`LOOKERSDK_CLIENT_ID` and `LOOKERSDK_CLIENT_SECRET`, created under Looker Admin $\to$ Users with no email login credentials) written to `backend/.env`.
+>    - Never silently assume developer OAuth works for the embed portal backend; always prompt for or confirm `--client-id` and `--client-secret` at Gate 12.
 
-### A. Gate 12 (`gate_6_embed`) — Interactive External Embed Confirmation Gate `[requires_human_confirmation=True]`
-Prompt the user via `ask_question`:
-- **Question**: "Would you like to scaffold an external branded embedded analytics portal (`looker-embed-demo`)?"
-- **Options**:
-  - `(Recommended) Scaffold external embed portal with custom brand theme and embedded chat`
-  - `Skip external portal scaffolding (internal Looker only)`
+### A. Gate 12 (`gate_6_embed`) — Interactive External Embed & Service Account Confirmation Gate `[requires_human_confirmation=True]`
+1. Prompt the user via `ask_question`:
+   - **Question**: "Would you like to scaffold an external branded embedded analytics portal (`looker-embed-demo`) and provision Looker instance embed settings?"
+   - **Options**:
+     - `(Recommended) Scaffold external embed portal, provision Looker group/folder/themes, and configure Service Account credentials`
+     - `Skip external portal scaffolding (internal Looker only)`
 
-- **If confirmed**: Run the Gate 12 CLI command and delegate frontend customization/build verification to **[`embed-portal-engineer`](subagents/embed-portal-engineer.md)**:
-  ```bash
-  demo-create embed scaffold --looker-project "${LOOKER_PROJECT}"
-  ```
-- **If skipped**: Record the skip decision in `.demo-state.json` via `--skip`:
-  ```bash
-  demo-create embed scaffold --skip
-  ```
+2. **If confirmed**:
+   - If `LOOKERSDK_CLIENT_ID` and `LOOKERSDK_CLIENT_SECRET` are not already provided, prompt the user for the Looker instance's **API Service Account** Client ID and Client Secret (for `backend/.env`).
+   - Run the Gate 12 CLI command (which executes the 6 Looker instance provisioning checks and hydrates the local workspace):
+     ```bash
+     demo-create embed scaffold \
+       --looker-project "${LOOKER_PROJECT}" \
+       --client-id "${LOOKERSDK_CLIENT_ID}" \
+       --client-secret "${LOOKERSDK_CLIENT_SECRET}"
+     ```
+   - Delegate frontend domain adaptation, group/folder synchronization verification, and build verification to **[`embed-portal-engineer`](subagents/embed-portal-engineer.md)**.
 
-### B. Procedural Delegation: `embed-portal-engineer` Subagent
-When external embed portal creation is confirmed, delegate brand styling and build verification to **[`embed-portal-engineer`](subagents/embed-portal-engineer.md)**:
+3. **If skipped**: Record the skip decision in `.demo-state.json` via `--skip`:
+   ```bash
+   demo-create embed scaffold --skip
+   ```
+
+### B. Mandatory 6-Point Instance Provisioning Verification Checklist
+Before releasing the embed portal URL (`http://localhost:8008`) or marking Gate 12 complete, the orchestrator **MUST confirm completion of all 6 Looker instance provisioning checks** (reported in the `demo-create embed scaffold --json` envelope and `.demo-state.json`, and detailed in [`setup-embed-demo`](../setup-embed-demo/SKILL.md)):
+
+1. **Service Account Auth (`sa_credentials_configured`)**: Headless Looker API Service Account `LOOKERSDK_CLIENT_ID` and `LOOKERSDK_CLIENT_SECRET` persisted in `<workspace_dir>/backend/.env` (with `.gitignore` verified).
+2. **Instance Admin & Embed Allowlist (`allowlist_configured`)**: `http://localhost:8008` and `https://localhost:8008` added to `domain_allowlist`, `embed_cookieless_v2: True` enabled via `PATCH /api/4.0/setting`, and `"brand"` user attribute ensured.
+3. **Dedicated Embed Group (`group_id`)**: `<Brand> Embed Users` group created (`can_add_to_content_metadata: True`) and granted `view` access on Shared Root (`content_metadata_id: "1"`).
+4. **Shared Subfolder & 2-Step Inheritance Access (`folder_id`)**: `<Brand> Dashboards` folder created under Shared Root (`parent_id: "1"`) and granted `view` access to `group_id` following the 2-step inheritance protocol (Shared Root `CM 1` first, then target folder `content_metadata_id`).
+5. **LookML Dashboard Move (`dashboard_moved`)**: LookML dashboard relocated directly into `folder_id` via `PUT /api/4.0/lookml_dashboards/move` (`{"method": "put", "dashboard_ids": ["<model>::<dashboard>"], "folder_id": "<folder_id>"}`) — **never** imported as a detached user dashboard via `import_lookml_dashboard`.
+6. **CA Agent Sharing & Brand Themes (`agent_shared`, `themes_created`)**: Conversational Analytics agent (`ca_agent_id`) shared with `group_id` via `create_content_metadata_access` (`permission_type="view"` on `agent.content_metadata_id`), and `<Brand>_Light` / `<Brand>_Dark` themes provisioned via `POST /api/4.0/themes` ([`embed-themes`](../embed-themes/SKILL.md)).
+
+### C. Procedural Delegation: `embed-portal-engineer` Subagent
+When external embed portal creation is confirmed, delegate domain copy adaptation, group/folder synchronization audit, brand styling, and build verification to **[`embed-portal-engineer`](subagents/embed-portal-engineer.md)**:
 
 ```yaml
 subagent:
   type: "skills/looker-demo-orchestrator/subagents/embed-portal-engineer.md"
-  prompt: "Scaffold external embed demo for {project_name}, configure .env (VITE_CHAT_AGENT_ID={ca_agent_id}, dashboard ID={dashboard_id}), customize brand styling in styles.css, and verify build."
+  prompt: "Verify Looker instance provisioning and group_id/folder_id synchronization for {project_name}, adapt domain branding and copy across Sidebar.tsx, LoginPage.tsx, Home.tsx, and SalesActivityFeed.tsx using the domain blueprint, customize CSS theme tokens in styles.css, and verify clean frontend build via pnpm run build."
   inputs:
     project_name: "{looker_project_name}"
     looker_instance_url: "{looker_instance_url}"
     dashboard_id: "{deployed_dashboard_id}"
     ca_agent_id: "{ca_agent_id}"
+    group_id: "{embed_group_id}"
+    folder_id: "{embed_folder_id}"
     brand_name: "{brand_name}"
     theme_colors: "{brand_theme_colors}"
     target_dir: "embed-portal/"
 ```
 
 The subagent:
-1. Clones/scaffolds `looker-embed-demo`.
-2. Configures `.env` with `VITE_LOOKER_HOST`, `VITE_DEFAULT_DASHBOARD_ID`, and `VITE_CHAT_AGENT_ID`.
-3. Customizes `src/constants.ts` and CSS variables in `src/styles.css`.
-4. Installs dependencies (`pnpm install` or `npm install`) in `frontend/` and runs `pnpm build` (or `npm run build`) to verify clean compilation.
+1. Runs or verifies `demo-create embed scaffold` and confirms `backend/.env` and `frontend/.env` are populated.
+2. Audits `group_id` (`["<group_id>"]`) and `folder_id` (`"<folder_id>"`) synchronization across `backend/app/models.py`, `frontend/src/config/constants.ts`, and `frontend/src/components/dialogs/UserDetailsDialog.tsx`.
+3. Adapts domain-specific copy, telemetry feed items, KPI labels, and branding across `Sidebar.tsx`, `LoginPage.tsx`, `Home.tsx`, and `SalesActivityFeed.tsx` (replacing eCommerce Levi's/order defaults with the domain blueprint).
+4. Customizes CSS variables in `frontend/src/styles.css` and verifies `<Brand>_Light` / `<Brand>_Dark` Looker themes.
+5. Installs dependencies (`pnpm install`) in `frontend/` and runs `pnpm run build` to verify zero TypeScript/JSX compilation errors.
 
 ---
 
@@ -631,7 +655,7 @@ When performing isolated operations or advancing through the 13-stage state mach
 | **`demo-create agent`** | `create` | **Gate 10** (`gate_4_agent`) | Creates CA Agent and grounds golden queries (or skips with `--skip`) | `--model`, `--explore`, `--dashboards-dir`, `--dashboard-id`, `--publish-ge`, `--skip`, `--json` |
 | | `golden-queries` | — | Extracts queries from dashboard files/IDs and links as Golden Queries | `--agent-id`, `--dashboard-id`, `--dashboards-dir`, `--json` |
 | | `publish` | **Gate 11** (`gate_5_publish`) | Verifies GE config and publishes CA Agent to Gemini Enterprise (or skips with `--skip`) | `--agent-id`, `--looker-account`, `--skip`, `--json` |
-| **`demo-create embed`** | `scaffold` | **Gate 12** (`gate_6_embed`) | Scaffolds React/Vite embed portal workspace with `.env` and theme tokens (or skips with `--skip`) | `--looker-project`, `--dashboard-id`, `--agent-id`, `--brand-name`, `--target-dir`, `--skip`, `--json` |
+| **`demo-create embed`** | `scaffold` | **Gate 12** (`gate_6_embed`) | Provisions Looker instance embed settings (group, folder, dashboard move, CA agent share, themes) and scaffolds React/Vite + FastAPI embed portal (or skips with `--skip`) | `--looker-project`, `--dashboard-id`, `--agent-id`, `--brand-name`, `--client-id`, `--client-secret`, `--looker-account`, `--target-dir`, `--skip`, `--json` |
 | **`demo-create ge`** | `status` | — | Displays current Looker Gemini enablement and GE config | `--looker-account`, `--json` |
 | | `configure` | — | Discovers GE apps on GCP, configures Looker GE settings, and grants IAM roles | `--app-id`, `--location`, `--gcp-project`, `--json` |
 | | `publish` | **Gate 11** (`gate_5_publish`) | Alias for `agent publish` (supports `--skip`) | `--agent-id`, `--looker-account`, `--skip`, `--json` |

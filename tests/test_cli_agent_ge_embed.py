@@ -31,7 +31,8 @@ def patched_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 @pytest.fixture
 def fake_scaffolder(patch_cli):
-    """Replace ``EmbedScaffolder`` with a recorder that writes nothing."""
+    """Replace ``EmbedScaffolder`` and ``provision_embed_instance`` with in-memory stubs."""
+    from looker_demo_cli.generators.embed_scaffolder import EmbedProvisioningResult
 
     class _FakeScaffolder:
         def __init__(self) -> None:
@@ -43,6 +44,14 @@ def fake_scaffolder(patch_cli):
 
     fake = _FakeScaffolder()
     patch_cli("EmbedScaffolder", fake)
+    patch_cli(
+        "provision_embed_instance",
+        lambda opts, headers=None: EmbedProvisioningResult(
+            group_id=opts.group_id,
+            folder_id=opts.folder_id,
+            sa_credentials_configured=bool(opts.client_id and opts.client_secret),
+        ),
+    )
     return fake
 
 
@@ -319,9 +328,22 @@ def test_agent_golden_queries_linking_empty_warning_and_missing_id(
 
 
 def test_embed_scaffold_state_and_flag_precedence(
-    invoke, fake_scaffolder, patched_home: Path, state_file, isolated_cwd: Path, tmp_path: Path
+    invoke,
+    fake_scaffolder,
+    patched_home: Path,
+    state_file,
+    isolated_cwd: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ):
-    """Covers embed scaffold from state, explicit flag overrides, JSON envelope, and default target dir."""
+    """Covers embed scaffold CLI flags/state, all 6 Looker 4.0 provisioning steps, and workspace hydration."""
+    from looker_demo_cli.generators import embed_scaffolder
+    from looker_demo_cli.generators.embed_scaffolder import (
+        EmbedConfigOptions,
+        EmbedScaffolder,
+        provision_embed_instance,
+    )
+
     dest = tmp_path / "portal"
     state_file(
         looker_project_name="retail_analytics",
@@ -341,16 +363,189 @@ def test_embed_scaffold_state_and_flag_precedence(
         "dashboard_id": "dash-77",
         "agent_id": "",
         "instance_url": "https://fake.cloud.looker.com",
+        "group_id": "8",
+        "folder_id": "1",
+        "themes_created": [],
+        "dashboard_moved": False,
+        "agent_shared": False,
+        "allowlist_configured": False,
+        "sa_credentials_configured": False,
         "state_file": str(isolated_cwd / STATE_FILE_NAME),
     }
 
-    default_res = invoke(["embed", "scaffold", "--brand-name", "Flag Brand", "--agent-id", "1042"])
+    default_res = invoke(
+        [
+            "embed",
+            "scaffold",
+            "--brand-name",
+            "Flag Brand",
+            "--agent-id",
+            "1042",
+            "--client-id",
+            "sa-id-123",
+            "--client-secret",
+            "sa-secret-456",
+        ]
+    )
     assert default_res.exit_code == 0
     assert "External Embed Portal configured at" in default_res.output
     opts = fake_scaffolder.captured[-1]
     assert opts.target_dir == patched_home / "looker-embed-retail_analytics"
     assert opts.brand_name == "Flag Brand"
     assert opts.agent_id == "1042"
+    assert opts.client_id == "sa-id-123"
+    assert opts.client_secret == "sa-secret-456"
+
+    # Verify all 6 Looker 4.0 provisioning steps & workspace file hydration
+    class _FakeSDK:
+        def __init__(self) -> None:
+            self.cm_updates: list[tuple[str, Any]] = []
+            self.cm_access_creations: list[Any] = []
+
+        def all_user_attributes(self) -> list[Any]:
+            return []
+
+        def create_user_attribute(self, body: Any) -> Any:
+            return {"id": "attr-brand", "name": "brand"}
+
+        def get_setting(self) -> dict[str, Any]:
+            return {"embed_config": {"domain_allowlist": []}}
+
+        def set_setting(self, body: Any) -> dict[str, Any]:
+            return body
+
+        def all_groups(self) -> list[Any]:
+            return []
+
+        def create_group(self, body: Any) -> dict[str, Any]:
+            return {"id": "42", "name": body.name}
+
+        def all_content_metadata_accesses(self, content_metadata_id: str) -> list[Any]:
+            return []
+
+        def create_content_metadata_access(self, body: Any) -> dict[str, Any]:
+            self.cm_access_creations.append(body)
+            return {"id": f"cma-{len(self.cm_access_creations)}"}
+
+        def all_folders(self) -> list[Any]:
+            return []
+
+        def search_folders(self, name: str, parent_id: str) -> list[Any]:
+            return []
+
+        def create_folder(self, body: Any) -> dict[str, Any]:
+            return {"id": "99", "name": body.name, "content_metadata_id": "199"}
+
+        def content_metadata(self, content_metadata_id: str) -> dict[str, Any]:
+            return {"id": content_metadata_id, "inherits": True}
+
+        def update_content_metadata(self, content_metadata_id: str, body: Any) -> dict[str, Any]:
+            self.cm_updates.append((content_metadata_id, body))
+            return {"id": content_metadata_id, "inherits": False}
+
+        def all_themes(self) -> list[Any]:
+            return []
+
+        def create_theme(self, body: Any) -> dict[str, Any]:
+            return {"id": "theme-1", "name": getattr(body, "name", "")}
+
+        def get_agent(self, agent_id: str) -> dict[str, Any]:
+            return {"id": agent_id, "content_metadata_id": "299"}
+
+    fake_sdk = _FakeSDK()
+    monkeypatch.setattr(embed_scaffolder, "get_looker_sdk", lambda **_kw: fake_sdk)
+    http_calls: list[tuple[str, str, Any]] = []
+
+    class _FakeResp:
+        def __init__(self, status_code: int = 200, data: Any = None) -> None:
+            self.status_code = status_code
+            self._data = data if data is not None else {}
+            self.text = "OK"
+
+        def json(self) -> Any:
+            return self._data
+
+    monkeypatch.setattr(
+        embed_scaffolder.requests,
+        "put",
+        lambda url, json=None, **_kw: (http_calls.append(("PUT", url, json)), _FakeResp(200))[1],
+    )
+    monkeypatch.setattr(
+        embed_scaffolder.requests,
+        "get",
+        lambda url, **_kw: _FakeResp(
+            200,
+            {"id": "1042", "content_metadata_id": "299"}
+            if "/conversational_agents/" in url
+            else [],
+        ),
+    )
+    monkeypatch.setattr(
+        embed_scaffolder.requests,
+        "post",
+        lambda url, json=None, **_kw: (http_calls.append(("POST", url, json)), _FakeResp(200))[1],
+    )
+
+    fake_cache = tmp_path / "cached_embed_repo"
+    (fake_cache / "lookml").mkdir(parents=True)
+    (fake_cache / "lookml" / "dummy.model.lkml").write_text("connection: 'dummy'\n", encoding="utf-8")
+    (fake_cache / ".agent" / "skills" / "setup-embed-demo" / "scripts").mkdir(parents=True)
+    (
+        fake_cache / ".agent" / "skills" / "setup-embed-demo" / "scripts" / "2_project_setup.md"
+    ).write_text("dummy\n", encoding="utf-8")
+    (fake_cache / "backend" / "app").mkdir(parents=True)
+    (fake_cache / "backend" / "app" / "models.py").write_text(
+        'group_ids: list[str] = ["8"]\n', encoding="utf-8"
+    )
+    (fake_cache / "frontend" / "src" / "config").mkdir(parents=True)
+    (fake_cache / "frontend" / "src" / "config" / "constants.ts").write_text(
+        'dashboardId: "embed_demo::brand_overview",\nexploreId: "embed_demo/order_items",\n'
+        'agentId: "ea1262d262ab43b1a9bb23152f25c236",\nfolderId: "12542",\ngroupIds: [\'8\'],\n',
+        encoding="utf-8",
+    )
+    (fake_cache / "frontend" / "src" / "components" / "dialogs").mkdir(parents=True)
+    (fake_cache / "frontend" / "src" / "components" / "dialogs" / "UserDetailsDialog.tsx").write_text(
+        "const g = ['8'];\n", encoding="utf-8"
+    )
+    (fake_cache / "frontend" / "src" / "pages").mkdir(parents=True)
+    (fake_cache / "frontend" / "src" / "pages" / "LoginPage.tsx").write_text(
+        "const b = \"Looker Embed (Levi's)\";\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(EmbedScaffolder, "_resolve_template_repo", classmethod(lambda _cls: fake_cache))
+    monkeypatch.setattr(embed_scaffolder.shutil, "which", lambda _cmd: None)
+
+    hydrated_dir = tmp_path / "hydrated_portal"
+    full_opts = EmbedConfigOptions(
+        demo_name="retail_analytics",
+        target_dir=hydrated_dir,
+        brand_name="Flag Brand",
+        brand_title="Flag Brand Intelligence Portal",
+        looker_instance_url="https://fake.cloud.looker.com",
+        looker_project_name="retail_analytics",
+        lookml_model_name="retail_model",
+        dashboard_id="retail_model::dash-77",
+        agent_id="1042",
+        explore_path="retail_model/orders",
+        client_id="sa-id-123",
+        client_secret="sa-secret-456",
+    )
+    prov = provision_embed_instance(full_opts, headers={"Authorization": "Bearer tok"})
+    EmbedScaffolder.scaffold_demo_workspace(full_opts)
+
+    assert prov.brand_attribute_ensured and prov.allowlist_configured and prov.cookieless_enabled
+    assert prov.group_id == "42" and prov.folder_id == "99"
+    assert prov.dashboard_moved and prov.agent_shared
+    assert prov.themes_created == ["Flag_Brand_Light", "Flag_Brand_Dark"]
+    assert not (hydrated_dir / "lookml").exists()
+    assert not (
+        hydrated_dir / ".agent" / "skills" / "setup-embed-demo" / "scripts" / "2_project_setup.md"
+    ).exists()
+    assert 'group_ids: list[str] = ["42"]' in (hydrated_dir / "backend" / "app" / "models.py").read_text(
+        encoding="utf-8"
+    )
+    constants_out = (hydrated_dir / "frontend" / "src" / "config" / "constants.ts").read_text(encoding="utf-8")
+    assert 'folderId: "99"' in constants_out and 'groupIds: ["42"]' in constants_out
+
 
 
 # ---------------------------------------------------------------------------
@@ -395,4 +590,5 @@ def test_agent_publish_and_embed_skip_branches_and_critique_guard(
     assert envelope(skip_embed)["data"]["skipped"] is True
     assert envelope(skip_embed)["next_actions"] == []
     assert read_state(isolated_cwd)["embed_status"] == "skipped"
+
 

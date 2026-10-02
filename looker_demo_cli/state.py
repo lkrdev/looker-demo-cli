@@ -112,6 +112,12 @@ class FlowState(BaseModel):
     embed_workspace_dir: Path | None = None
     embed_portal_url: str | None = None
     embed_status: Literal["pending", "scaffolded", "skipped"] = "pending"
+    embed_group_id: str | None = None
+    embed_folder_id: str | None = None
+    embed_themes_created: list[str] = Field(default_factory=list)
+    embed_dashboard_moved: bool = False
+    embed_agent_shared: bool = False
+    embed_allowlist_configured: bool = False
 
     # Conversational Analytics Agent & Gemini Enterprise (Gate 4 & Gate 5)
     ca_agent_id: str | None = None
