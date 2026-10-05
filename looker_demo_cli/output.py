@@ -88,7 +88,7 @@ def is_json_mode() -> bool:
     return _JSON_MODE.get()
 
 
-Status = Literal["SUCCESS", "FAILED", "PARTIAL", "DRY_RUN", "BLOCKED"]
+Status = Literal["SUCCESS", "FAILED", "PARTIAL", "DRY_RUN", "BLOCKED", "FAILED_POLISH_CHECK"]
 
 #: Statuses that must produce a non-zero exit code.
 #:
@@ -96,7 +96,7 @@ Status = Literal["SUCCESS", "FAILED", "PARTIAL", "DRY_RUN", "BLOCKED"]
 #: ``PARTIAL`` after failed deletions while exiting 0 and printing a green
 #: success line -- an orchestrator chaining on `&&` treated a partial failure
 #: as a success.
-FAILURE_STATUSES: frozenset[str] = frozenset({"FAILED", "PARTIAL", "BLOCKED"})
+FAILURE_STATUSES: frozenset[str] = frozenset({"FAILED", "PARTIAL", "BLOCKED", "FAILED_POLISH_CHECK"})
 
 
 class ErrorDetail(BaseModel):

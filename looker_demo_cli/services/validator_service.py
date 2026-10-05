@@ -11,7 +11,7 @@ import json
 import math
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
 import yaml
 
@@ -52,15 +52,15 @@ CHART_TYPES_WITH_LEGENDS = {
     "looker_pie",
 }
 
-VALID_HIGHCHARTS_SERIES_TYPES = {
+LOOKER_PERMITTED_SERIES_TYPES: Final[set[str]] = {
     "column",
     "bar",
     "line",
     "area",
     "scatter",
-    "spline",
-    "areaspline",
 }
+
+VALID_HIGHCHARTS_SERIES_TYPES: Final[set[str]] = LOOKER_PERMITTED_SERIES_TYPES
 
 BARE_HIGHCHARTS_ROOT_TYPES = {
     "column": "looker_column",
@@ -72,6 +72,27 @@ BARE_HIGHCHARTS_ROOT_TYPES = {
     "donut": "looker_pie",
     "grid": "looker_grid",
 }
+
+SCAFFOLD_PLACEHOLDER_TITLES: Final[set[str]] = {
+    "Total Field",
+    "Average Field",
+    "Monthly Field & Volume Trajectory",
+    "Performance by Category",
+    "Distribution by Category",
+    "Volume Concentration by Category",
+}
+
+SCAFFOLD_BOILERPLATE_SUBTITLES: Final[set[str]] = {
+    "Headline operational KPIs, dual-axis volume trajectory, and proportional distribution",
+    "Comparative performance across categorical segments and transparent audit grid",
+    "Systemic volume concentration, throughput metrics, and diagnostic breakdown",
+}
+
+SCAFFOLD_BOILERPLATE_TITLE_PATTERNS: Final[tuple[re.Pattern[str], ...]] = (
+    re.compile(r"^Monthly .+ & Volume Trajectory$"),
+    re.compile(r"^Detailed .+ Records Overview$"),
+    re.compile(r"^Volume Concentration by .+$"),
+)
 
 
 def _check_forbidden_formatter_keys(obj: Any) -> bool:
@@ -137,19 +158,27 @@ def lint_dashboard_structure(
                     f"Element root `type` requires Looker's wrapper `{expected_root}` (use bare `{vis_type}` ONLY inside `series_types`)."
                 )
 
-            # 1c. Highcharts `series_types` contract check (prevents client-side crash from `looker_column` etc.)
+            # 1c. Highcharts `series_types` contract check (prevents client-side crash from `looker_column`, `spline`, `areaspline`, etc.)
             if isinstance(series_types, dict):
                 for s_key, s_val in series_types.items():
                     s_val_str = str(s_val).strip()
-                    if s_val_str.startswith("looker_") or s_val_str not in VALID_HIGHCHARTS_SERIES_TYPES:
+                    if s_val_str in ("spline", "areaspline"):
+                        safe_fallback = "line" if s_val_str == "spline" else "area"
+                        diagnostics.append(
+                            f"Tile '{title}' in `{file_name}` sets unsupported `series_types[{s_key!r}]: {s_val_str}`. "
+                            f"Looker only supports a limited set of series types in `series_types:` "
+                            f"('column', 'bar', 'line', 'area', 'scatter'). Series type '{s_val_str}' is not supported and "
+                            f"causes client-side rendering failures in the browser. "
+                            f"Use bare Looker type `{safe_fallback}` in `series_types:`, and apply curve smoothing/styling properties in `advanced_vis_config`."
+                        )
+                    elif s_val_str.startswith("looker_") or s_val_str not in LOOKER_PERMITTED_SERIES_TYPES:
                         suggested = s_val_str.replace("looker_", "")
-                        if suggested not in VALID_HIGHCHARTS_SERIES_TYPES:
+                        if suggested not in LOOKER_PERMITTED_SERIES_TYPES:
                             suggested = "column"
                         diagnostics.append(
-                            f"Tile '{title}' in `{file_name}` sets `series_types[{s_key!r}]: {s_val_str}`. "
-                            f"Looker's validator only checks SQL/LookML syntax, but `series_types` is passed directly to "
-                            f"Highcharts in the browser and crashes if given `{s_val_str}`. "
-                            f"Use bare Highcharts series names (`{suggested}`, `column`, `line`, `area`, `bar`, `scatter`)."
+                            f"Tile '{title}' in `{file_name}` sets unsupported `series_types[{s_key!r}]: {s_val_str}`. "
+                            f"Looker's dashboard LookML only permits: {sorted(LOOKER_PERMITTED_SERIES_TYPES)}. "
+                            f"Do not use Looker prefix (`looker_*`) inside `series_types:` (use `{suggested}` instead)."
                         )
 
             # 2. looker_donut_multiples check
@@ -326,6 +355,99 @@ def lint_dashboard_file_warnings(path: Path) -> list[str]:
         return lint_dashboard_warnings(parsed, file_name=path.name)
     except Exception:
         return []
+
+
+def detect_scaffolding_draft(
+    parsed: Any,
+    file_name: str = "dashboard.lookml",
+) -> list[str]:
+    """Check whether a parsed dashboard still contains uncustomized LookMLGenerator scaffolding defaults.
+
+    Args:
+        parsed: YAML-parsed dictionary or list of dashboards.
+        file_name: Originating file name for reporting.
+
+    Returns:
+        List of scaffolding detection diagnostic strings (empty if customized).
+    """
+    issues: list[str] = []
+    dash_list = parsed if isinstance(parsed, list) else [parsed]
+
+    for dash in dash_list:
+        if not isinstance(dash, dict):
+            continue
+
+        dash_title = dash.get("title") or dash.get("dashboard") or "Untitled Dashboard"
+        elements = dash.get("elements", [])
+        boilerplate_subtitles_found = 0
+        boilerplate_titles_found = 0
+
+        for el in elements:
+            if not isinstance(el, dict):
+                continue
+
+            title = str(el.get("title") or el.get("single_value_title") or "").strip()
+            subtitle = str(el.get("subtitle_text") or "").strip()
+
+            if title in SCAFFOLD_PLACEHOLDER_TITLES:
+                issues.append(
+                    f"Dashboard '{dash_title}' in `{file_name}` contains generic placeholder tile title '{title}'."
+                )
+
+            if subtitle in SCAFFOLD_BOILERPLATE_SUBTITLES:
+                boilerplate_subtitles_found += 1
+
+            if title and any(pat.match(title) for pat in SCAFFOLD_BOILERPLATE_TITLE_PATTERNS):
+                boilerplate_titles_found += 1
+
+        if boilerplate_subtitles_found >= 1 or boilerplate_titles_found >= 2:
+            issues.append(
+                f"Dashboard '{dash_title}' in `{file_name}` contains raw generator defaults from LookMLGenerator "
+                f"({boilerplate_subtitles_found} boilerplate subtitle(s), {boilerplate_titles_found} template tile title(s))."
+            )
+
+    return issues
+
+
+def detect_dashboard_file_scaffolding(path: Path) -> list[str]:
+    """Parse a dashboard LookML file and check if it is still an uncustomized scaffolding draft."""
+    if not path.exists():
+        return []
+    try:
+        content = path.read_text(encoding="utf-8")
+        parsed = yaml.safe_load(content)
+        if not parsed:
+            return []
+        return detect_scaffolding_draft(parsed, file_name=path.name)
+    except Exception:
+        return []
+
+
+def build_polish_agent_guidance(project_name: str | None = None) -> dict[str, Any]:
+    """Build structured remediation instructions when an uncustomized scaffolding draft is detected."""
+    proj = project_name or "{project_name}"
+    return {
+        "action_required": "CONSULT_VISUALIZATION_SKILLS",
+        "message": (
+            "The dashboard is currently using raw scaffolding draft defaults. You must consult the "
+            "'looker-visualizations' skill suite or spawn the 'lookml-dashboard-designer' subagent to design "
+            "domain-specific KPIs, tailored color palettes, donut breakdowns, and advanced Highcharts geometries "
+            "before this gate can be certified."
+        ),
+        "recommended_skills": [
+            "skills/looker-visualizations/SKILL.md",
+            "skills/looker-vis-advanced-config/SKILL.md",
+            "skills/looker-vis-cartesian/SKILL.md",
+            "skills/looker-vis-tabular-kpi/SKILL.md",
+        ],
+        "subagent_command": {
+            "type": "skills/looker-demo-orchestrator/subagents/lookml-dashboard-designer.md",
+            "prompt": (
+                f"Execute the 3-Pass Executive Dashboard Polish protocol for {proj} "
+                "following skills/resources/dashboard-polish-standards.md and looker-visualizations."
+            ),
+        },
+    }
 
 
 # ---------------------------------------------------------------------------

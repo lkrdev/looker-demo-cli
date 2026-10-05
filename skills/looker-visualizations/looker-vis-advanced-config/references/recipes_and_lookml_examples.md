@@ -32,7 +32,7 @@ Splits high-volume revenue currency on the left axis and order count units on th
           "yAxis": 0
         },
         {
-          "type": "spline",
+          "type": "line",
           "color": "#EA4335",
           "lineWidth": 3,
           "yAxis": 1

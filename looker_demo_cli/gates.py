@@ -471,8 +471,13 @@ GATES: Final[tuple[Gate, ...]] = (
         number=6,
         id="gate_2b_certify_polish",
         title="3-Pass Executive Dashboard Polish & filtered measure audit",
-        requires_human_confirmation=False,
-        human_checkpoint=None,
+        requires_human_confirmation=True,
+        human_checkpoint=(
+            "MANDATORY DASHBOARD POLISH: Do NOT deploy the raw scaffold. Invoke the `looker-visualizations` "
+            "skill suite (or `lookml-dashboard-designer` subagent) to tailor chart types, custom palettes, "
+            "KPI single-values, and modern Highcharts tokens to the domain. Run `demo-create lookml certify-polish` "
+            "and review the design with the user before proceeding."
+        ),
         _is_complete=_gate_2b_complete,
         _command=_gate_2b_command,
     ),
@@ -544,7 +549,11 @@ GATES: Final[tuple[Gate, ...]] = (
         requires_human_confirmation=True,
         human_checkpoint=(
             "Call `ask_question` to confirm whether to scaffold the external branded embedded analytics portal "
-            "(`demo-create embed scaffold --looker-project <project>`) or skip (`demo-create embed scaffold --skip`)."
+            "or skip (`demo-create embed scaffold --skip`). If confirmed, prompt for Looker API Service Account "
+            "credentials (`--client-id` and `--client-secret` for `LOOKERSDK_CLIENT_ID` / `LOOKERSDK_CLIENT_SECRET` in `backend/.env`), "
+            "run `demo-create embed scaffold --looker-project <project> --client-id <id> --client-secret <secret>`, "
+            "and verify all 6 Looker instance provisioning checks (SA auth, embed group, shared folder, "
+            "`PUT /api/4.0/lookml_dashboards/move`, CA agent sharing, and `<Brand>_Light`/`<Brand>_Dark` themes)."
         ),
         _is_complete=_gate_6_complete,
         _command=_gate_6_command,

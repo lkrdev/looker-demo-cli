@@ -490,6 +490,7 @@ demo-create lookml certify-polish [OPTIONS]
 | :--- | :--- | :--- |
 | `--lookml-dir` | Directory containing LookML files |  |
 | `--strict` | Treat Executive Polish warnings as blocking validation errors |  |
+| `--force-scaffold` | Allow certifying uncustomized LookMLGenerator scaffolding draft dashboards |  |
 | `--json` | Emit the result envelope as JSON on stdout |  |
 | `--state-file` | Path to .demo-state.json. Defaults to discovering it in the current directory. |  |
 
@@ -587,11 +588,11 @@ Scaffold standalone Embedded Analytics web applications and portals.
 
 | Subcommand | Description |
 | :--- | :--- |
-| [`scaffold`](#demo-create-embed-scaffold) | Scaffold a full-stack React/Vite analytics embed portal workspace. |
+| [`scaffold`](#demo-create-embed-scaffold) | Scaffold a full-stack React/Vite analytics embed portal workspace and provision Looker embed settings. |
 
 ### `demo-create embed scaffold`
 
-Scaffold a full-stack React/Vite analytics embed portal workspace.
+Scaffold a full-stack React/Vite analytics embed portal workspace and provision Looker embed settings.
 
 ```bash
 demo-create embed scaffold [OPTIONS]
@@ -605,6 +606,9 @@ demo-create embed scaffold [OPTIONS]
 | `--agent-id` | Looker CA Agent ID to embed |  |
 | `--brand-name` | Customer brand display name |  |
 | `--instance` | Looker instance URL |  |
+| `--client-id` | Looker API Service Account client ID for headless embed token generation |  |
+| `--client-secret` | Looker API Service Account client secret for headless embed token generation |  |
+| `--looker-account` | Saved Looker OAuth account alias |  |
 | `--skip` | Skip external embed portal scaffolding and complete the pipeline |  |
 | `--json` | Emit the result envelope as JSON on stdout |  |
 | `--state-file` | Path to .demo-state.json. Defaults to discovering it in the current directory. |  |

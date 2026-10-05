@@ -5,6 +5,10 @@ This document details the standard Highcharts configuration options supported an
 > [!IMPORTANT]
 > All options must be written in standard JSON format. Never pass JavaScript functions or callbacks. Use Highcharts string format templates (e.g. `{value}` or `{point.y:,.2f}`) instead of function formatters.
 
+> [!IMPORTANT]
+> **LOOKML SERIES TYPES COMPATIBILITY**:
+> Looker only supports a limited set of series types in `series_types:` (`column`, `bar`, `line`, `area`, `scatter`). Unsupported series types like `spline` or `areaspline` will cause client-side rendering failures in the browser. To render smooth curves, set `series_types: { field: line }` or `series_types: { field: area }`, and configure smoothing or styling properties via `advanced_vis_config` under `plotOptions.line` or `plotOptions.series`.
+
 ---
 
 ## 1. `chart` Options
@@ -13,7 +17,7 @@ Controls top-level canvas dimensions, layout mode, and canvas styling.
 
 | Property | Type | Example | Description |
 | :--- | :--- | :--- | :--- |
-| `type` | string | `"column"`, `"line"`, `"spline"`, `"areaspline"`, `"scatter"`, `"pie"` | Overrides the base chart rendering type across all series. |
+| `type` | string | `"column"`, `"line"`, `"area"`, `"bar"`, `"scatter"`, `"pie"` | Overrides the base chart rendering type across all series. |
 | `backgroundColor` | string | `"transparent"`, `"#FFFFFF"`, `"#F8F9FA"` | Canvas background color. Set to `"transparent"` to match dashboard card themes. |
 | `inverted` | boolean | `true`, `false` | Inverts horizontal and vertical axes (turns columns into bars or vice-versa). |
 | `polar` | boolean | `true`, `false` | Transforms cartesian coordinates into radial / radar polar coordinates. |
@@ -168,7 +172,7 @@ Sets default rendering options for specific chart types (`column`, `bar`, `line`
 }
 ```
 
-### Line & Area (`plotOptions.line`, `plotOptions.area`, `plotOptions.spline`)
+### Line & Area (`plotOptions.line`, `plotOptions.area`, `plotOptions.series`)
 | Property | Type | Example | Description |
 | :--- | :--- | :--- | :--- |
 | `lineWidth` | number | `2.5`, `3` | Stroke thickness in pixels. |
@@ -207,7 +211,7 @@ Allows targeting a specific series index (`series[0]`, `series[1]`, etc.) to ass
 
 | Property | Type | Example | Description |
 | :--- | :--- | :--- | :--- |
-| `type` | string | `"spline"`, `"line"`, `"column"` | Series-specific chart type. |
+| `type` | string | `"line"`, `"area"`, `"column"` | Series-specific chart type. |
 | `yAxis` | number | `0`, `1` | 0-indexed reference linking series to a specific Y-axis in multi-axis layouts. |
 | `color` | string | `"#4285F4"`, `"rgba(66,133,244,0.5)"` | Direct color override. |
 | `dashStyle` | string | `"Dash"`, `"ShortDot"` | Custom stroke pattern (e.g. dashed benchmark or target line). |
@@ -223,7 +227,7 @@ Allows targeting a specific series index (`series[0]`, `series[1]`, etc.) to ass
       "yAxis": 0
     },
     {
-      "type": "spline",
+      "type": "line",
       "color": "#EA4335",
       "dashStyle": "ShortDash",
       "lineWidth": 3,

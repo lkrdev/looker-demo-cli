@@ -86,7 +86,7 @@ INTENT_SKILL_DEFINITIONS: dict[str, dict[str, tuple[str, str]]] = {
     "embed-portal": {
         "looker-demo-orchestrator": ("local_cli", "looker-demo-orchestrator"),
         "demo-spec": ("local_cli", "demo-spec"),
-        "setup-embed-demo": ("looker-embed-demo", "setup-embed-demo"),
+        "setup-embed-demo": ("local_cli", "setup-embed-demo"),
         "customize-frontend": ("looker-embed-demo", "customize-frontend"),
         "customize-frontend-branding": ("looker-embed-demo", "customize-frontend-branding"),
         "customize-frontend-theme": ("looker-embed-demo", "customize-frontend-theme"),

@@ -527,8 +527,12 @@ class LookMLGenerator:
             if el.series_types:
                 lines.append("    series_types:")
                 for s_field, s_type in el.series_types.items():
-                    # Always normalize Looker wrapper names to bare Highcharts series names
+                    # Always normalize Looker wrapper names and unsupported spline aliases to bare Looker series names
                     normalized_type = str(s_type).strip().replace("looker_", "")
+                    if normalized_type == "spline":
+                        normalized_type = "line"
+                    elif normalized_type == "areaspline":
+                        normalized_type = "area"
                     lines.append(f"      {s_field}: {normalized_type}")
             if el.series_colors:
                 lines.append("    series_colors:")

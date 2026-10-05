@@ -56,6 +56,10 @@ Looker enforces an explicit allowlist of visualizations that support `advanced_v
 - ❌ `looker_single_record` (React record inspector)
 - ❌ `looker_google_map` / `looker_geo_choropleth` (Google Maps API / Leaflet / TopoJSON engine)
 
+> [!IMPORTANT]
+> **LOOKML SERIES TYPES COMPATIBILITY**:
+> Looker only supports a limited set of series types in `series_types:` (`column`, `bar`, `line`, `area`, `scatter`). Unsupported series types like `spline` or `areaspline` will cause client-side rendering failures in the browser. To render smooth curves, set `series_types: { field: line }` or `series_types: { field: area }`, and configure smoothing or styling properties via `advanced_vis_config` under `plotOptions.line` or `plotOptions.series`.
+
 ---
 
 ## 3. Strict Syntax & Safety Guardrails

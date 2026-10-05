@@ -170,7 +170,7 @@ def test_validator_catches_bare_highcharts_name_at_root_type() -> None:
 
 @pytest.mark.unit
 def test_generator_normalizes_looker_series_types_to_bare_highcharts() -> None:
-    """LookMLGenerator automatically strips `looker_` prefixes inside `series_types`."""
+    """LookMLGenerator automatically strips `looker_` prefixes and maps spline/areaspline inside `series_types`."""
     from looker_demo_cli.generators.lookml_generator import DashboardSpec, DashboardTileSpec, LookMLGenerator
 
     gen = LookMLGenerator(project_id="proj", dataset_id="ds")
@@ -184,16 +184,112 @@ def test_generator_normalizes_looker_series_types_to_bare_highcharts() -> None:
                 model="m",
                 explore="e",
                 type="looker_line",
-                fields=["e.date", "e.rev", "e.cnt"],
-                series_types={"e.rev": "looker_area", "e.cnt": "looker_column"},
+                fields=["e.date", "e.rev", "e.cnt", "e.smooth_line", "e.smooth_area"],
+                series_types={
+                    "e.rev": "looker_area",
+                    "e.cnt": "looker_column",
+                    "e.smooth_line": "spline",
+                    "e.smooth_area": "areaspline",
+                },
             )
         ],
     )
     rendered = gen.generate_dashboard_from_spec(spec)
     assert "e.rev: area" in rendered
     assert "e.cnt: column" in rendered
+    assert "e.smooth_line: line" in rendered
+    assert "e.smooth_area: area" in rendered
     assert "e.rev: looker_area" not in rendered
     assert "e.cnt: looker_column" not in rendered
+    assert ": spline" not in rendered
+    assert ": areaspline" not in rendered
+
+
+@pytest.mark.unit
+def test_validator_rejects_spline_and_areaspline_in_series_types() -> None:
+    """Looker's Highcharts adapter crashes with TypeError on spline/areaspline in series_types."""
+    from looker_demo_cli.services.validator_service import (
+        LOOKER_PERMITTED_SERIES_TYPES,
+        lint_dashboard_structure,
+    )
+
+    assert LOOKER_PERMITTED_SERIES_TYPES == {"column", "bar", "line", "area", "scatter"}
+    assert "spline" not in LOOKER_PERMITTED_SERIES_TYPES
+    assert "areaspline" not in LOOKER_PERMITTED_SERIES_TYPES
+
+    bad_spline = {
+        "dashboard": "bad_spline",
+        "title": "Bad Spline Types",
+        "elements": [
+            {
+                "title": "Revenue Trajectory",
+                "type": "looker_line",
+                "fields": ["orders.created_month", "orders.total_revenue", "orders.dau"],
+                "series_types": {
+                    "orders.total_revenue": "areaspline",
+                    "orders.dau": "spline",
+                },
+            }
+        ],
+    }
+    diagnostics = lint_dashboard_structure(bad_spline)
+    assert len(diagnostics) == 2
+    assert any("series_types['orders.total_revenue']: areaspline" in d and "`area`" in d for d in diagnostics)
+    assert any("series_types['orders.dau']: spline" in d and "`line`" in d for d in diagnostics)
+
+
+@pytest.mark.unit
+def test_detect_scaffolding_draft_flags_raw_scaffold_and_passes_custom_dashboard(generated_dashboard: str) -> None:
+    """detect_scaffolding_draft flags unmodified LookMLGenerator scaffolds and passes bespoke domain dashboards."""
+    import yaml
+
+    from looker_demo_cli.services.validator_service import detect_scaffolding_draft
+
+    parsed_scaffold = yaml.safe_load(generated_dashboard)
+    scaffold_hits = detect_scaffolding_draft(parsed_scaffold)
+    assert len(scaffold_hits) >= 1
+    assert any("contains raw generator defaults from LookMLGenerator" in h for h in scaffold_hits)
+
+    placeholder_dash = {
+        "dashboard": "placeholder_dash",
+        "title": "Placeholder Dashboard",
+        "elements": [
+            {"title": "Total Field", "name": "kpi_1", "type": "single_value"},
+            {"title": "Performance by Category", "name": "bar_1", "type": "looker_bar"},
+        ],
+    }
+    placeholder_hits = detect_scaffolding_draft(placeholder_dash)
+    assert len(placeholder_hits) == 2
+    assert any("Total Field" in h for h in placeholder_hits)
+    assert any("Performance by Category" in h for h in placeholder_hits)
+
+    custom_dashboard = {
+        "dashboard": "mobile_gaming_executive",
+        "title": "Mobile Gaming LiveOps & Monetization Command Center",
+        "elements": [
+            {
+                "name": "hero_header",
+                "type": "text",
+                "title_text": "Mobile Gaming LiveOps & Player Economy",
+                "subtitle_text": "Real-time D1/D7/D30 Cohort Retention, Session Telemetry & IAP ARPDAU",
+            },
+            {
+                "title": "Daily Active Players (DAU)",
+                "name": "kpi_dau",
+                "type": "single_value",
+                "fields": ["fct_sessions.dau"],
+            },
+            {
+                "title": "D1 / D7 / D30 Retention & Session Duration Trajectory",
+                "name": "retention_trend",
+                "type": "looker_line",
+                "fields": ["fct_sessions.session_week", "fct_sessions.d7_retention_rate", "fct_sessions.avg_session_minutes"],
+                "series_types": {"fct_sessions.avg_session_minutes": "area"},
+            },
+        ],
+    }
+    assert detect_scaffolding_draft(custom_dashboard) == []
+
 
 
 @pytest.mark.unit

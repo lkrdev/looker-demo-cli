@@ -25,6 +25,8 @@ from looker_demo_cli.services.optimizer_service import (
 )
 from looker_demo_cli.services.schema_service import extract_table_specs_from_parquet_dir
 from looker_demo_cli.services.validator_service import (
+    build_polish_agent_guidance,
+    detect_dashboard_file_scaffolding,
     lint_dashboard_file,
     lint_dashboard_file_warnings,
     validate_filtered_measures_in_lookml,
@@ -237,6 +239,13 @@ def lookml_certify_polish(
     strict: Annotated[
         bool, typer.Option("--strict", help="Treat Executive Polish warnings as blocking validation errors")
     ] = False,
+    force_scaffold: Annotated[
+        bool,
+        typer.Option(
+            "--force-scaffold",
+            help="Allow certifying uncustomized LookMLGenerator scaffolding draft dashboards",
+        ),
+    ] = False,
     output_json: Annotated[bool, typer.Option("--json", help="Emit the result envelope as JSON on stdout")] = False,
     state_file: StateFileOption = None,
 ):
@@ -257,9 +266,12 @@ def lookml_certify_polish(
     dashboard_files = sorted(target_dir.glob("**/*.dashboard.lookml"))
     errors: list[str] = []
     warnings: list[str] = []
+    scaffolding_issues: list[str] = []
     for df in dashboard_files:
         errors.extend(lint_dashboard_file(df))
         warnings.extend(lint_dashboard_file_warnings(df))
+        if not force_scaffold:
+            scaffolding_issues.extend(detect_dashboard_file_scaffolding(df))
 
     errors.extend(validate_filtered_measures_in_lookml(lookml_dir=target_dir, gcp_project=state.gcp_project_id))
 
@@ -275,6 +287,63 @@ def lookml_certify_polish(
             details={"errors": errors, "warnings": warnings},
         )
 
+    if scaffolding_issues:
+        state.polish_certified = False
+        saved_path = app_ctx.save_state()
+        guidance = build_polish_agent_guidance(state.looker_project_name)
+        error_msg = "Dashboard contains uncustomized scaffolding draft defaults."
+        result = CommandResult(
+            command="lookml certify-polish",
+            status="FAILED_POLISH_CHECK",
+            data={
+                "status": "FAILED_POLISH_CHECK",
+                "polish_certified": False,
+                "certified": False,
+                "lookml_dir": str(target_dir),
+                "error": error_msg,
+                "scaffolding_issues": scaffolding_issues,
+                "agent_guidance": guidance,
+                "state_file": str(saved_path),
+            },
+            errors=[
+                ErrorDetail(
+                    code=ValidationError.code,
+                    message=error_msg,
+                    remediation=(
+                        "Consult the `looker-visualizations` skill suite or delegate to the "
+                        "`lookml-dashboard-designer` subagent to replace placeholder metrics with domain KPIs, "
+                        f"apply tailored palettes, and re-run `demo-create lookml certify-polish --lookml-dir {target_dir}`."
+                    ),
+                    details={
+                        "status": "FAILED_POLISH_CHECK",
+                        "polish_certified": False,
+                        "error": error_msg,
+                        "scaffolding_issues": scaffolding_issues,
+                        "agent_guidance": guidance,
+                    },
+                )
+            ],
+            warnings=warnings,
+        )
+
+        def render_scaffold_blocked(_: CommandResult) -> None:
+            rule = "─" * 77
+            console.print(rule)
+            console.print("⚠️  [bold yellow]ACTION REQUIRED: DASHBOARD CONTAINS UNCUSTOMIZED SCAFFOLDING DRAFT[/bold yellow]")
+            console.print(rule)
+            console.print("The dashboard currently contains raw generator defaults from LookMLGenerator.")
+            console.print("To satisfy Gate 6 and achieve production-grade quality:\n")
+            console.print(
+                "1. Consult the `looker-visualizations` skill suite or delegate to the\n"
+                "   `lookml-dashboard-designer` subagent."
+            )
+            console.print("2. Replace placeholder metrics with domain KPIs (e.g., Retention, Playtime, ARPU).")
+            console.print("3. Apply tailored color palettes, donut breakdowns, and modern Highcharts styling.")
+            console.print(f"4. Re-run `demo-create lookml certify-polish --lookml-dir {target_dir}`.")
+            console.print(rule)
+
+        return emit(result, json_output=output_json, human_renderer=render_scaffold_blocked)
+
     state.lookml_output_dir = target_dir
     state.polish_certified = True
     saved_path = app_ctx.save_state()
@@ -285,6 +354,8 @@ def lookml_certify_polish(
             data={
                 "lookml_dir": str(target_dir),
                 "certified": True,
+                "polish_certified": True,
+                "force_scaffold": force_scaffold,
                 "dashboards_checked": len(dashboard_files),
                 "warnings": warnings,
                 "state_file": str(saved_path),

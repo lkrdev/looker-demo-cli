@@ -27,7 +27,7 @@ graph TD
     Gate4 --> Gate5["Gate 5 (gate_2a_lookml_model): Semantic Modeling & Draft Dashboards<br/>(demo-create lookml model + lookml-filtered-measures)"]
     Gate5 --> SnowflakeBranch{"Is Schema 3NF Snowflake<br/>with Chasm Traps?"}
     SnowflakeBranch -->|Yes: Spawn Subagent| S_Snowflake["Subagent: lookml-snowflake-modeler<br/>(NDT Rollups & Chasm Trap Elimination)"]
-    SnowflakeBranch -->|No: Standard Star Schema| Gate6["Gate 6 (gate_2b_certify_polish): 3-Pass Dashboard Polish & Audit<br/>(Apply looker-visualizations -> demo-create lookml certify-polish)"]
+    SnowflakeBranch -->|No: Standard Star Schema| Gate6{"Gate 6 (gate_2b_certify_polish): 3-Pass Dashboard Polish & Audit<br/>[requires_human_confirmation=true]<br/>(Apply looker-visualizations -> demo-create lookml certify-polish)"}
     S_Snowflake --> Gate6
     Gate6 --> Gate7{"Gate 7 (gate_3a_optimize): Run Performance Optimizer?<br/>[requires_human_confirmation=true]<br/>(ask_question -> demo-create lookml optimize [--skip])"}
     Gate7 -->|Yes: Optimize| OptApply["Apply Performance Optimizer<br/>(demo-create lookml optimize --lookml-dir &lt;lookml-dir&gt;)"]
@@ -103,7 +103,7 @@ The envelope reports:
 | **3** | `gate_1b_approve_schema` | Schema ERD & target row volume approval | **`True`** | `demo-create data approve-schema --row-count <row-count> --dataset <dataset-id>` |
 | **4** | `gate_1c_generate_data` | Modular DAG synthesis & BigQuery load | `False` | `demo-create data generate --schema-file <schema-file> --row-count <row-count> --gcp-project <gcp-project> --dataset <dataset-id> --upload --json-scorecard` |
 | **5** | `gate_2a_lookml_model` | Semantic LookML modeling & draft dashboard scaffolding | `False` | `demo-create lookml model --looker-project <looker-project> --dataset <dataset-id> --connection <connection-name> --gcp-project <gcp-project>` |
-| **6** | `gate_2b_certify_polish` | 3-Pass Executive Dashboard Polish & filtered measure audit | `False` | `demo-create lookml certify-polish --lookml-dir <lookml-dir>` |
+| **6** | `gate_2b_certify_polish` | 3-Pass Executive Dashboard Polish & filtered measure audit | **`True`** | `demo-create lookml certify-polish --lookml-dir <lookml-dir>` |
 | **7** | `gate_3a_optimize` | LookML Server Performance Optimizer gate | **`True`** | `demo-create lookml optimize --lookml-dir <lookml-dir>` *(or `--skip`)* |
 | **8** | `gate_3b_deploy` | Pre-deployment LookML validation, query testing & production release | `False` | `demo-create lookml deploy --looker-project <looker-project> --lookml-dir <lookml-dir>` |
 | **9** | `gate_3c_critique` | Post-deploy dashboard screenshot critique (Pass 3) | **`True`** | `demo-create lookml approve-critique --looker-project <looker-project>` |
@@ -331,18 +331,19 @@ subagent:
 
 ---
 
-### B. Gate 6 (`gate_2b_certify_polish`) — 3-Pass Executive Dashboard Polish & Filtered Measure Audit
+### B. Gate 6 (`gate_2b_certify_polish`) — 3-Pass Executive Dashboard Polish & Filtered Measure Audit `[requires_human_confirmation=True]`
 
 > [!CAUTION]
-> ### 🛑 Why You Must NEVER Skip Dashboard Polish or `lookml certify-polish` Before Deployment
-> Guard against three classic failure modes whenever generating or iterating on a LookML dashboard:
-> 1. **Never Over-Rely on the CLI's Built-In Templates (`demo-create lookml model`)**: The CLI generator only synthesizes a **raw scaffolding draft** (`.dashboard.lookml`), NOT a finished product. Never deploy the raw CLI draft without first opening the dashboard file and applying domain-specific visual polish using the `looker-visualizations` skill suite.
-> 2. **Never Mistake `HTTP 200 OK` Query Validation for Frontend Highcharts Validity**: Looker's `validate_project` and `run_inline_query` (`HTTP 200 OK`) only check LookML and SQL syntax — they do **NOT** validate client-side JavaScript/Highcharts configurations! For example, `series_types: { ...: looker_column }` is syntactically valid YAML/LookML and passes query validation, but **crashes Highcharts in the browser** because Highcharts expects bare `'column'`, `'line'`, `'area'`, `'bar'`, or `'scatter'` inside `series_types`, not Looker's internal `looker_column` wrapper.
-> 3. **Hard State Precondition on `lookml deploy`**: `demo-create lookml deploy` enforces `state.polish_certified == True` and raises `StateError` (exit code `7`) if Gate 6 (`demo-create lookml certify-polish`) has not passed.
+> ### 🛑 Why You Must NEVER Skip Dashboard Polish or Run `certify-polish` on Raw Scaffolding
+> Guard against four classic failure modes whenever generating or iterating on a LookML dashboard:
+> 1. **Never Run `demo-create lookml certify-polish` in the Same Turn as `demo-create lookml model` Without Customizing the Dashboard**: The CLI generator only synthesizes a **raw scaffolding draft** (`.dashboard.lookml`) with generic titles (`Total Field`, `Monthly Field & Volume Trajectory`, `Performance by Category`), NOT a finished product. `demo-create lookml certify-polish` actively scans for uncustomized `LookMLGenerator` scaffolding and returns `status: "FAILED_POLISH_CHECK"` (exit code `6`) with structured `agent_guidance` unless you first replace the scaffold with domain-specific KPIs and bespoke tiles using the `looker-visualizations` skill suite or the `lookml-dashboard-designer` subagent.
+> 2. **Verify Domain KPIs Against `SPEC.md` Before Calling `certify-polish`**: Confirm that every core domain metric defined in `SPEC.md` (e.g., Retention, Session Duration, Monetization/ARPU, SLA Breach Rate) is modeled in the LookML views and surfaced in the dashboard's KPI ribbon, trend charts, and breakdowns with domain-authentic titles and subtitles.
+> 3. **Never Mistake `HTTP 200 OK` Query Validation for Frontend Highcharts Validity**: Looker's `validate_project` and `run_inline_query` (`HTTP 200 OK`) only check LookML and SQL syntax — they do **NOT** validate client-side JavaScript/Highcharts configurations! Only 5 series types are permitted in `series_types:`: `column`, `bar`, `line`, `area`, and `scatter`. Never use `looker_*` wrappers (`looker_column`) or raw Highcharts curve types (`spline`, `areaspline`) inside `series_types:` — both pass SQL validation with `HTTP 200 OK` yet **crash Highcharts in the browser** (`TypeError: S[e.type] is not a constructor`). For smooth curves, use `line` or `area` in `series_types:` and configure curve styling via `advanced_vis_config`.
+> 4. **Hard State Precondition on `lookml deploy`**: `demo-create lookml deploy` enforces `state.polish_certified == True` and raises `StateError` (exit code `7`) if Gate 6 (`demo-create lookml certify-polish`) has not passed.
 
 #### Mandatory 3-Pass Dashboard Polish Protocol ([`dashboard-polish-standards.md`](../resources/dashboard-polish-standards.md)):
 After `demo-create lookml model` scaffolds the baseline LookML project, **always consult [`dashboard-polish-standards.md`](../resources/dashboard-polish-standards.md) and the `looker-visualizations` skill suite** ([`looker-visualizations`](../looker-visualizations/SKILL.md), [`looker-vis-advanced-config`](../looker-visualizations/looker-vis-advanced-config/SKILL.md), [`looker-vis-cartesian`](../looker-visualizations/looker-vis-cartesian/SKILL.md), [`looker-vis-tabular-kpi`](../looker-visualizations/looker-vis-tabular-kpi/SKILL.md), [`looker-vis-specialty-maps`](../looker-visualizations/looker-vis-specialty-maps/SKILL.md)) — either directly or via the **[`lookml-dashboard-designer`](subagents/lookml-dashboard-designer.md)** subagent — to enforce:
-1. **Highcharts `series_types` Audit**: Root `type:` uses `looker_*` wrappers; `series_types:` uses **bare Highcharts names ONLY** (`column`, `bar`, `line`, `area`, `scatter`) — never `looker_column`.
+1. **Highcharts `series_types` Audit**: Root `type:` uses `looker_*` wrappers; `series_types:` uses ** ONLY Looker's 5 supported series types** (`column`, `bar`, `line`, `area`, `scatter`) — never `looker_column`, `spline`, or `areaspline`.
 2. **Modern Geometry Tokens via `advanced_vis_config`**: Rounded bars (`borderRadius: 4`), transparent chart surfaces (`"backgroundColor": "transparent", "borderRadius": 8`), shadow tooltips, and centered legends (`legend_position: center`).
 3. **Donut Charts with Curated Palettes**: `type: looker_pie`, `show_donut: true`, `inner_radius: 50`, and `SELECT DISTINCT`-grounded `series_colors:`.
 4. **Transparent Data Grids & Section Headers**: `looker_grid` with `table_theme: transparent` and `series_cell_visualizations` data bars, plus native `type: text` headers at `row: 0` (no hardcoded HTML gradient banners) and independent dual-axis ranges (`y_axis_combined: false`, `y_axis_unpinned: true`).
@@ -359,11 +360,14 @@ subagent:
     domain_theme: "{domain_theme}"
 ```
 
-Once the dashboard tiles and views are polished, **certify Gate 6 (`gate_2b_certify_polish`)** via the CLI:
+Once the dashboard tiles and views are customized with domain KPIs and visual polish, confirm with the user (`requires_human_confirmation=True`) that the 3-Pass Executive Dashboard Polish has been applied, then **certify Gate 6 (`gate_2b_certify_polish`)** via the CLI:
 
 ```bash
 demo-create lookml certify-polish --lookml-dir <lookml-dir>
 ```
+
+> [!IMPORTANT]
+> **Handling `FAILED_POLISH_CHECK`**: If `demo-create lookml certify-polish` returns exit code `6` (`status: "FAILED_POLISH_CHECK"`), read the `data.agent_guidance` payload (`recommended_skills` and `subagent_command`), customize the `.dashboard.lookml` file using those skills or the `lookml-dashboard-designer` subagent, and re-run `demo-create lookml certify-polish` without `--force-scaffold`. Only pass `--force-scaffold` if the human user explicitly instructs you to bypass custom dashboard design.
 
 ---
 
@@ -538,50 +542,74 @@ If a CA Agent was provisioned at Gate 10, check Looker GE settings (`demo-create
 
 ---
 
-## 6. External Embedded Portal Scaffolding (Gate 12: `gate_6_embed`)
+## 6. External Embedded Portal Scaffolding & Instance Provisioning (Gate 12: `gate_6_embed`)
 
 > [!IMPORTANT]
-> **Conditional Subagent Trigger**:
-> The **[`embed-portal-engineer`](subagents/embed-portal-engineer.md)** subagent is **ONLY spawned if the user explicitly confirms external embed portal creation** at Gate 12 (`gate_6_embed`).
+> **Conditional Subagent Trigger & Headless Service Account Requirement**:
+> 1. The **[`embed-portal-engineer`](subagents/embed-portal-engineer.md)** subagent is **ONLY spawned if the user explicitly confirms external embed portal creation** at Gate 12 (`gate_6_embed`).
+> 2. **Headless Backend Looker API Service Account Credentials vs Developer CLI OAuth**:
+>    - Personal developer CLI sessions (`~/.lkr/auth.db`) use short-lived interactive 3-legged OAuth, which **cannot** run headless backend SSO/cookieless session acquisition (`acquire_embed_cookieless_session`) or sudo impersonation on Looker Core.
+>    - Looker Core instances specifically require a headless **API Service Account credential pair** (`LOOKERSDK_CLIENT_ID` and `LOOKERSDK_CLIENT_SECRET`, created under Looker Admin $\to$ Users with no email login credentials) written to `backend/.env`.
+>    - Never silently assume developer OAuth works for the embed portal backend; always prompt for or confirm `--client-id` and `--client-secret` at Gate 12.
 
-### A. Gate 12 (`gate_6_embed`) — Interactive External Embed Confirmation Gate `[requires_human_confirmation=True]`
-Prompt the user via `ask_question`:
-- **Question**: "Would you like to scaffold an external branded embedded analytics portal (`looker-embed-demo`)?"
-- **Options**:
-  - `(Recommended) Scaffold external embed portal with custom brand theme and embedded chat`
-  - `Skip external portal scaffolding (internal Looker only)`
+### A. Gate 12 (`gate_6_embed`) — Interactive External Embed & Service Account Confirmation Gate `[requires_human_confirmation=True]`
+1. Prompt the user via `ask_question`:
+   - **Question**: "Would you like to scaffold an external branded embedded analytics portal (`looker-embed-demo`) and provision Looker instance embed settings?"
+   - **Options**:
+     - `(Recommended) Scaffold external embed portal, provision Looker group/folder/themes, and configure Service Account credentials`
+     - `Skip external portal scaffolding (internal Looker only)`
 
-- **If confirmed**: Run the Gate 12 CLI command and delegate frontend customization/build verification to **[`embed-portal-engineer`](subagents/embed-portal-engineer.md)**:
-  ```bash
-  demo-create embed scaffold --looker-project "${LOOKER_PROJECT}"
-  ```
-- **If skipped**: Record the skip decision in `.demo-state.json` via `--skip`:
-  ```bash
-  demo-create embed scaffold --skip
-  ```
+2. **If confirmed**:
+   - If `LOOKERSDK_CLIENT_ID` and `LOOKERSDK_CLIENT_SECRET` are not already provided, prompt the user for the Looker instance's **API Service Account** Client ID and Client Secret (for `backend/.env`).
+   - Run the Gate 12 CLI command (which executes the 6 Looker instance provisioning checks and hydrates the local workspace):
+     ```bash
+     demo-create embed scaffold \
+       --looker-project "${LOOKER_PROJECT}" \
+       --client-id "${LOOKERSDK_CLIENT_ID}" \
+       --client-secret "${LOOKERSDK_CLIENT_SECRET}"
+     ```
+   - Delegate frontend domain adaptation, group/folder synchronization verification, and build verification to **[`embed-portal-engineer`](subagents/embed-portal-engineer.md)**.
 
-### B. Procedural Delegation: `embed-portal-engineer` Subagent
-When external embed portal creation is confirmed, delegate brand styling and build verification to **[`embed-portal-engineer`](subagents/embed-portal-engineer.md)**:
+3. **If skipped**: Record the skip decision in `.demo-state.json` via `--skip`:
+   ```bash
+   demo-create embed scaffold --skip
+   ```
+
+### B. Mandatory 6-Point Instance Provisioning Verification Checklist
+Before releasing the embed portal URL (`http://localhost:8008`) or marking Gate 12 complete, the orchestrator **MUST confirm completion of all 6 Looker instance provisioning checks** (reported in the `demo-create embed scaffold --json` envelope and `.demo-state.json`, and detailed in [`setup-embed-demo`](../setup-embed-demo/SKILL.md)):
+
+1. **Service Account Auth (`sa_credentials_configured`)**: Headless Looker API Service Account `LOOKERSDK_CLIENT_ID` and `LOOKERSDK_CLIENT_SECRET` persisted in `<workspace_dir>/backend/.env` (with `.gitignore` verified).
+2. **Instance Admin & Embed Allowlist (`allowlist_configured`)**: `http://localhost:8008` and `https://localhost:8008` added to `domain_allowlist`, `embed_cookieless_v2: True` enabled via `PATCH /api/4.0/setting`, and `"brand"` user attribute ensured.
+3. **Dedicated Embed Group (`group_id`)**: `<Brand> Embed Users` group created (`can_add_to_content_metadata: True`) and granted `view` access on Shared Root (`content_metadata_id: "1"`).
+4. **Shared Subfolder & 2-Step Inheritance Access (`folder_id`)**: `<Brand> Dashboards` folder created under Shared Root (`parent_id: "1"`) and granted `view` access to `group_id` following the 2-step inheritance protocol (Shared Root `CM 1` first, then target folder `content_metadata_id`).
+5. **LookML Dashboard Move (`dashboard_moved`)**: LookML dashboard relocated directly into `folder_id` via `PUT /api/4.0/lookml_dashboards/move` (`{"method": "put", "dashboard_ids": ["<model>::<dashboard>"], "folder_id": "<folder_id>"}`) — **never** imported as a detached user dashboard via `import_lookml_dashboard`.
+6. **CA Agent Sharing & Brand Themes (`agent_shared`, `themes_created`)**: Conversational Analytics agent (`ca_agent_id`) shared with `group_id` via `create_content_metadata_access` (`permission_type="view"` on `agent.content_metadata_id`), and `<Brand>_Light` / `<Brand>_Dark` themes provisioned via `POST /api/4.0/themes` ([`embed-themes`](../embed-themes/SKILL.md)).
+
+### C. Procedural Delegation: `embed-portal-engineer` Subagent
+When external embed portal creation is confirmed, delegate domain copy adaptation, group/folder synchronization audit, brand styling, and build verification to **[`embed-portal-engineer`](subagents/embed-portal-engineer.md)**:
 
 ```yaml
 subagent:
   type: "skills/looker-demo-orchestrator/subagents/embed-portal-engineer.md"
-  prompt: "Scaffold external embed demo for {project_name}, configure .env (VITE_CHAT_AGENT_ID={ca_agent_id}, dashboard ID={dashboard_id}), customize brand styling in styles.css, and verify build."
+  prompt: "Verify Looker instance provisioning and group_id/folder_id synchronization for {project_name}, adapt domain branding and copy across Sidebar.tsx, LoginPage.tsx, Home.tsx, and SalesActivityFeed.tsx using the domain blueprint, customize CSS theme tokens in styles.css, and verify clean frontend build via pnpm run build."
   inputs:
     project_name: "{looker_project_name}"
     looker_instance_url: "{looker_instance_url}"
     dashboard_id: "{deployed_dashboard_id}"
     ca_agent_id: "{ca_agent_id}"
+    group_id: "{embed_group_id}"
+    folder_id: "{embed_folder_id}"
     brand_name: "{brand_name}"
     theme_colors: "{brand_theme_colors}"
     target_dir: "embed-portal/"
 ```
 
 The subagent:
-1. Clones/scaffolds `looker-embed-demo`.
-2. Configures `.env` with `VITE_LOOKER_HOST`, `VITE_DEFAULT_DASHBOARD_ID`, and `VITE_CHAT_AGENT_ID`.
-3. Customizes `src/constants.ts` and CSS variables in `src/styles.css`.
-4. Installs dependencies (`pnpm install` or `npm install`) in `frontend/` and runs `pnpm build` (or `npm run build`) to verify clean compilation.
+1. Runs or verifies `demo-create embed scaffold` and confirms `backend/.env` and `frontend/.env` are populated.
+2. Audits `group_id` (`["<group_id>"]`) and `folder_id` (`"<folder_id>"`) synchronization across `backend/app/models.py`, `frontend/src/config/constants.ts`, and `frontend/src/components/dialogs/UserDetailsDialog.tsx`.
+3. Adapts domain-specific copy, telemetry feed items, KPI labels, and branding across `Sidebar.tsx`, `LoginPage.tsx`, `Home.tsx`, and `SalesActivityFeed.tsx` (replacing eCommerce Levi's/order defaults with the domain blueprint).
+4. Customizes CSS variables in `frontend/src/styles.css` and verifies `<Brand>_Light` / `<Brand>_Dark` Looker themes.
+5. Installs dependencies (`pnpm install`) in `frontend/` and runs `pnpm run build` to verify zero TypeScript/JSX compilation errors.
 
 ---
 
@@ -631,7 +659,7 @@ When performing isolated operations or advancing through the 13-stage state mach
 | **`demo-create agent`** | `create` | **Gate 10** (`gate_4_agent`) | Creates CA Agent and grounds golden queries (or skips with `--skip`) | `--model`, `--explore`, `--dashboards-dir`, `--dashboard-id`, `--publish-ge`, `--skip`, `--json` |
 | | `golden-queries` | — | Extracts queries from dashboard files/IDs and links as Golden Queries | `--agent-id`, `--dashboard-id`, `--dashboards-dir`, `--json` |
 | | `publish` | **Gate 11** (`gate_5_publish`) | Verifies GE config and publishes CA Agent to Gemini Enterprise (or skips with `--skip`) | `--agent-id`, `--looker-account`, `--skip`, `--json` |
-| **`demo-create embed`** | `scaffold` | **Gate 12** (`gate_6_embed`) | Scaffolds React/Vite embed portal workspace with `.env` and theme tokens (or skips with `--skip`) | `--looker-project`, `--dashboard-id`, `--agent-id`, `--brand-name`, `--target-dir`, `--skip`, `--json` |
+| **`demo-create embed`** | `scaffold` | **Gate 12** (`gate_6_embed`) | Provisions Looker instance embed settings (group, folder, dashboard move, CA agent share, themes) and scaffolds React/Vite + FastAPI embed portal (or skips with `--skip`) | `--looker-project`, `--dashboard-id`, `--agent-id`, `--brand-name`, `--client-id`, `--client-secret`, `--looker-account`, `--target-dir`, `--skip`, `--json` |
 | **`demo-create ge`** | `status` | — | Displays current Looker Gemini enablement and GE config | `--looker-account`, `--json` |
 | | `configure` | — | Discovers GE apps on GCP, configures Looker GE settings, and grants IAM roles | `--app-id`, `--location`, `--gcp-project`, `--json` |
 | | `publish` | **Gate 11** (`gate_5_publish`) | Alias for `agent publish` (supports `--skip`) | `--agent-id`, `--looker-account`, `--skip`, `--json` |
