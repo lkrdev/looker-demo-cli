@@ -588,5 +588,3 @@ def test_certify_polish_blocks_raw_scaffold_and_allows_force_or_custom(
     assert forced_payload["data"]["certified"] is True
     assert forced_payload["data"]["force_scaffold"] is True
     assert read_state(isolated_cwd)["polish_certified"] is True
-
-

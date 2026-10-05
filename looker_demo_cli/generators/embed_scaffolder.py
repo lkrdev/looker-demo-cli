@@ -309,9 +309,7 @@ def provision_embed_instance(
         groups = sdk.all_groups() or []
         target_group = next((g for g in groups if _get_field(g, "name") == group_name), None)
         if not target_group:
-            target_group = sdk.create_group(
-                body=models40.WriteGroup(name=group_name, can_add_to_content_metadata=True)
-            )
+            target_group = sdk.create_group(body=models40.WriteGroup(name=group_name, can_add_to_content_metadata=True))
         gid = _get_field(target_group, "id")
         if gid is not None:
             result.group_id = str(gid)
@@ -345,9 +343,7 @@ def provision_embed_instance(
             None,
         )
         if not target_folder:
-            target_folder = sdk.create_folder(
-                body=models40.CreateFolder(name=folder_name, parent_id=parent_id)
-            )
+            target_folder = sdk.create_folder(body=models40.CreateFolder(name=folder_name, parent_id=parent_id))
         fid = _get_field(target_folder, "id")
         if fid is not None:
             result.folder_id = str(fid)

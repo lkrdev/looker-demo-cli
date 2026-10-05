@@ -475,9 +475,7 @@ def test_embed_scaffold_state_and_flag_precedence(
         "get",
         lambda url, **_kw: _FakeResp(
             200,
-            {"id": "1042", "content_metadata_id": "299"}
-            if "/conversational_agents/" in url
-            else [],
+            {"id": "1042", "content_metadata_id": "299"} if "/conversational_agents/" in url else [],
         ),
     )
     monkeypatch.setattr(
@@ -490,13 +488,11 @@ def test_embed_scaffold_state_and_flag_precedence(
     (fake_cache / "lookml").mkdir(parents=True)
     (fake_cache / "lookml" / "dummy.model.lkml").write_text("connection: 'dummy'\n", encoding="utf-8")
     (fake_cache / ".agent" / "skills" / "setup-embed-demo" / "scripts").mkdir(parents=True)
-    (
-        fake_cache / ".agent" / "skills" / "setup-embed-demo" / "scripts" / "2_project_setup.md"
-    ).write_text("dummy\n", encoding="utf-8")
-    (fake_cache / "backend" / "app").mkdir(parents=True)
-    (fake_cache / "backend" / "app" / "models.py").write_text(
-        'group_ids: list[str] = ["8"]\n', encoding="utf-8"
+    (fake_cache / ".agent" / "skills" / "setup-embed-demo" / "scripts" / "2_project_setup.md").write_text(
+        "dummy\n", encoding="utf-8"
     )
+    (fake_cache / "backend" / "app").mkdir(parents=True)
+    (fake_cache / "backend" / "app" / "models.py").write_text('group_ids: list[str] = ["8"]\n', encoding="utf-8")
     (fake_cache / "frontend" / "src" / "config").mkdir(parents=True)
     (fake_cache / "frontend" / "src" / "config" / "constants.ts").write_text(
         'dashboardId: "embed_demo::brand_overview",\nexploreId: "embed_demo/order_items",\n'
@@ -509,7 +505,7 @@ def test_embed_scaffold_state_and_flag_precedence(
     )
     (fake_cache / "frontend" / "src" / "pages").mkdir(parents=True)
     (fake_cache / "frontend" / "src" / "pages" / "LoginPage.tsx").write_text(
-        "const b = \"Looker Embed (Levi's)\";\n", encoding="utf-8"
+        'const b = "Looker Embed (Levi\'s)";\n', encoding="utf-8"
     )
     monkeypatch.setattr(EmbedScaffolder, "_resolve_template_repo", classmethod(lambda _cls: fake_cache))
     monkeypatch.setattr(embed_scaffolder.shutil, "which", lambda _cmd: None)
@@ -537,9 +533,7 @@ def test_embed_scaffold_state_and_flag_precedence(
     assert prov.dashboard_moved and prov.agent_shared
     assert prov.themes_created == ["Flag_Brand_Light", "Flag_Brand_Dark"]
     assert not (hydrated_dir / "lookml").exists()
-    assert not (
-        hydrated_dir / ".agent" / "skills" / "setup-embed-demo" / "scripts" / "2_project_setup.md"
-    ).exists()
+    assert not (hydrated_dir / ".agent" / "skills" / "setup-embed-demo" / "scripts" / "2_project_setup.md").exists()
     assert 'group_ids: list[str] = ["42"]' in (hydrated_dir / "backend" / "app" / "models.py").read_text(
         encoding="utf-8"
     )
@@ -547,15 +541,12 @@ def test_embed_scaffold_state_and_flag_precedence(
     assert 'folderId: "99"' in constants_out and 'groupIds: ["42"]' in constants_out
 
 
-
 # ---------------------------------------------------------------------------
 # --skip terminal branches & Gate 3C critique guard
 # ---------------------------------------------------------------------------
 
 
-def test_agent_publish_and_embed_skip_branches_and_critique_guard(
-    invoke, state_file, isolated_cwd: Path
-):
+def test_agent_publish_and_embed_skip_branches_and_critique_guard(invoke, state_file, isolated_cwd: Path):
     """Covers Gate 3C critique guard on agent create, and --skip on agent create, ge publish, and embed scaffold."""
     state_file(
         precheck_passed=True,
@@ -590,5 +581,3 @@ def test_agent_publish_and_embed_skip_branches_and_critique_guard(
     assert envelope(skip_embed)["data"]["skipped"] is True
     assert envelope(skip_embed)["next_actions"] == []
     assert read_state(isolated_cwd)["embed_status"] == "skipped"
-
-

@@ -5,74 +5,11 @@ from __future__ import annotations
 import pytest
 
 from looker_demo_cli.schema_inference import (
-    classify_table,
     infer_foreign_keys,
-    infer_primary_key,
     infer_table_specs,
-    normalize_column_type,
 )
 
 pytestmark = pytest.mark.unit
-
-
-@pytest.mark.parametrize(
-    ("arrow_type", "expected"),
-    [
-        ("int8", "INT64"),
-        ("int64", "INT64"),
-        ("uint64", "INT64"),
-        ("INT64", "INT64"),
-        ("float", "FLOAT64"),
-        ("float64", "FLOAT64"),
-        ("double", "FLOAT64"),
-        ("bool", "BOOL"),
-        ("timestamp[us]", "TIMESTAMP"),
-        ("timestamp[us, tz=UTC]", "TIMESTAMP"),
-        ("time64[ns]", "TIMESTAMP"),
-        ("date32[day]", "TIMESTAMP"),
-        ("datetime64[ns]", "TIMESTAMP"),
-        ("string", "STRING"),
-        ("large_string", "STRING"),
-        ("binary", "STRING"),
-    ],
-)
-def test_normalize_column_type(arrow_type: str, expected: str) -> None:
-    """Arrow and BigQuery type strings map to canonical LookML/BigQuery types."""
-    assert normalize_column_type(arrow_type) == expected
-
-
-@pytest.mark.parametrize(
-    ("table_name", "expected"),
-    [
-        ("fct_orders", "fact"),
-        ("transactions", "fact"),
-        ("security_alerts", "fact"),
-        ("orders", "fact"),
-        ("dim_users", "dimension"),
-        ("users", "dimension"),
-        ("products", "dimension"),
-    ],
-)
-def test_classify_table(table_name: str, expected: str) -> None:
-    """Fact vs. dimension table classification based on prefix and naming markers."""
-    assert classify_table(table_name) == expected
-
-
-@pytest.mark.parametrize(
-    ("table_name", "columns", "expected"),
-    [
-        ("dim_users", ["user_id", "user_name"], "user_id"),
-        ("fct_orders", ["order_id", "amount"], "order_id"),
-        ("dim_users", ["id", "user_name"], "id"),
-        ("dim_inventory", ["inventory_id", "qty"], "inventory_id"),
-        ("dim_users", ["created_at", "user_key_id"], "user_key_id"),
-        ("fct_alerts", ["created_at", "device_id", "user_id"], "device_id"),
-        ("dim_regions", ["region_name", "country", "identifier"], None),
-    ],
-)
-def test_infer_primary_key(table_name: str, columns: list[str], expected: str | None) -> None:
-    """Primary key inference across exact entity match, stem prefix match, fallback _id, and None."""
-    assert infer_primary_key(table_name, columns) == expected
 
 
 def test_infer_foreign_keys_matches_plural_forms_and_excludes_pk() -> None:

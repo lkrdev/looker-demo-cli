@@ -32,9 +32,7 @@ class BigQueryOptimizationAdvisor:
                 col_str = str(col)
                 dtype_str = str(source[col].dtype).lower()
                 is_temporal = (
-                    pd.api.types.is_datetime64_any_dtype(source[col])
-                    or "date" in dtype_str
-                    or "timestamp" in dtype_str
+                    pd.api.types.is_datetime64_any_dtype(source[col]) or "date" in dtype_str or "timestamp" in dtype_str
                 )
                 is_name_match = col_str.lower().endswith(("_date", "_time", "_at", "_timestamp"))
                 is_numeric = pd.api.types.is_numeric_dtype(source[col])
@@ -49,7 +47,7 @@ class BigQueryOptimizationAdvisor:
                 schema = pq.read_schema(source)
                 cols = list(schema.names)
                 temporal_cols = set()
-                for name, pa_type in zip(schema.names, schema.types):
+                for name, pa_type in zip(schema.names, schema.types, strict=False):
                     t_str = str(pa_type).lower()
                     is_temporal = "timestamp" in t_str or "date" in t_str
                     is_name_match = name.lower().endswith(("_date", "_time", "_at", "_timestamp"))
@@ -66,9 +64,8 @@ class BigQueryOptimizationAdvisor:
     def infer_partition_field(table_name: str, source: pd.DataFrame | Path | None) -> str | None:
         """Heuristic: Identifies primary event timestamp or date column for fact tables."""
         t_lower = table_name.lower()
-        is_fact = (
-            t_lower.startswith(("fct_", "fact_"))
-            or any(marker in t_lower for marker in ("event", "session", "interaction", "transaction", "order", "log"))
+        is_fact = t_lower.startswith(("fct_", "fact_")) or any(
+            marker in t_lower for marker in ("event", "session", "interaction", "transaction", "order", "log")
         )
         if not is_fact:
             return None
@@ -205,9 +202,7 @@ class BigQueryHelper:
         )
 
         source_for_advisor = df_sample if df_sample is not None else parquet_file
-        part_col = partition_field or BigQueryOptimizationAdvisor.infer_partition_field(
-            table_name, source_for_advisor
-        )
+        part_col = partition_field or BigQueryOptimizationAdvisor.infer_partition_field(table_name, source_for_advisor)
         cluster_cols = clustering_fields or BigQueryOptimizationAdvisor.infer_cluster_fields(
             table_name, source_for_advisor, part_col
         )

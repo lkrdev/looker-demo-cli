@@ -40,18 +40,29 @@ uv tool install --editable .
 
 ## The local gate
 
-Run all four before pushing. These are the exact commands CI runs
-(`.github/workflows/test.yml`), so if they pass locally they pass there.
+Run both before pushing. CI runs these exact checks in `.github/workflows/test.yml`,
+so if they pass locally they pass there.
 
 ```bash
-uv run ruff check .                    # CI adds --output-format=github
-uv run ruff format --check .
-uv run mypy looker_demo_cli
+# 1. Run all linters, formatters, secret scanners, typecheckers, and docs drift check:
+uv run pre-commit run --all-files
+
+# 2. Run hermetic unit tests with coverage:
 uv run pytest
 ```
 
-`ruff format` (no `--check`) fixes formatting in place. `ruff check --fix`
-fixes the auto-fixable lint findings.
+You can also install git pre-commit hooks to run automatically before each `git commit`:
+
+```bash
+uv run pre-commit install
+```
+
+`pre-commit` orchestrates:
+- `ruff` (linter and formatter)
+- `mypy looker_demo_cli` (type checking)
+- `scripts/check_secrets.py` (checks for Looker SDK and GCP credentials)
+- `scripts/gen_docs.py --check` (ensures CLI docs in `docs/COMMANDS.md` remain in sync)
+- `actionlint`, `codespell`, trailing whitespace, and file integrity checks
 
 CI additionally builds the package and verifies the wheel exposes the
 entrypoint, which catches packaging regressions (notably the `skills`

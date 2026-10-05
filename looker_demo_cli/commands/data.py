@@ -464,9 +464,9 @@ def data_generate(
             p_file = target_dir / f"{t_name}.parquet"
             if p_file.exists():
                 df_sample = dag_res.tables.get(t_name) if dag_res is not None else None
-                entity = entity_map.get(t_name)
-                part_field = getattr(entity, "partition_field", None) if entity else None
-                cluster_fields = getattr(entity, "cluster_fields", None) if entity else None
+                target_entity = entity_map.get(t_name)
+                part_field = getattr(target_entity, "partition_field", None) if target_entity else None
+                cluster_fields = getattr(target_entity, "cluster_fields", None) if target_entity else None
                 if hasattr(bq_helper, "load_parquet_table_optimized"):
                     load_info = bq_helper.load_parquet_table_optimized(
                         state.bq_dataset_id,

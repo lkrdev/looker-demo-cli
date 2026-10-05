@@ -1,10 +1,10 @@
 # IoT Sensor Analytics for Trucking Fleet Vehicles — Technical Specification (SPEC.md)
 
-> **Status**: Production Ready  
-> **Last Updated**: 2026-09-14 18:45:00 UTC  
-> **Looker Project**: `trucking_iot_analytics` | **Model**: `trucking_iot_analytics`  
-> **BigQuery Dataset**: `demo-analytics-project-1234.trucking_iot_analytics` (US Multi-region)  
-> **Associated Delivery Report**: [DELIVERY_REPORT.md](DELIVERY_REPORT.md)  
+> **Status**: Production Ready
+> **Last Updated**: 2026-09-14 18:45:00 UTC
+> **Looker Project**: `trucking_iot_analytics` | **Model**: `trucking_iot_analytics`
+> **BigQuery Dataset**: `demo-analytics-project-1234.trucking_iot_analytics` (US Multi-region)
+> **Associated Delivery Report**: [DELIVERY_REPORT.md](DELIVERY_REPORT.md)
 
 ---
 
