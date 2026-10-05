@@ -446,7 +446,7 @@ class ModularDAGSynthesizer:
                 lasts = ["Chen", "Patel", "Silva", "Kim", "Reyes", "Mercer", "Vance", "Sterling", "Kowalski", "Okafor"]
                 c_firsts = self.rng.choice(firsts, size=row_count)
                 c_lasts = self.rng.choice(lasts, size=row_count)
-                data[f.name] = [f"{fn} {ln}" for fn, ln in zip(c_firsts, c_lasts, strict=False)]
+                data[f.name] = [f"{fn} {ln}" for fn, ln in zip(c_firsts, c_lasts, strict=True)]
             else:
                 cats = [f"{f.name.replace('_', ' ').title()} {c}" for c in ("Alpha", "Beta", "Gamma", "Delta")]
                 data[f.name] = self.rng.choice(cats, size=row_count, p=[0.45, 0.28, 0.17, 0.10])

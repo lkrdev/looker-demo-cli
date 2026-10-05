@@ -61,3 +61,28 @@ def test_pragma_allowlist_passes(tmp_path: Path) -> None:
         'LOOKERSDK_CLIENT_SECRET = "real_looking_secret_key_12345" # pragma: allowlist secret\n', encoding="utf-8"
     )
     assert check_file(f) == []
+
+
+def test_special_char_looker_secret_fails(tmp_path: Path) -> None:
+    f = tmp_path / "secret.env"
+    f.write_text('LOOKERSDK_CLIENT_SECRET = "abc/def+ghi=jkl123456789"\n', encoding="utf-8")
+    violations = check_file(f)
+    assert any("Looker Client Secret assignment" in v for v in violations)
+
+
+def test_percent_encoded_looker_url_fails(tmp_path: Path) -> None:
+    f = tmp_path / "url.py"
+    f.write_text('URL = "https://user%40domain.com:p%40ss%2Bword@demo.looker.com/api"\n', encoding="utf-8")
+    violations = check_file(f)
+    assert len(violations) == 1
+    assert "Embedded Basic Auth in Looker URL" in violations[0]
+
+
+def test_minified_gcp_service_account_json_fails(tmp_path: Path) -> None:
+    f = tmp_path / "sa.json"
+    f.write_text(
+        '{"type":"service_account","project_id":"p","private_key":"-----BEGIN PRIVATE KEY-----\\n..."}',
+        encoding="utf-8",
+    )
+    violations = check_file(f)
+    assert any("GCP Service Account JSON credentials" in v for v in violations)

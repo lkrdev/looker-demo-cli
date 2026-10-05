@@ -47,7 +47,7 @@ class BigQueryOptimizationAdvisor:
                 schema = pq.read_schema(source)
                 cols = list(schema.names)
                 temporal_cols = set()
-                for name, pa_type in zip(schema.names, schema.types, strict=False):
+                for name, pa_type in zip(schema.names, schema.types, strict=True):
                     t_str = str(pa_type).lower()
                     is_temporal = "timestamp" in t_str or "date" in t_str
                     is_name_match = name.lower().endswith(("_date", "_time", "_at", "_timestamp"))

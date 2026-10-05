@@ -33,7 +33,7 @@ ALLOWLISTED_FILENAMES = {
 SECRET_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     (
         "Looker Client Secret assignment",
-        re.compile(r"""LOOKERSDK_CLIENT_SECRET\s*[:=]\s*['"]([a-zA-Z0-9_\-]{16,})['"]"""),
+        re.compile(r"""LOOKERSDK_CLIENT_SECRET\s*[:=]\s*['"]([^'"]{16,})['"]"""),
     ),
     (
         "Google API Key (AIza...)",
@@ -49,7 +49,7 @@ SECRET_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ),
     (
         "Embedded Basic Auth in Looker URL",
-        re.compile(r"""https?://[a-zA-Z0-9_.-]+:[a-zA-Z0-9_.-]+@[a-zA-Z0-9\-.]+\.looker\.com"""),
+        re.compile(r"""https?://[^/:]+:[^/@]+@[a-zA-Z0-9\-.]+\.looker\.com"""),
     ),
 ]
 
@@ -94,8 +94,8 @@ def check_file(path: Path) -> list[str]:
     except Exception:
         return violations
 
-    # Check for GCP service account JSON structure
-    if '"type": "service_account"' in content and '"private_key":' in content:
+    # Check for GCP service account JSON structure (supports minified JSON)
+    if re.search(r'"type"\s*:\s*"service_account"', content) and re.search(r'"private_key"\s*:', content):
         if "# pragma: allowlist secret" not in content:
             violations.append("File contains GCP Service Account JSON credentials with private key")
             return violations
