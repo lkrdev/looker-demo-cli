@@ -59,7 +59,7 @@ graph LR
 
 Curious what the final output looks like? Inspect real deliverables produced by a completed run:
 
-👉 **[View Canonical Technical Spec (SPEC.md): IoT Trucking Fleet Analytics](examples/SPEC_EXAMPLE.md)**  
+👉 **[View Canonical Technical Spec (SPEC.md): IoT Trucking Fleet Analytics](examples/SPEC_EXAMPLE.md)**
 👉 **[View Canonical Delivery Report (DELIVERY_REPORT.md): IoT Trucking Fleet Analytics](examples/DELIVERY_REPORT_EXAMPLE.md)**
 
 Key highlights from the report:
@@ -184,6 +184,5 @@ $ demo-create status
 | **`embed`** | `scaffold` | Scaffolds a branded React/Vite `looker-embed-demo` portal pre-wired with Looker, dashboard, and CA agent IDs. |
 | **`env`** | `init`, `run-script`, `python` | Initializes a workspace `.venv` or executes ad-hoc Python scripts inside the CLI's bundled environment. |
 
-👉 **[Exhaustive Command & Flag Reference → `docs/COMMANDS.md`](docs/COMMANDS.md)**  
+👉 **[Exhaustive Command & Flag Reference → `docs/COMMANDS.md`](docs/COMMANDS.md)**
 👉 **[Architecture, Gated State & Skill Layout → `docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)**
-

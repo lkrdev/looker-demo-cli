@@ -354,7 +354,6 @@ def test_confirm_targets_guards_and_spec_initialization(invoke, state_file, isol
     assert "acme-analytics" in (isolated_cwd / "SPEC.md").read_text(encoding="utf-8")
 
 
-
 # ---------------------------------------------------------------------------
 # MCP pruning & Skills organization
 # ---------------------------------------------------------------------------

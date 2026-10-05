@@ -283,13 +283,16 @@ def test_detect_scaffolding_draft_flags_raw_scaffold_and_passes_custom_dashboard
                 "title": "D1 / D7 / D30 Retention & Session Duration Trajectory",
                 "name": "retention_trend",
                 "type": "looker_line",
-                "fields": ["fct_sessions.session_week", "fct_sessions.d7_retention_rate", "fct_sessions.avg_session_minutes"],
+                "fields": [
+                    "fct_sessions.session_week",
+                    "fct_sessions.d7_retention_rate",
+                    "fct_sessions.avg_session_minutes",
+                ],
                 "series_types": {"fct_sessions.avg_session_minutes": "area"},
             },
         ],
     }
     assert detect_scaffolding_draft(custom_dashboard) == []
-
 
 
 @pytest.mark.unit

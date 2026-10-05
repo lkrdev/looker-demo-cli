@@ -66,9 +66,7 @@ class ModularDAGSynthesizer:
 
         for entity in sorted_entities:
             row_count = (
-                target_fact_rows
-                if (target_fact_rows is not None and entity.table_type == "fact")
-                else entity.row_count
+                target_fact_rows if (target_fact_rows is not None and entity.table_type == "fact") else entity.row_count
             )
             df = self._generate_entity_table(entity, row_count, pk_pools)
 
@@ -157,7 +155,9 @@ class ModularDAGSynthesizer:
                 tables[p_file.stem] = pd.read_parquet(p_file)
 
         if not tables:
-            raise RuntimeError(f"Script `{script_path}` produced no DataFrames or Parquet files in `{self.output_dir}`.")
+            raise RuntimeError(
+                f"Script `{script_path}` produced no DataFrames or Parquet files in `{self.output_dir}`."
+            )
 
         # Construct or align blueprint for topological validation
         if blueprint is None:
@@ -369,7 +369,11 @@ class ModularDAGSynthesizer:
                     vals = self.rng.lognormal(mean=f.mean or 4.8, sigma=f.std or 0.85, size=row_count)
 
                 if f.min_val is not None or f.max_val is not None:
-                    vals = np.clip(vals, f.min_val if f.min_val is not None else -np.inf, f.max_val if f.max_val is not None else np.inf)
+                    vals = np.clip(
+                        vals,
+                        f.min_val if f.min_val is not None else -np.inf,
+                        f.max_val if f.max_val is not None else np.inf,
+                    )
                 data[f.name] = np.round(vals, 2)
                 continue
 
@@ -442,7 +446,7 @@ class ModularDAGSynthesizer:
                 lasts = ["Chen", "Patel", "Silva", "Kim", "Reyes", "Mercer", "Vance", "Sterling", "Kowalski", "Okafor"]
                 c_firsts = self.rng.choice(firsts, size=row_count)
                 c_lasts = self.rng.choice(lasts, size=row_count)
-                data[f.name] = [f"{fn} {ln}" for fn, ln in zip(c_firsts, c_lasts)]
+                data[f.name] = [f"{fn} {ln}" for fn, ln in zip(c_firsts, c_lasts, strict=True)]
             else:
                 cats = [f"{f.name.replace('_', ' ').title()} {c}" for c in ("Alpha", "Beta", "Gamma", "Delta")]
                 data[f.name] = self.rng.choice(cats, size=row_count, p=[0.45, 0.28, 0.17, 0.10])

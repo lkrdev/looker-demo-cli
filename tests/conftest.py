@@ -393,7 +393,7 @@ class FakeShellRunner:
     def run(self, cmd: Any, *_args: Any, **_kwargs: Any) -> FakeCompletedProcess:
         """Drop-in replacement for ``subprocess.run``."""
         self.calls.append(cmd)
-        haystack = " ".join(cmd) if isinstance(cmd, (list, tuple)) else str(cmd)
+        haystack = " ".join(cmd) if isinstance(cmd, list | tuple) else str(cmd)
         for needle, result in self.results.items():
             if needle in haystack:
                 return result
@@ -401,7 +401,7 @@ class FakeShellRunner:
 
     def assert_called_with_substring(self, needle: str) -> None:
         """Raise ``AssertionError`` unless some recorded call contains ``needle``."""
-        joined = [" ".join(c) if isinstance(c, (list, tuple)) else str(c) for c in self.calls]
+        joined = [" ".join(c) if isinstance(c, list | tuple) else str(c) for c in self.calls]
         assert any(needle in c for c in joined), f"No shell call containing {needle!r}. Calls: {joined}"
 
 

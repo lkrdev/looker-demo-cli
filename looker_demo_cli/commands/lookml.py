@@ -329,7 +329,9 @@ def lookml_certify_polish(
         def render_scaffold_blocked(_: CommandResult) -> None:
             rule = "─" * 77
             console.print(rule)
-            console.print("⚠️  [bold yellow]ACTION REQUIRED: DASHBOARD CONTAINS UNCUSTOMIZED SCAFFOLDING DRAFT[/bold yellow]")
+            console.print(
+                "⚠️  [bold yellow]ACTION REQUIRED: DASHBOARD CONTAINS UNCUSTOMIZED SCAFFOLDING DRAFT[/bold yellow]"
+            )
             console.print(rule)
             console.print("The dashboard currently contains raw generator defaults from LookMLGenerator.")
             console.print("To satisfy Gate 6 and achieve production-grade quality:\n")

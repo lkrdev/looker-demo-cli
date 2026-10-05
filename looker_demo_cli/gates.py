@@ -685,5 +685,3 @@ def attach_next_gate_action(result: Any, state: FlowState) -> Any:
             requires_human_confirmation=nxt.requires_human_confirmation,
         )
     return result
-
-
