@@ -428,3 +428,136 @@ def test_confirm_targets_with_nonexistent_dataset(invoke, fake_bigquery, isolate
         ]
     )
     assert res.exit_code == ConfigError.exit_code
+
+
+# ===========================================================================
+# catalog sync
+# ===========================================================================
+
+
+def test_catalog_sync_missing_lookml_dir_errors(invoke, tmp_path: Path) -> None:
+    """`catalog sync` errors if the target lookml-dir does not exist."""
+    res = invoke(
+        [
+            "catalog",
+            "sync",
+            "--lookml-dir",
+            str(tmp_path / "nonexistent_lookml"),
+            "--dataset",
+            "ds_test",
+            "--gcp-project",
+            "p_test",
+            "--json",
+        ]
+    )
+    assert res.exit_code == ConfigError.exit_code
+    assert envelope(res)["errors"][0]["code"] == "CONFIG_ERROR"
+
+
+def test_catalog_sync_dry_run_and_apply(invoke, tmp_path: Path, isolated_cwd: Path) -> None:
+    """`catalog sync` supports dry-run without modifications and applies updates when confirmed."""
+    from looker_demo_cli.catalog.models import (
+        CatalogSnapshot,
+        ColumnMeta,
+        CoverageReport,
+        TableMeta,
+    )
+
+    # 1. Create a minimal LookML project
+    lookml_dir = tmp_path / "lookml"
+    views_dir = lookml_dir / "views"
+    views_dir.mkdir(parents=True)
+    v_file = views_dir / "dim_users.view.lkml"
+    v_file.write_text(
+        """view: dim_users {
+  sql_table_name: `p.d.dim_users` ;;
+  dimension: user_id {
+    primary_key: yes
+    type: string
+  }
+}
+""",
+        encoding="utf-8",
+    )
+
+    # 2. Create snapshot file
+    snap = CatalogSnapshot(
+        dataset_id="test_ds",
+        project_id="test_proj",
+        location="us",
+        tables={
+            "dim_users": TableMeta(
+                name="dim_users",
+                role="dimension",
+                num_rows=1000,
+                business_label="Platform Accounts",
+                description="Core user entity profiles.",
+                primary_key=["user_id"],
+                columns={
+                    "user_id": ColumnMeta(
+                        name="user_id",
+                        data_type="STRING",
+                        business_label="Account ID",
+                        description="Customer identifier",
+                    ),
+                    "email": ColumnMeta(
+                        name="email",
+                        data_type="STRING",
+                        business_label="Email",
+                        description="Contact email address",
+                    ),
+                },
+            ),
+        },
+        coverage=CoverageReport(
+            total_columns=2,
+            columns_with_descriptions=2,
+            columns_with_labels=2,
+            coverage_percentage=100.0,
+            recommended_profile="rich",
+        ),
+    )
+    snap_path = tmp_path / "snapshot.json"
+    snap.save(snap_path)
+
+    # 3. Test dry-run
+    res_dry = invoke(
+        [
+            "catalog",
+            "sync",
+            "--lookml-dir",
+            str(lookml_dir),
+            "--catalog",
+            str(snap_path),
+            "--dry-run",
+            "--json",
+        ]
+    )
+    assert res_dry.exit_code == 0, res_dry.output
+    payload_dry = envelope(res_dry)
+    assert payload_dry["data"]["dry_run"] is True
+    assert payload_dry["data"]["total_changes"] > 0
+    assert len(payload_dry["data"]["files_updated"]) == 0
+    assert len(payload_dry["data"]["files_created"]) == 0
+
+    # 4. Test apply layered
+    res_apply = invoke(
+        [
+            "catalog",
+            "sync",
+            "--lookml-dir",
+            str(lookml_dir),
+            "--catalog",
+            str(snap_path),
+            "--layered",
+            "--json",
+        ]
+    )
+    assert res_apply.exit_code == 0, res_apply.output
+    payload_apply = envelope(res_apply)
+    assert payload_apply["data"]["dry_run"] is False
+    assert (lookml_dir / "views" / "refinements" / "dim_users.refinement.lkml").exists()
+    assert (lookml_dir / "views" / "base" / "dim_users.view.lkml").exists()
+
+    ref_text = (lookml_dir / "views" / "refinements" / "dim_users.refinement.lkml").read_text()
+    assert 'label: "Platform Accounts"' in ref_text

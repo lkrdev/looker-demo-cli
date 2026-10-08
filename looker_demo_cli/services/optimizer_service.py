@@ -48,7 +48,12 @@ def optimize_lookml_project(lookml_dir: Path, backup: bool = True) -> dict[str, 
         except Exception as e:
             print_warning(f"Could not snapshot LookML backup to `{backup_dir}`: {e}")
 
-    view_files = list(lookml_dir.glob("**/views/**/*.view.lkml")) + list(lookml_dir.glob("**/*.view.lkml"))
+    view_files = (
+        list(lookml_dir.glob("**/views/**/*.view.lkml"))
+        + list(lookml_dir.glob("**/*.view.lkml"))
+        + list(lookml_dir.glob("**/views/**/*.refinement.lkml"))
+        + list(lookml_dir.glob("**/*.refinement.lkml"))
+    )
     view_files = [f for f in {f.resolve(): f for f in view_files}.values() if ".backup_pre_opt" not in f.parts]
 
     model_files = list(lookml_dir.glob("**/models/**/*.model.lkml")) + list(lookml_dir.glob("**/*.model.lkml"))

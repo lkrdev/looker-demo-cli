@@ -352,6 +352,7 @@ Inspect Knowledge Catalog (Dataplex) metadata, view mapping profiles, and seed c
 | [`inspect`](#demo-create-catalog-inspect) | Inspect BigQuery tables and Dataplex Knowledge Catalog metadata, generating a CatalogSnapshot. |
 | [`profiles`](#demo-create-catalog-profiles) | Display Knowledge Catalog -> LookML mapping profiles and configuration rules. |
 | [`seed`](#demo-create-catalog-seed) | Seed Knowledge Catalog curation metadata (Aspect Types, Aspects, Glossaries, EntryLinks, PK/FK constraints). |
+| [`sync`](#demo-create-catalog-sync) | Synchronize Knowledge Catalog (Dataplex) metadata into LookML views and refinements. |
 
 ### `demo-create catalog inspect`
 
@@ -398,6 +399,27 @@ demo-create catalog seed [OPTIONS]
 | `--aspect-type-name` | Name for the semantic curation Aspect Type | `semantic-curation` |
 | `--glossary-name` | Name for the Dataplex Business Glossary | `fintech-glossary` |
 | `--mode` | Execution mode: 'plan' or 'execute' | `execute` |
+| `--json` | Emit result envelope as JSON on stdout |  |
+| `--state-file` | Path to .demo-state.json. Defaults to discovering it in the current directory. |  |
+
+### `demo-create catalog sync`
+
+Synchronize Knowledge Catalog (Dataplex) metadata into LookML views and refinements.
+
+```bash
+demo-create catalog sync [OPTIONS]
+```
+
+| Option | Description | Default |
+| :--- | :--- | :--- |
+| `--dataset` | Target BigQuery dataset ID to sync. Defaults to state dataset. |  |
+| `--gcp-project` | GCP Project ID. Defaults to confirmed target project. |  |
+| `--lookml-dir` | Path to LookML directory to sync. Defaults to state output dir or ./lookml. |  |
+| `--catalog` | Optional path to CatalogSnapshot JSON file to sync against. |  |
+| `--profile` | Knowledge Catalog mapping profile ('rich', 'hybrid', 'minimal'). Defaults to state or recommended. |  |
+| `--layered`, `--no-layered` | Use layered LookML views (base/ and refinements/). Defaults to auto-detecting project structure. |  |
+| `--dry-run` | Report planned metadata diffs without modifying LookML files. |  |
+| `--location` | Dataset/Catalog location (e.g. 'us', 'eu', 'us-central1'). | `us` |
 | `--json` | Emit result envelope as JSON on stdout |  |
 | `--state-file` | Path to .demo-state.json. Defaults to discovering it in the current directory. |  |
 
@@ -629,6 +651,7 @@ demo-create lookml model [OPTIONS]
 | `--catalog` | Path to a CatalogSnapshot JSON file to enrich LookML with Knowledge Catalog metadata |  |
 | `--profile` | Knowledge Catalog mapping profile ('rich', 'hybrid', 'minimal'). Defaults to snapshot recommendation |  |
 | `--use-catalog`, `--no-catalog` | Explicitly enable or disable Knowledge Catalog metadata enrichment |  |
+| `--layered`, `--no-layered` | Generate layered LookML (views/base/ for physical schema, views/refinements/ for semantic layer) |  |
 | `--json` | Emit the result envelope as JSON on stdout |  |
 | `--state-file` | Path to .demo-state.json. Defaults to discovering it in the current directory. |  |
 

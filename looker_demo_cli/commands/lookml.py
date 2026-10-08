@@ -91,6 +91,13 @@ def lookml_model(
             help="Explicitly enable or disable Knowledge Catalog metadata enrichment",
         ),
     ] = None,
+    layered: Annotated[
+        bool,
+        typer.Option(
+            "--layered/--no-layered",
+            help="Generate layered LookML (views/base/ for physical schema, views/refinements/ for semantic layer)",
+        ),
+    ] = False,
     output_json: Annotated[bool, typer.Option("--json", help="Emit the result envelope as JSON on stdout")] = False,
     state_file: StateFileOption = None,
 ):
@@ -267,6 +274,7 @@ def lookml_model(
         output_dir=out_dir,
         model_name=proj_name,
         tables=table_specs,
+        layered=layered,
     )
 
     fact_specs = [s.table_name for s in table_specs if s.table_type == "fact" or s.table_name.startswith("fct_")]
@@ -278,6 +286,7 @@ def lookml_model(
     state.bq_dataset_id = ds_name
     state.looker_connection_name = conn_name
     state.lookml_output_dir = out_dir
+    state.lookml_layered = layered
     state.polish_certified = False
     state.optimizer_status = "pending"
     state.gcp_project_id = gcp_proj
@@ -297,6 +306,7 @@ def lookml_model(
         "connection": conn_name,
         "source": source,
         "output_dir": str(out_dir),
+        "layered": layered,
         "tables": [s.table_name for s in table_specs],
         "files": [str(f.relative_to(out_dir)) for f in written],
         "state_file": str(saved_path),

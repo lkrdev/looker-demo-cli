@@ -538,6 +538,46 @@ def test_model_missing_catalog_file_raises_config_error(invoke, tmp_path: Path) 
     assert envelope(res)["errors"][0]["code"] == "CONFIG_ERROR"
 
 
+def test_model_layered_writes_base_and_refinements(
+    invoke,
+    stub_introspection,
+    spec_factory,
+    tmp_path: Path,
+    state_file,
+) -> None:
+    """`lookml model --layered` writes base and refinement views and records layered state."""
+    stub_introspection([spec_factory("users"), spec_factory("orders", table_type="fact")])
+    out = tmp_path / "lkml_layered"
+    state_file(
+        bq_dataset_id="test_ds",
+        gcp_project_id="test-proj",
+        looker_connection_name="bq_conn",
+    )
+
+    res = invoke(
+        [
+            "lookml",
+            "model",
+            "--layered",
+            "--output-dir",
+            str(out),
+            "--looker-project",
+            "layered_demo",
+            "--json",
+        ]
+    )
+    assert res.exit_code == 0, res.output
+    payload = envelope(res)
+    assert payload["data"]["layered"] is True
+    files = payload["data"]["files"]
+    assert "views/base/users.view.lkml" in files
+    assert "views/refinements/users.refinement.lkml" in files
+    assert "views/base/orders.view.lkml" in files
+    assert "views/refinements/orders.refinement.lkml" in files
+    assert (out / "views" / "base" / "users.view.lkml").exists()
+    assert (out / "views" / "refinements" / "users.refinement.lkml").exists()
+
+
 # lookml deploy
 # ---------------------------------------------------------------------------
 

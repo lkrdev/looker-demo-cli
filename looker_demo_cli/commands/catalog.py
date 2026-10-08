@@ -9,6 +9,7 @@ import typer
 from rich.panel import Panel
 from rich.table import Table
 
+from looker_demo_cli.catalog.models import CatalogSnapshot
 from looker_demo_cli.commands.options import StateFileOption
 from looker_demo_cli.context import get_context
 from looker_demo_cli.error_boundary import ErrorHandlingGroup
@@ -16,6 +17,7 @@ from looker_demo_cli.errors import ConfigError, missing_option
 from looker_demo_cli.gates import attach_next_gate_action
 from looker_demo_cli.output import CommandResult, emit
 from looker_demo_cli.services.catalog_service import build_catalog_snapshot
+from looker_demo_cli.services.catalog_sync_service import sync_catalog_to_lookml
 from looker_demo_cli.utils.console import console, print_info, print_success
 
 catalog_app = typer.Typer(
@@ -315,5 +317,172 @@ def catalog_seed(
             print_success(f"Knowledge Catalog metadata verified/seeded for `{proj_id}.{dataset}`.")
             print_info(f"Seeded {len(tables)} tables with curation aspects and glossary links.")
             print_info(f"Run `demo-create catalog inspect --dataset {dataset}` to review coverage.")
+
+    return emit(result, json_output=output_json, human_renderer=render)
+
+
+@catalog_app.command(name="sync")
+def catalog_sync(
+    ctx: typer.Context,
+    dataset: Annotated[
+        str | None,
+        typer.Option("--dataset", help="Target BigQuery dataset ID to sync. Defaults to state dataset."),
+    ] = None,
+    gcp_project: Annotated[
+        str | None,
+        typer.Option("--gcp-project", help="GCP Project ID. Defaults to confirmed target project."),
+    ] = None,
+    lookml_dir: Annotated[
+        Path | None,
+        typer.Option(
+            "--lookml-dir", help="Path to LookML directory to sync. Defaults to state output dir or ./lookml."
+        ),
+    ] = None,
+    catalog: Annotated[
+        Path | None,
+        typer.Option("--catalog", help="Optional path to CatalogSnapshot JSON file to sync against."),
+    ] = None,
+    profile: Annotated[
+        str | None,
+        typer.Option(
+            "--profile",
+            help="Knowledge Catalog mapping profile ('rich', 'hybrid', 'minimal'). Defaults to state or recommended.",
+        ),
+    ] = None,
+    layered: Annotated[
+        bool | None,
+        typer.Option(
+            "--layered/--no-layered",
+            help="Use layered LookML views (base/ and refinements/). Defaults to auto-detecting project structure.",
+        ),
+    ] = None,
+    dry_run: Annotated[
+        bool,
+        typer.Option(
+            "--dry-run",
+            help="Report planned metadata diffs without modifying LookML files.",
+        ),
+    ] = False,
+    location: Annotated[
+        str,
+        typer.Option("--location", help="Dataset/Catalog location (e.g. 'us', 'eu', 'us-central1')."),
+    ] = "us",
+    output_json: Annotated[bool, typer.Option("--json", help="Emit result envelope as JSON on stdout")] = False,
+    state_file: StateFileOption = None,
+):
+    """Synchronize Knowledge Catalog (Dataplex) metadata into LookML views and refinements."""
+    app_ctx = get_context(ctx)
+    app_ctx.use_state_file(state_file)
+    app_ctx.set_json_mode(output_json)
+    state = app_ctx.state
+
+    proj_id = gcp_project or state.gcp_project_id
+    ds_id = dataset or state.bq_dataset_id
+
+    target_lookml_dir = lookml_dir or state.lookml_output_dir or Path("lookml")
+    if not target_lookml_dir.exists():
+        raise ConfigError(
+            f"LookML directory `{target_lookml_dir}` does not exist.",
+            remediation="Run `demo-create lookml model` to generate LookML first or pass a valid `--lookml-dir`.",
+            details={"lookml_dir": str(target_lookml_dir)},
+        )
+
+    # Resolve CatalogSnapshot
+    snapshot: CatalogSnapshot
+    if catalog:
+        if not catalog.exists():
+            raise ConfigError(
+                f"Catalog snapshot file `{catalog}` does not exist.",
+                remediation="Provide a valid path to a CatalogSnapshot JSON file or omit `--catalog` to inspect live.",
+                details={"catalog": str(catalog)},
+            )
+        snapshot = CatalogSnapshot.load(catalog)
+    elif state.catalog_snapshot_path and state.catalog_snapshot_path.exists():
+        snapshot = CatalogSnapshot.load(state.catalog_snapshot_path)
+    else:
+        if not proj_id:
+            raise missing_option("--gcp-project", purpose="the BigQuery project to inspect Knowledge Catalog")
+        if not ds_id:
+            raise missing_option("--dataset", purpose="the BigQuery dataset ID to inspect")
+        bq_client = app_ctx.bigquery(project_id=proj_id, location=location)
+        cat_client = app_ctx.catalog(project_id=proj_id, location=location.lower())
+        snapshot = build_catalog_snapshot(bq_client, cat_client, ds_id, location=location.lower())
+
+    active_profile = (
+        profile or state.catalog_profile or (snapshot.coverage.recommended_profile if snapshot.coverage else "rich")
+    )
+    conn_name = state.looker_connection_name or "default_bigquery_connection"
+
+    # Execute sync
+    report = sync_catalog_to_lookml(
+        lookml_dir=target_lookml_dir,
+        snapshot=snapshot,
+        profile=active_profile,
+        dry_run=dry_run,
+        layered=layered,
+        connection_name=conn_name,
+    )
+
+    result_data = report.model_dump()
+    result = attach_next_gate_action(CommandResult.success("catalog sync", data=result_data), state)
+
+    def render(_: CommandResult) -> None:
+        mode_str = "[yellow]DRY RUN[/yellow]" if dry_run else "[green]APPLIED[/green]"
+        console.print(f"\n[bold cyan]Knowledge Catalog -> LookML Synchronization ({mode_str})[/bold cyan]\n")
+        console.print(f"Target Directory: [bold]{target_lookml_dir}[/bold]")
+        console.print(f"Mapping Profile: [bold]{active_profile.upper()}[/bold]")
+        console.print(f"Total Changes Detected: [bold]{report.total_changes}[/bold]\n")
+
+        if report.table_diffs:
+            t_diff = Table(title="Table Synchronization Diffs", show_header=True, header_style="bold blue")
+            t_diff.add_column("Table Name", style="bold")
+            t_diff.add_column("Status")
+            t_diff.add_column("Column Changes", justify="right")
+            t_diff.add_column("Details", style="dim")
+
+            for td in report.table_diffs:
+                if td.change_type == "added":
+                    status_style = "[green]ADDED[/green]"
+                elif td.change_type == "modified":
+                    status_style = "[yellow]MODIFIED[/yellow]"
+                elif td.change_type == "removed":
+                    status_style = "[red]REMOVED[/red]"
+                else:
+                    status_style = "[dim]UNCHANGED[/dim]"
+
+                details = []
+                if td.business_label_changed:
+                    details.append(f"Label: '{td.old_business_label}' -> '{td.new_business_label}'")
+                if td.table_description_changed:
+                    details.append("Description updated")
+                for cd in td.column_diffs[:3]:
+                    details.append(f"{cd.column_name} ({cd.change_type})")
+                if len(td.column_diffs) > 3:
+                    details.append(f"+{len(td.column_diffs) - 3} more")
+
+                t_diff.add_row(
+                    td.table_name,
+                    status_style,
+                    str(len(td.column_diffs)),
+                    "; ".join(details) if details else "-",
+                )
+            console.print(t_diff)
+
+        if report.files_created:
+            console.print(f"\n[bold green]Files Created ({len(report.files_created)}):[/bold green]")
+            for fc in report.files_created:
+                console.print(f"  + {fc}")
+
+        if report.files_updated:
+            console.print(f"\n[bold yellow]Files Updated ({len(report.files_updated)}):[/bold yellow]")
+            for fu in report.files_updated:
+                console.print(f"  ~ {fu}")
+
+        if dry_run:
+            print_info("\nRe-run without `--dry-run` to apply changes to LookML files.")
+        elif report.total_changes > 0:
+            print_success("\nLookML models successfully synchronized with Knowledge Catalog.")
+        else:
+            print_info("\nLookML models are already up to date with Knowledge Catalog.")
 
     return emit(result, json_output=output_json, human_renderer=render)

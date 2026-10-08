@@ -106,6 +106,7 @@ class FlowState(BaseModel):
     lookml_model_name: str | None = None
     primary_explore_name: str | None = None
     lookml_output_dir: Path | None = None
+    lookml_layered: bool = False
     polish_certified: bool = False
     optimizer_status: Literal["pending", "applied", "skipped"] = "pending"
     deployed_dashboard_id: str | None = None

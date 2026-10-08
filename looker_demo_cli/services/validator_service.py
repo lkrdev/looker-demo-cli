@@ -726,7 +726,7 @@ def validate_filtered_measures_in_lookml(
     if not lookml_dir.exists():
         return []
 
-    view_files = list(lookml_dir.glob("**/*.view.lkml"))
+    view_files = list(lookml_dir.glob("**/*.view.lkml")) + list(lookml_dir.glob("**/*.refinement.lkml"))
     diagnostics: list[str] = []
 
     for vf in view_files:
