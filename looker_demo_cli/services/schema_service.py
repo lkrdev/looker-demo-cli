@@ -55,6 +55,38 @@ def extract_table_specs_from_parquet_dir(parquet_dir: Path) -> list[LookMLTableS
 
     Returns:
         One spec per parquet file, in sorted filename order, each carrying the
-        inferred table type, column types, primary key, and foreign keys.
+        inferred table type, column types, primary key, foreign keys, and
+        low-cardinality categorical ``column_allowed_values`` (``1 <= nunique <= 15``).
     """
-    return infer_table_specs(read_parquet_schemas(parquet_dir))
+    import pyarrow.parquet as pq
+
+    specs = infer_table_specs(read_parquet_schemas(parquet_dir))
+    skip_suffixes = ("uuid", "hash", "token", "payload", "raw", "description", "content", "email", "name")
+
+    for spec in specs:
+        parquet_file = parquet_dir / f"{spec.table_name}.parquet"
+        if not parquet_file.exists():
+            continue
+        try:
+            table = pq.read_table(parquet_file)
+            for col_name, col_type in spec.schema_fields.items():
+                if (
+                    col_type.upper() != "STRING"
+                    or col_name == spec.primary_key
+                    or col_name in spec.primary_keys
+                    or col_name in spec.foreign_keys
+                    or col_name.endswith("_id")
+                    or any(sfx in col_name.lower() for sfx in skip_suffixes)
+                    or col_name not in table.schema.names
+                ):
+                    continue
+                col_arr = table.column(col_name)
+                distinct_vals = [
+                    str(v).strip() for v in col_arr.unique().to_pylist() if v is not None and str(v).strip()
+                ]
+                if 1 <= len(distinct_vals) <= 15:
+                    spec.column_allowed_values[col_name] = distinct_vals
+        except Exception:
+            continue
+
+    return specs

@@ -39,8 +39,13 @@ If `PROJECT_ID` or `DATASET` is undefined, prompt the user or consult `demo-crea
 
 ## 2. Metadata Extraction Recipes (CLI-Only)
 
+> [!TIP]
+> **Fast-Path CLI Commands (`demo-create data`)**:
+> - **Inspect Dataset**: Run `demo-create data inspect --dataset <dataset> [--gcp-project <project>] --json` to automatically introspect all tables, column types, and constraints into JSON.
+> - **Adopt Existing Dataset**: Run `demo-create data adopt --dataset <dataset> [--gcp-project <project>]` to validate tables/constraints, satisfy Gates 2–4, and advance directly to Gate 5 LookML modeling.
+
 ### Recipe A: Table Inventory & Classification
-Lists all tables, views, and materialized views in the dataset:
+Lists all tables, views, and materialized views in the dataset via native `bq`:
 
 ```bash
 bq query --use_legacy_sql=false --format=prettyjson \

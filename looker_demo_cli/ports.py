@@ -132,6 +132,18 @@ class BigQueryPort(Protocol):
         """
         ...
 
+    def get_dataset_location(self, dataset_id: str) -> str:
+        """Get the geographical location of a dataset (e.g. 'US', 'EU', 'us-central1')."""
+        ...
+
+    def get_table_metadata(self, dataset_id: str, table_id: str) -> Any:
+        """Fetch the BigQuery table metadata object."""
+        ...
+
+    def preview_rows(self, dataset_id: str, table_id: str, limit: int = 5) -> list[dict[str, Any]]:
+        """Fetch up to limit sample rows from a table using list_rows without incurring query costs."""
+        ...
+
 
 class BigQueryFactory(Protocol):
     """Constructs a :class:`BigQueryPort`.
@@ -149,6 +161,56 @@ class BigQueryFactory(Protocol):
         location: str = ...,
     ) -> BigQueryPort:
         """Build a BigQuery client bound to ``project_id``."""
+        ...
+
+
+# ---------------------------------------------------------------------------
+# Knowledge Catalog / Dataplex
+# ---------------------------------------------------------------------------
+
+
+@runtime_checkable
+class CatalogPort(Protocol):
+    """The subset of Knowledge Catalog (Dataplex) the CLI uses.
+
+    Matches :class:`~looker_demo_cli.utils.catalog_client.DataplexCatalogClient`.
+    """
+
+    project_id: str
+    location: str
+
+    def lookup_entry(self, dataset_id: str, table_id: str, view: str = "ALL") -> dict[str, Any]:
+        """Lookup table entry in Dataplex with schema and aspects."""
+        ...
+
+    def lookup_entry_links(
+        self,
+        entry_name: str,
+        entry_link_type: str | None = None,
+        page_size: int = 100,
+    ) -> list[dict[str, Any]]:
+        """Fetch all entry links referencing or referenced by an entry."""
+        ...
+
+    def get_glossary_term(self, glossary_id: str, term_id: str) -> dict[str, Any]:
+        """Fetch a business glossary term."""
+        ...
+
+    def lookup_context(self, resources: list[str], format: str = "JSON") -> dict[str, Any]:
+        """Fetch lookup context (contexts and joins) across tables."""
+        ...
+
+
+class CatalogFactory(Protocol):
+    """Constructs a :class:`CatalogPort`."""
+
+    def __call__(
+        self,
+        project_id: str,
+        location: str = "us",
+        credentials: Any = None,
+    ) -> CatalogPort:
+        """Build a Knowledge Catalog client bound to ``project_id`` and ``location``."""
         ...
 
 

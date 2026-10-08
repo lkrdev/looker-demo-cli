@@ -7,9 +7,12 @@
 import sys
 
 log_msgs = []
+
+
 def log(msg):
     log_msgs.append(msg)
     sys.stderr.write(msg + "\n")
+
 
 try:
     log("Verifying Looker SDK authentication...")

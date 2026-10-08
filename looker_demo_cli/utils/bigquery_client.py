@@ -157,6 +157,27 @@ class BigQueryHelper:
             print_warning(f"Could not list tables in `{dataset_id}`: {e}")
             return []
 
+    def get_dataset_location(self, dataset_id: str) -> str:
+        """Get the geographical location of a dataset (e.g. 'US', 'EU', 'us-central1')."""
+        dataset_ref = self.client.dataset(dataset_id)
+        ds = self.client.get_dataset(dataset_ref)
+        return str(ds.location)
+
+    def get_table_metadata(self, dataset_id: str, table_id: str) -> Any:
+        """Fetch the BigQuery table metadata object."""
+        table_ref = self.client.dataset(dataset_id).table(table_id)
+        return self.client.get_table(table_ref)
+
+    def preview_rows(self, dataset_id: str, table_id: str, limit: int = 5) -> list[dict[str, Any]]:
+        """Fetch up to limit sample rows from a table using list_rows without incurring query costs."""
+        table_ref = self.client.dataset(dataset_id).table(table_id)
+        table = self.client.get_table(table_ref)
+        rows_iter = self.client.list_rows(table, max_results=limit)
+        results: list[dict[str, Any]] = []
+        for row in rows_iter:
+            results.append(dict(row.items()))
+        return results
+
     def get_table_row_count(self, dataset_id: str, table_name: str) -> int | None:
         """Return existing table row count if table exists in BigQuery, else None."""
         try:

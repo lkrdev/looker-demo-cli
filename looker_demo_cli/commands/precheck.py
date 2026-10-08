@@ -17,7 +17,7 @@ from looker_demo_cli.commands.env import render_env_tables
 from looker_demo_cli.commands.options import StateFileOption
 from looker_demo_cli.config import DEFAULT_GCP_PROJECT, GEMINI_SKILLS_DIR
 from looker_demo_cli.context import AppContext, get_context
-from looker_demo_cli.errors import AuthError, StateError, missing_option
+from looker_demo_cli.errors import AuthError, ConfigError, StateError, missing_option
 from looker_demo_cli.gates import attach_next_gate_action
 from looker_demo_cli.output import CommandResult, ErrorDetail, emit
 from looker_demo_cli.precheck.env_checker import (
@@ -739,6 +739,9 @@ def confirm_targets(
     connection: Annotated[
         str | None, typer.Option("--connection", help="Confirmed Looker database connection name")
     ] = None,
+    dataset: Annotated[
+        str | None, typer.Option("--dataset", help="Optional existing BigQuery dataset ID to adopt")
+    ] = None,
     looker_project: Annotated[
         str | None, typer.Option("--looker-project", help="Optional Looker project/model name")
     ] = None,
@@ -785,6 +788,19 @@ def confirm_targets(
     state.gcp_account = resolved_gcp_acct
     state.looker_account = resolved_looker_acct
     state.targets_confirmed = True
+    if dataset:
+        bq = app_ctx.bigquery(project_id=resolved_project)
+        if bq.dataset_exists(dataset):
+            state.bq_dataset_id = dataset
+            state.dataset_exists = True
+            state.data_source_mode = "existing"
+            state.existing_tables = bq.list_tables(dataset)
+        else:
+            raise ConfigError(
+                f"Dataset `{dataset}` was not found in BigQuery project `{resolved_project}`.",
+                remediation="Ensure the BigQuery dataset exists before confirming it as target.",
+                details={"dataset": dataset, "project": resolved_project},
+            )
     if looker_project:
         state.looker_project_name = looker_project
         state.lookml_model_name = looker_project
@@ -806,6 +822,7 @@ def confirm_targets(
             f"| **GCP Project ID** | `{resolved_project}` |\n"
             f"| **Looker Account / Instance** | `{resolved_looker_acct or state.looker_instance_url}` |\n"
             f"| **Database Connection** | `{resolved_conn}` |\n"
+            f"| **BigQuery Dataset** | `{state.bq_dataset_id or 'synthetic'}` |\n"
         )
         spec_path.write_text(spec_content, encoding="utf-8")
 
@@ -818,6 +835,9 @@ def confirm_targets(
                 "gcp_project": resolved_project,
                 "looker_account": resolved_looker_acct,
                 "connection": resolved_conn,
+                "dataset": state.bq_dataset_id,
+                "data_source_mode": state.data_source_mode,
+                "existing_tables": state.existing_tables,
                 "looker_project": state.looker_project_name,
                 "instance_url": state.looker_instance_url,
                 "spec_file": str(spec_path),
@@ -829,6 +849,8 @@ def confirm_targets(
 
     def render(_: CommandResult) -> None:
         print_success(f"Confirmed environment targets: project=`{resolved_project}`, connection=`{resolved_conn}`.")
+        if state.bq_dataset_id:
+            print_info(f"Adopted existing dataset `{state.bq_dataset_id}` with {len(state.existing_tables)} tables.")
         print_info(f"Updated state saved to `{saved_path}`")
 
     return emit(result, json_output=output_json, human_renderer=render)

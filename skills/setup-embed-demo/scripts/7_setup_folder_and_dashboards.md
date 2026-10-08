@@ -9,9 +9,12 @@
 import os, sys
 
 log_msgs = []
+
+
 def log(msg):
     log_msgs.append(msg)
     sys.stderr.write(msg + "\n")
+
 
 try:
     project_name = os.getenv("LOOKER_PROJECT_NAME", "")
@@ -52,35 +55,43 @@ try:
     if group_id:
         # Step 3a: Ensure group has view access on Shared Root (CM 1)
         try:
-            create_content_metadata_access(body={
-                "content_metadata_id": shared_cm_id,
-                "group_id": group_id,
-                "permission_type": "view",
-            })
+            create_content_metadata_access(
+                body={
+                    "content_metadata_id": shared_cm_id,
+                    "group_id": group_id,
+                    "permission_type": "view",
+                }
+            )
         except Exception:
             pass
 
         # Step 3b: Grant group view access on target subfolder content_metadata_id
         if folder_cm_id:
             try:
-                create_content_metadata_access(body={
-                    "content_metadata_id": folder_cm_id,
-                    "group_id": group_id,
-                    "permission_type": "view",
-                })
-            except Exception as cm_exc:
-                if "inherit" in str(cm_exc).lower():
-                    update_content_metadata(content_metadata_id=folder_cm_id, body={"inherits": False})
-                    create_content_metadata_access(body={
+                create_content_metadata_access(
+                    body={
                         "content_metadata_id": folder_cm_id,
                         "group_id": group_id,
                         "permission_type": "view",
-                    })
+                    }
+                )
+            except Exception as cm_exc:
+                if "inherit" in str(cm_exc).lower():
+                    update_content_metadata(content_metadata_id=folder_cm_id, body={"inherits": False})
+                    create_content_metadata_access(
+                        body={
+                            "content_metadata_id": folder_cm_id,
+                            "group_id": group_id,
+                            "permission_type": "view",
+                        }
+                    )
             log(f"Granted group '{group_name}' (ID: {group_id}) view access on folder CM {folder_cm_id}.")
 
     # 4. Relocate the deployed LookML Dashboard into folder via PUT /api/4.0/lookml_dashboards/move
     dashboard_ids = [dashboard_id]
-    log(f"Moving LookML dashboard {dashboard_ids} into folder_id {folder_id} via PUT /api/4.0/lookml_dashboards/move...")
+    log(
+        f"Moving LookML dashboard {dashboard_ids} into folder_id {folder_id} via PUT /api/4.0/lookml_dashboards/move..."
+    )
     transport = getattr(all_folders, "__self__", getattr(session, "__self__", None))
     if hasattr(transport, "put"):
         try:
@@ -108,13 +119,19 @@ try:
     if agent_id and group_id:
         try:
             agent_obj = get_agent(agent_id=agent_id)
-            agent_cm_id = agent_obj.get("content_metadata_id") if isinstance(agent_obj, dict) else getattr(agent_obj, "content_metadata_id", None)
+            agent_cm_id = (
+                agent_obj.get("content_metadata_id")
+                if isinstance(agent_obj, dict)
+                else getattr(agent_obj, "content_metadata_id", None)
+            )
             if agent_cm_id:
-                create_content_metadata_access(body={
-                    "content_metadata_id": str(agent_cm_id),
-                    "group_id": group_id,
-                    "permission_type": "view",
-                })
+                create_content_metadata_access(
+                    body={
+                        "content_metadata_id": str(agent_cm_id),
+                        "group_id": group_id,
+                        "permission_type": "view",
+                    }
+                )
                 agent_shared = True
                 log(f"Shared CA Agent {agent_id} (CM {agent_cm_id}) with group {group_id}.")
         except Exception as ag_err:

@@ -48,6 +48,7 @@ from looker_demo_cli.errors import StateError, looker_not_authenticated, no_look
 from looker_demo_cli.output import set_json_mode
 from looker_demo_cli.ports import (
     BigQueryFactory,
+    CatalogFactory,
     LookerAuthPort,
     ShellPort,
     SubprocessShell,
@@ -55,6 +56,7 @@ from looker_demo_cli.ports import (
 from looker_demo_cli.services.ge_service import get_looker_auth_context
 from looker_demo_cli.state import FlowState, get_default_state_path, load_flow_state, save_flow_state
 from looker_demo_cli.utils.bigquery_client import BigQueryHelper
+from looker_demo_cli.utils.catalog_client import DataplexCatalogClient
 
 
 @dataclass(frozen=True)
@@ -101,6 +103,7 @@ class AppContext:
     # per-invocation, i.e. after patching.
     looker_auth_port: LookerAuthPort = field(default_factory=lambda: get_looker_auth_context)
     bigquery: BigQueryFactory = field(default_factory=lambda: BigQueryHelper)
+    catalog: CatalogFactory = field(default_factory=lambda: DataplexCatalogClient)
     shell: ShellPort = field(default_factory=SubprocessShell)
     state_path: Path | None = None
     json_mode: bool = False

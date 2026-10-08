@@ -233,10 +233,13 @@ def _gate_2a_command(state: FlowState) -> str:
     dataset = _resolved(state.bq_dataset_id, _PLACEHOLDER_DATASET)
     connection = _resolved(state.looker_connection_name, _PLACEHOLDER_CONNECTION)
     project = _resolved(state.gcp_project_id, _PLACEHOLDER_GCP_PROJECT)
-    return (
+    cmd = (
         f"demo-create lookml model --looker-project {looker_project} "
         f"--dataset {dataset} --connection {connection} --gcp-project {project}"
     )
+    if state.catalog_snapshot_path:
+        cmd += f" --catalog {state.catalog_snapshot_path}"
+    return cmd
 
 
 def _gate_2b_command(state: FlowState) -> str:
@@ -638,6 +641,8 @@ _COMMAND_TO_GATE_ID: Final[dict[str, str]] = {
     "data approve-schema": "gate_1b_approve_schema",
     "data generate": "gate_1c_generate_data",
     "data upload": "gate_1c_generate_data",
+    "data adopt": "gate_1c_generate_data",
+    "catalog inspect": "gate_1c_generate_data",
     "lookml model": "gate_2a_lookml_model",
     "lookml certify-polish": "gate_2b_certify_polish",
     "lookml optimize": "gate_3a_optimize",
@@ -684,4 +689,17 @@ def attach_next_gate_action(result: Any, state: FlowState) -> Any:
             gate=nxt.number,
             requires_human_confirmation=nxt.requires_human_confirmation,
         )
+        if (
+            nxt.id == "gate_2a_lookml_model"
+            and (state.dataset_exists or state.data_source_mode == "existing")
+            and not state.catalog_snapshot_path
+        ):
+            ds = _resolved(state.bq_dataset_id, _PLACEHOLDER_DATASET)
+            proj = _resolved(state.gcp_project_id, _PLACEHOLDER_GCP_PROJECT)
+            result.add_next_action(
+                "Optional: Inspect Knowledge Catalog (Dataplex) metadata",
+                f"demo-create catalog inspect --dataset {ds} --gcp-project {proj}",
+                gate=nxt.number,
+                requires_human_confirmation=False,
+            )
     return result

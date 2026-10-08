@@ -7,6 +7,7 @@ from typing import Annotated
 
 import typer
 
+from looker_demo_cli.catalog.models import CatalogSnapshot
 from looker_demo_cli.commands.options import StateFileOption
 from looker_demo_cli.config import DEFAULT_GCP_PROJECT
 from looker_demo_cli.context import get_context
@@ -15,6 +16,7 @@ from looker_demo_cli.errors import ConfigError, StateError, ValidationError, mis
 from looker_demo_cli.gates import attach_next_gate_action
 from looker_demo_cli.generators.lookml_generator import LookMLGenerator, LookMLTableSpec
 from looker_demo_cli.output import CommandResult, ErrorDetail, emit
+from looker_demo_cli.services.catalog_service import build_catalog_snapshot, snapshot_to_table_specs
 from looker_demo_cli.services.deploy_service import deploy_lookml_project
 from looker_demo_cli.services.knowledge_service import introspect_bq_table_specs
 from looker_demo_cli.services.lookml_cleaner import clean_root_duplicate_files
@@ -68,6 +70,27 @@ def lookml_model(
         Path | None, typer.Option("--output-dir", help="Directory to output generated LookML files")
     ] = None,
     gcp_project: Annotated[str, typer.Option("--gcp-project", help="Target GCP Project ID")] = DEFAULT_GCP_PROJECT,
+    catalog: Annotated[
+        Path | None,
+        typer.Option(
+            "--catalog",
+            help="Path to a CatalogSnapshot JSON file to enrich LookML with Knowledge Catalog metadata",
+        ),
+    ] = None,
+    profile: Annotated[
+        str | None,
+        typer.Option(
+            "--profile",
+            help="Knowledge Catalog mapping profile ('rich', 'hybrid', 'minimal'). Defaults to snapshot recommendation",
+        ),
+    ] = None,
+    use_catalog: Annotated[
+        bool | None,
+        typer.Option(
+            "--use-catalog/--no-catalog",
+            help="Explicitly enable or disable Knowledge Catalog metadata enrichment",
+        ),
+    ] = None,
     output_json: Annotated[bool, typer.Option("--json", help="Emit the result envelope as JSON on stdout")] = False,
     state_file: StateFileOption = None,
 ):
@@ -87,6 +110,12 @@ def lookml_model(
             deploys but cannot run a single query.
         output_dir: Where to write the generated LookML tree.
         gcp_project: Target Google Cloud project.
+        catalog: Optional path to a CatalogSnapshot JSON file to enrich LookML
+            with Knowledge Catalog semantics.
+        profile: Mapping profile ('rich', 'hybrid', 'minimal') for Knowledge
+            Catalog metadata.
+        use_catalog: Explicitly enable or disable Knowledge Catalog metadata
+            enrichment.
         output_json: Emit the JSON envelope on stdout.
         state_file: Optional explicit path to ``.demo-state.json``.
 
@@ -140,10 +169,69 @@ def lookml_model(
     table_filter = [t.strip() for t in tables.split(",") if t.strip()] if tables else None
     table_specs: list[LookMLTableSpec] = []
     source = "none"
+    snapshot: CatalogSnapshot | None = None
+    catalog_path: Path | None = None
+    active_profile: str | None = None
 
-    # 1. Source: Live BigQuery Dataset with Knowledge Catalog semantics
-    if dataset or (state.dataset_exists and not parquet_dir):
-        print_info(f"Introspecting BigQuery dataset `{gcp_proj}.{ds_name}` and querying Knowledge Catalog semantics...")
+    # 1. Source: Knowledge Catalog Snapshot (Dataplex metadata)
+    if catalog is not None:
+        if not catalog.exists():
+            raise ConfigError(
+                f"Catalog snapshot file `{catalog}` does not exist.",
+                remediation="Run `demo-create catalog inspect` to generate a snapshot file or verify the path.",
+                details={"catalog": str(catalog)},
+            )
+        try:
+            snapshot = CatalogSnapshot.load(catalog)
+            catalog_path = catalog
+        except Exception as e:
+            raise ConfigError(
+                f"Failed to load CatalogSnapshot from `{catalog}`: {e}",
+                remediation="Verify the snapshot JSON format or re-run `demo-create catalog inspect`.",
+                details={"catalog": str(catalog)},
+            ) from e
+    elif use_catalog is not False:
+        if state.catalog_snapshot_path and Path(state.catalog_snapshot_path).exists():
+            try:
+                snapshot = CatalogSnapshot.load(state.catalog_snapshot_path)
+                catalog_path = Path(state.catalog_snapshot_path)
+            except Exception as e:
+                print_warning(f"Could not load recorded catalog snapshot `{state.catalog_snapshot_path}`: {e}")
+        elif use_catalog is True:
+            print_info(f"Inspecting Knowledge Catalog (Dataplex) for `{gcp_proj}.{ds_name}`...")
+            bq_client = app_ctx.bigquery(project_id=gcp_proj, location=state.gcp_location)
+            cat_client = app_ctx.catalog(project_id=gcp_proj, location=state.gcp_location.lower())
+            snapshot = build_catalog_snapshot(
+                bq_client, cat_client, ds_name, location=state.gcp_location.lower(), table_filter=table_filter
+            )
+            catalog_path = Path.cwd() / f".demo-catalog-{ds_name}.json"
+            snapshot.save(catalog_path)
+            state.catalog_snapshot_path = catalog_path
+            if snapshot.coverage:
+                state.catalog_coverage_pct = snapshot.coverage.coverage_percentage
+                state.catalog_profile = snapshot.coverage.recommended_profile
+
+    if snapshot is not None:
+        rec_profile = snapshot.coverage.recommended_profile if snapshot.coverage else "rich"
+        active_profile = (profile or state.catalog_profile or rec_profile).lower()
+        if active_profile in ("auto", "default"):
+            active_profile = "hybrid"
+        if active_profile not in ("rich", "hybrid", "minimal"):
+            active_profile = "hybrid"
+
+        all_specs = snapshot_to_table_specs(snapshot, profile=active_profile)
+        table_specs = [s for s in all_specs if not table_filter or s.table_name in table_filter]
+        if table_specs:
+            source = "knowledge_catalog"
+            snap_display = f"`{catalog_path.name}`" if catalog_path else "memory"
+            print_success(
+                f"Enriched {len(table_specs)} table(s) via Knowledge Catalog snapshot "
+                f"({snap_display}, profile: {active_profile.upper()})."
+            )
+
+    # 2. Source: Live BigQuery Dataset native introspection
+    if not table_specs and (dataset or state.bq_dataset_id or (state.dataset_exists and not parquet_dir)):
+        print_info(f"Introspecting BigQuery dataset `{gcp_proj}.{ds_name}`...")
         table_specs = introspect_bq_table_specs(
             project_id=gcp_proj,
             dataset_id=ds_name,
@@ -152,9 +240,9 @@ def lookml_model(
         )
         if table_specs:
             source = "bigquery"
-            print_success(f"Discovered and enriched {len(table_specs)} table(s) via BigQuery & Knowledge Catalog.")
+            print_success(f"Discovered and enriched {len(table_specs)} table(s) via BigQuery native introspection.")
 
-    # 2. Source: Local Parquet files
+    # 3. Source: Local Parquet files
     if not table_specs:
         p_dir = parquet_dir or state.generated_parquet_dir
         if p_dir and p_dir.exists() and any(p_dir.glob("*.parquet")):
@@ -194,24 +282,34 @@ def lookml_model(
     state.optimizer_status = "pending"
     state.gcp_project_id = gcp_proj
     state.existing_tables = [s.table_name for s in table_specs]
+    if catalog_path:
+        state.catalog_snapshot_path = catalog_path
+    if active_profile:
+        state.catalog_profile = active_profile
     saved_path = app_ctx.save_state()
+
+    result_data = {
+        "looker_project": proj_name,
+        "model": proj_name,
+        "primary_explore": primary_explore,
+        "dataset": ds_name,
+        "gcp_project": gcp_proj,
+        "connection": conn_name,
+        "source": source,
+        "output_dir": str(out_dir),
+        "tables": [s.table_name for s in table_specs],
+        "files": [str(f.relative_to(out_dir)) for f in written],
+        "state_file": str(saved_path),
+    }
+    if active_profile:
+        result_data["catalog_profile"] = active_profile
+    if catalog_path:
+        result_data["catalog_snapshot"] = str(catalog_path)
 
     result = attach_next_gate_action(
         CommandResult.success(
             "lookml model",
-            data={
-                "looker_project": proj_name,
-                "model": proj_name,
-                "primary_explore": primary_explore,
-                "dataset": ds_name,
-                "gcp_project": gcp_proj,
-                "connection": conn_name,
-                "source": source,
-                "output_dir": str(out_dir),
-                "tables": [s.table_name for s in table_specs],
-                "files": [str(f.relative_to(out_dir)) for f in written],
-                "state_file": str(saved_path),
-            },
+            data=result_data,
             warnings=warnings,
         ),
         state,
@@ -220,6 +318,8 @@ def lookml_model(
     def render(res: CommandResult) -> None:
         for warning in res.warnings:
             print_warning(warning)
+        if res.data.get("catalog_profile"):
+            print_info(f"Knowledge Catalog metadata applied (profile: {res.data['catalog_profile'].upper()}).")
         print_success(f"Generated {len(written)} LookML files in `{out_dir}`:")
         for f in written:
             console.print(f"  • {f.relative_to(out_dir)}")

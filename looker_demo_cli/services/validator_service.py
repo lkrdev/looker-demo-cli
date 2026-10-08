@@ -651,31 +651,32 @@ def _find_local_parquet_file(
     extra_dirs: list[Path] | None = None,
 ) -> Path | None:
     """Search candidate local directories for `<table_basename>.parquet`."""
-    search_roots: list[Path] = []
-    if extra_dirs:
-        search_roots.extend(extra_dirs)
-
     # Standard project locations relative to lookml_dir and cwd
     parent = lookml_dir.resolve().parent
-    search_roots.extend(
+    recursive_roots: list[Path] = []
+    if extra_dirs:
+        recursive_roots.extend(extra_dirs)
+    recursive_roots.extend(
         [
             parent / "scratch",
             parent / "parquet",
-            parent,
             Path.cwd() / "scratch",
             Path.cwd() / "parquet",
         ]
     )
 
+    direct_file = parent / f"{table_basename}.parquet"
+    if direct_file.exists():
+        return direct_file
+
     seen: set[Path] = set()
-    for root in search_roots:
+    for root in recursive_roots:
         if not root.exists() or root in seen:
             continue
         seen.add(root)
         direct = root / f"{table_basename}.parquet"
         if direct.exists():
             return direct
-        # Recursive search up to depth 3 inside scratch/parquet dirs
         matches = list(root.glob(f"**/{table_basename}.parquet"))
         if matches:
             return matches[0]

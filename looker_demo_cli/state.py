@@ -87,6 +87,10 @@ class FlowState(BaseModel):
     bq_dataset_id: str | None = None
     existing_tables: list[str] = Field(default_factory=list)
     demo_scope: Literal["internal_looker", "external_embed"] = "internal_looker"
+    data_source_mode: Literal["synthetic", "existing"] = "synthetic"
+    catalog_snapshot_path: Path | None = None
+    catalog_coverage_pct: float | None = None
+    catalog_profile: str | None = None
 
     # Domain & Synthesis (Gate 1 Co-Design & Approval)
     domain_name: str | None = None

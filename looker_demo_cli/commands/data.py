@@ -778,3 +778,79 @@ def data_inspect(
             print_error(error.message)
 
     return emit(result, json_output=output_json, human_renderer=render)
+
+
+@data_app.command(name="adopt")
+def data_adopt(
+    ctx: typer.Context,
+    dataset: Annotated[str, typer.Option("--dataset", help="BigQuery dataset ID to adopt as demo source")],
+    gcp_project: Annotated[
+        str | None, typer.Option("--gcp-project", help="GCP Project ID. Defaults to confirmed target project.")
+    ] = None,
+    tables: Annotated[
+        str | None, typer.Option("--tables", help="Optional comma-separated list of table IDs to include")
+    ] = None,
+    output_json: Annotated[bool, typer.Option("--json", help="Emit the result envelope as JSON on stdout")] = False,
+    state_file: StateFileOption = None,
+):
+    """Adopt an existing BigQuery dataset, skipping synthetic data generation gates."""
+    app_ctx = get_context(ctx)
+    app_ctx.use_state_file(state_file)
+    app_ctx.set_json_mode(output_json)
+    state = app_ctx.state
+
+    proj_id = gcp_project or state.gcp_project_id
+    if not proj_id:
+        raise missing_option("--gcp-project", purpose="the BigQuery project containing the dataset")
+
+    bq = app_ctx.bigquery(project_id=proj_id)
+    if not bq.dataset_exists(dataset):
+        raise ConfigError(
+            f"Dataset `{dataset}` was not found in project `{proj_id}`.",
+            remediation="Verify dataset ID and project ID or run `demo-create data inspect`.",
+            details={"dataset": dataset, "project": proj_id},
+        )
+
+    all_tables = bq.list_tables(dataset)
+    if not all_tables:
+        raise ConfigError(
+            f"Dataset `{dataset}` exists in project `{proj_id}` but contains no tables.",
+            remediation="Ensure tables are created and populated before adopting.",
+            details={"dataset": dataset, "project": proj_id},
+        )
+
+    if tables:
+        table_list = [t.strip() for t in tables.split(",") if t.strip()]
+        selected_tables = [t for t in all_tables if t in table_list]
+    else:
+        selected_tables = all_tables
+
+    state.bq_dataset_id = dataset
+    state.gcp_project_id = proj_id
+    state.dataset_exists = True
+    state.data_source_mode = "existing"
+    state.existing_tables = selected_tables
+    saved_path = app_ctx.save_state()
+
+    result = attach_next_gate_action(
+        CommandResult.success(
+            "data adopt",
+            data={
+                "dataset": dataset,
+                "project_id": proj_id,
+                "table_count": len(selected_tables),
+                "tables": selected_tables,
+                "data_source_mode": "existing",
+                "state_file": str(saved_path),
+            },
+        ),
+        state,
+    )
+
+    def render(_: CommandResult) -> None:
+        print_success(f"Adopted existing dataset `{dataset}` in `{proj_id}` with {len(selected_tables)} table(s).")
+        print_info(
+            f"Next: Run `demo-create lookml model --dataset {dataset}` or `demo-create catalog inspect --dataset {dataset}`."
+        )
+
+    return emit(result, json_output=output_json, human_renderer=render)

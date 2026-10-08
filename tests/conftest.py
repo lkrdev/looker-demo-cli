@@ -101,6 +101,7 @@ _COMMAND_MODULES = (
     "looker_demo_cli.cli",
     "looker_demo_cli.context",
     "looker_demo_cli.commands.agent",
+    "looker_demo_cli.commands.catalog",
     "looker_demo_cli.commands.data",
     "looker_demo_cli.commands.embed",
     "looker_demo_cli.commands.env",
@@ -222,20 +223,41 @@ def install_looker_auth(monkeypatch: pytest.MonkeyPatch):
 class FakeTableSchemaField:
     """Minimal stand-in for ``google.cloud.bigquery.SchemaField``."""
 
-    def __init__(self, name: str, field_type: str = "STRING", mode: str = "NULLABLE"):
+    def __init__(
+        self,
+        name: str,
+        field_type: str = "STRING",
+        mode: str = "NULLABLE",
+        description: str | None = None,
+    ):
         self.name = name
         self.field_type = field_type
         self.mode = mode
+        self.description = description
 
 
 class FakeTable:
     """Minimal stand-in for ``google.cloud.bigquery.Table``."""
 
-    def __init__(self, table_id: str, columns: list[FakeTableSchemaField], num_rows: int = 0):
+    def __init__(
+        self,
+        table_id: str,
+        columns: list[FakeTableSchemaField] | None = None,
+        num_rows: int = 0,
+        description: str | None = None,
+        labels: dict[str, str] | None = None,
+        table_constraints: Any = None,
+    ):
         self.table_id = table_id
-        self.schema = columns
+        self.schema = columns or []
         self.num_rows = num_rows
         self.table_type = "TABLE"
+        self.description = description
+        self.labels = labels or {}
+        self.table_constraints = table_constraints
+        self.time_partitioning = None
+        self.range_partitioning = None
+        self.clustering_fields: list[str] | None = None
 
 
 class FakeBigQueryClient:
@@ -287,6 +309,20 @@ class FakeBigQueryHelper:
             type(self).datasets[dataset_id] = []
             self.created_datasets.append(dataset_id)
         return object()
+
+    def get_dataset_location(self, dataset_id: str) -> str:
+        return self.location
+
+    def get_table_metadata(self, dataset_id: str, table_id: str) -> Any:
+        key = f"{dataset_id}.{table_id}"
+        if key in type(self).tables:
+            return type(self).tables[key]
+        if table_id in type(self).tables:
+            return type(self).tables[table_id]
+        return FakeTable(table_id=table_id, columns=[])
+
+    def preview_rows(self, dataset_id: str, table_id: str, limit: int = 5) -> list[dict[str, Any]]:
+        return [{"row_num": i} for i in range(min(limit, 5))]
 
     def load_parquet_table(
         self,
@@ -361,6 +397,74 @@ def fake_bigquery(monkeypatch: pytest.MonkeyPatch):
 
     FakeBigQueryHelper.datasets = {}
     FakeBigQueryHelper.tables = {}
+
+
+# ---------------------------------------------------------------------------
+# Fake: Dataplex / Knowledge Catalog
+# ---------------------------------------------------------------------------
+
+
+class FakeCatalogClient:
+    """In-memory stand-in for DataplexCatalogClient satisfying CatalogPort."""
+
+    entries: dict[str, dict[str, Any]] = {}
+    entry_links: dict[str, list[dict[str, Any]]] = {}
+    glossary_terms: dict[str, dict[str, Any]] = {}
+    context_joins: dict[str, Any] = {}
+
+    def __init__(self, project_id: str = "fake-project", location: str = "us", credentials: Any = None):
+        self.project_id = project_id
+        self.location = location
+        self.credentials = credentials
+
+    def lookup_entry(self, dataset_id: str, table_id: str, view: str = "ALL") -> dict[str, Any]:
+        key = f"{dataset_id}.{table_id}"
+        return type(self).entries.get(key, {})
+
+    def lookup_entry_links(
+        self,
+        entry_name: str,
+        entry_link_type: str | None = None,
+        page_size: int = 100,
+    ) -> list[dict[str, Any]]:
+        return list(type(self).entry_links.get(entry_name, []))
+
+    def get_glossary_term(self, glossary_id: str, term_id: str) -> dict[str, Any]:
+        key = f"{glossary_id}/{term_id}"
+        return type(self).glossary_terms.get(key, {})
+
+    def lookup_context(self, resources: list[str], format: str = "JSON") -> dict[str, Any]:
+        return {"joins": dict(type(self).context_joins)}
+
+
+_CATALOG_PATCH_TARGETS = (
+    "looker_demo_cli.context",
+    "looker_demo_cli.services.catalog_service",
+)
+
+
+@pytest.fixture
+def fake_catalog(monkeypatch: pytest.MonkeyPatch):
+    """Install :class:`FakeCatalogClient` at import sites."""
+    FakeCatalogClient.entries = {}
+    FakeCatalogClient.entry_links = {}
+    FakeCatalogClient.glossary_terms = {}
+    FakeCatalogClient.context_joins = {}
+
+    for target in _CATALOG_PATCH_TARGETS:
+        try:
+            module = importlib.import_module(target)
+            if hasattr(module, "DataplexCatalogClient"):
+                monkeypatch.setattr(module, "DataplexCatalogClient", FakeCatalogClient)
+        except ModuleNotFoundError:
+            pass
+
+    yield FakeCatalogClient
+
+    FakeCatalogClient.entries = {}
+    FakeCatalogClient.entry_links = {}
+    FakeCatalogClient.glossary_terms = {}
+    FakeCatalogClient.context_joins = {}
 
 
 # ---------------------------------------------------------------------------

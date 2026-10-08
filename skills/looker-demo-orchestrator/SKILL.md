@@ -21,10 +21,16 @@ To eliminate subagent initialization drag, serialization latency, and background
 graph TD
     Start([User Request]) --> Gate0["Gate 0 (gate_0a_precheck): Environment & Skill Audit<br/>(demo-create pre-check --fix --gcp-project &lt;gcp-project&gt;)"]
     Gate0 --> Gate1{"Gate 1 (gate_0b_confirm_targets): 4-Target Confirmation<br/>[requires_human_confirmation=true]<br/>(ask_question -> demo-create confirm-targets)"}
-    Gate1 --> Gate2["Gate 2 (gate_1a_propose_schema): Propose Schema & 5-Row Preview<br/>(demo-create data propose-schema --schema-file &lt;schema-file&gt; --preview)"]
+    Gate1 --> DataBranch{"Data Source Choice"}
+    DataBranch -->|Greenfield Synthesis| Gate2["Gate 2 (gate_1a_propose_schema): Propose Schema & 5-Row Preview<br/>(demo-create data propose-schema --schema-file &lt;schema-file&gt; --preview)"]
     Gate2 --> Gate3{"Gate 3 (gate_1b_approve_schema): Schema ERD & Volume Approval<br/>[requires_human_confirmation=true]<br/>(Render Schema, ERD & Samples in Chat -> ask_question -> demo-create data approve-schema)"}
     Gate3 --> Gate4["Gate 4 (gate_1c_generate_data): Modular DAG Synthesis & BigQuery Load<br/>(demo-create data generate ... --upload --json-scorecard)"]
-    Gate4 --> Gate5["Gate 5 (gate_2a_lookml_model): Semantic Modeling & Draft Dashboards<br/>(demo-create lookml model + lookml-filtered-measures)"]
+    DataBranch -->|Adopt Existing BigQuery Dataset| AdoptData["Adopt Existing BigQuery Dataset<br/>(demo-create data adopt --dataset &lt;dataset-id&gt;)<br/>Satisfies Gates 2-4"]
+    Gate4 --> CatBranch{"Inspect Knowledge Catalog?<br/>(Optional Secondary Step)"}
+    AdoptData --> CatBranch
+    CatBranch -->|Yes: Catalog Inspect| RunCatalog["Inspect Dataplex Knowledge Catalog<br/>(demo-create catalog inspect --dataset &lt;dataset-id&gt;)<br/>Saves .demo-catalog-&lt;dataset&gt;.json"]
+    CatBranch -->|No: Direct Modeling| Gate5["Gate 5 (gate_2a_lookml_model): Semantic Modeling & Draft Dashboards<br/>(demo-create lookml model [--catalog &lt;snapshot&gt;] [--profile rich|hybrid|minimal])"]
+    RunCatalog --> Gate5
     Gate5 --> SnowflakeBranch{"Is Schema 3NF Snowflake<br/>with Chasm Traps?"}
     SnowflakeBranch -->|Yes: Spawn Subagent| S_Snowflake["Subagent: lookml-snowflake-modeler<br/>(NDT Rollups & Chasm Trap Elimination)"]
     SnowflakeBranch -->|No: Standard Star Schema| Gate6{"Gate 6 (gate_2b_certify_polish): 3-Pass Dashboard Polish & Audit<br/>[requires_human_confirmation=true]<br/>(Apply looker-visualizations -> demo-create lookml certify-polish)"}
@@ -52,11 +58,11 @@ graph TD
 
 | Component | Execution Mode | Responsibility & Scope |
 |---|---|---|
-| **Parent Orchestrator** | Direct Parent Turn | Interactive co-design gates (`ask_question`), state-tracked confirmation/certification CLI commands (`pre-check`, `confirm-targets`, `data propose-schema`, `data approve-schema`, `data generate`, `lookml model`, `lookml certify-polish`, `lookml optimize [--skip]`, `lookml deploy`, `lookml approve-critique`, `agent create [--skip]`, `agent publish [--skip]`, `embed scaffold [--skip]`), Modular DAG verification scorecard review, and final delivery report. |
+| **Parent Orchestrator** | Direct Parent Turn | Interactive co-design gates (`ask_question`), state-tracked confirmation/certification CLI commands (`pre-check`, `confirm-targets`, `data propose-schema`, `data approve-schema`, `data generate`, `data adopt`, `catalog inspect`, `lookml model`, `lookml certify-polish`, `lookml optimize [--skip]`, `lookml deploy`, `lookml approve-critique`, `agent create [--skip]`, `agent publish [--skip]`, `embed scaffold [--skip]`), Modular DAG verification scorecard review, and final delivery report. |
 | [`synthetic-data-authoring`](../synthetic-data-authoring/SKILL.md) | **Companion Core Skill** | Guides realistic synthetic dataset design across 4 pillars: non-uniform distributions (Pareto/Log-Normal), cross-column tier coupling, temporal growth/seasonality curves, and Looker Explore optimization. |
 | [`demo-spec`](../demo-spec/SKILL.md) | **Companion Core Skill** | Asynchronously creates and maintains `SPEC.md` as the living technical architecture document across all 13 gates (`0..12`), updating quietly on disk without chat dumping. |
 | [`bigquery-metadata`](../bigquery-metadata/SKILL.md) | **Companion Core Skill** | Extracts BigQuery schemas, PK/FK constraints, and partition info via native `bq` CLI into `SPEC.md` without custom Python scripts or MCP servers. |
-| [`knowledge-catalog-metadata`](../knowledge-catalog-metadata/SKILL.md) | **Companion Core Skill** | Extracts Dataplex Universal Catalog glossaries, data profiling stats, null/distinct ratios, and PII tags via `gcloud dataplex` CLI into `SPEC.md`. |
+| [`knowledge-catalog-metadata`](../knowledge-catalog-metadata/SKILL.md) | **Companion Core Skill** | Extracts Dataplex Universal Catalog glossaries, custom aspects, data profiling stats, and quality scores via `demo-create catalog inspect` or `gcloud dataplex` CLI into `SPEC.md` and generates catalog snapshots for LookML modeling. |
 | [`lookml-filtered-measures`](../lookml-filtered-measures/SKILL.md) | **Companion Core Skill** | Enforces mandatory `SELECT DISTINCT` grounding before writing any `filters: [...]` in LookML measures, preventing `0`/`NULL` ratios (audited at Gate 6 by `lookml certify-polish`). |
 | [`data-engineer`](subagents/data-engineer.md) | **On-Demand Subagent** | Synthesizes high-throughput relational Parquet datasets (`>7,500 rows/sec`), validates invariants via in-memory `TableValidator`, and uploads to BigQuery via ADC with automatic Day Partitioning & Clustering at Gate 4 (`demo-create data generate --upload --json-scorecard`). |
 | [`lookml-snowflake-modeler`](subagents/lookml-snowflake-modeler.md) | **On-Demand Subagent** | Spawned ONLY at Gate 5 (`gate_2a_lookml_model`) when schemas contain complex 3NF snowflake structures with Chasm Traps (multiple 1:N children), diamond joins, or require Native Derived Table (NDT) rollups. |
@@ -168,14 +174,17 @@ Before designing schemas, creating BigQuery datasets, or touching Looker, the ag
 3. **Target Looker Instance / OAuth Account**: (e.g. `my-company.looker.com` vs `demo-instance` from `lkr auth list` or `available_oauth_instances`)
 4. **Target Looker Database Connection**: (e.g. `looker_demo_bigquery` or `default_bigquery_connection`)
 
-Once the human confirms all 4 targets, **record them in `.demo-state.json`** using `demo-create confirm-targets`:
+*(Optional) If the user already has an existing BigQuery dataset they want to model rather than synthesizing data, they can also confirm the dataset target here via `--dataset <dataset-id>`.*
+
+Once the human confirms all targets, **record them in `.demo-state.json`** using `demo-create confirm-targets`:
 
 ```bash
 demo-create confirm-targets \
   --gcp-account <gcp-account> \
   --gcp-project <gcp-project> \
   --looker-account <looker-account> \
-  --connection <connection-name>
+  --connection <connection-name> \
+  [--dataset <dataset-id>]
 ```
 
 > [!IMPORTANT]
@@ -197,15 +206,74 @@ demo-create confirm-targets \
 
 ---
 
-## 2. Iterative Schema Co-Design & Modular DAG Synthesis (Gates 2–4: `gate_1a_propose_schema`, `gate_1b_approve_schema`, `gate_1c_generate_data`)
+## 2. Dataset Preparation: Greenfield Synthesis vs. Existing Dataset Adoption (Gates 2–4: `gate_1a_propose_schema`, `gate_1b_approve_schema`, `gate_1c_generate_data`)
 
-When creating demo datasets, the agent **MUST co-iterate with the user** across three CLI-enforced gates (`2..4`), using the [`synthetic-data-authoring`](../synthetic-data-authoring/SKILL.md) skill, `ModularDAGSynthesizer`, in-memory `TableValidator` quality gates, and resilient BigQuery ADC ingestion:
+When preparing datasets for modeling and dashboarding, the workflow supports two paths:
+- **Path A: Greenfield Synthetic Data Generation (Gates 2–4)**: When creating new demo datasets, the agent **MUST co-iterate with the user** across three CLI-enforced gates (`2..4`), using the [`synthetic-data-authoring`](../synthetic-data-authoring/SKILL.md) skill, `ModularDAGSynthesizer`, in-memory `TableValidator` quality gates, and resilient BigQuery ADC ingestion.
+- **Path B: Existing Dataset Adoption (`demo-create data adopt`)**: When the user provides an existing BigQuery dataset, bypass synthetic data generation using `demo-create data adopt --dataset <dataset-id>`. This validates dataset existence, schema definitions, and table constraints via BigQuery Information Schema, populates `.demo-state.json`, marks Gates 2, 3, and 4 as satisfied, and advances the state machine directly to Gate 5 (`gate_2a_lookml_model`).
 
 ```mermaid
 graph TD
-    A["Gate 2 (gate_1a_propose_schema): Author Blueprint & 5-Row Micro-Sample<br/>demo-create data propose-schema --schema-file &lt;schema-file&gt; --preview"] --> B{"Gate 3 (gate_1b_approve_schema): Render Schema/ERD/Preview in Chat -> ask_question<br/>demo-create data approve-schema --row-count &lt;row-count&gt; --dataset &lt;dataset-id&gt;"}
+    DataChoice{Data Preparation Path} -->|Path A: Greenfield Synthesis| A["Gate 2 (gate_1a_propose_schema): Author Blueprint & 5-Row Micro-Sample<br/>demo-create data propose-schema --schema-file &lt;schema-file&gt; --preview"]
+    A --> B{"Gate 3 (gate_1b_approve_schema): Render Schema/ERD/Preview in Chat -> ask_question<br/>demo-create data approve-schema --row-count &lt;row-count&gt; --dataset &lt;dataset-id&gt;"}
     B --> C["Gate 4 (gate_1c_generate_data): Modular DAG Generation & ADC Upload<br/>demo-create data generate --schema-file &lt;schema-file&gt; --row-count &lt;row-count&gt; --gcp-project &lt;gcp-project&gt; --dataset &lt;dataset-id&gt; --upload --json-scorecard"]
+    DataChoice -->|Path B: Adopt Existing Dataset| D["Adopt Existing BigQuery Dataset<br/>demo-create data adopt --dataset &lt;dataset-id&gt;<br/>(Validates Tables, Constraints, Partitions -> Satisfies Gates 2-4)"]
+    C --> PreGate5{"Dataplex Knowledge Catalog Inspection<br/>(Optional Secondary Action)"}
+    D --> PreGate5
+    PreGate5 -->|Inspect Catalog| E["demo-create catalog inspect --dataset &lt;dataset-id&gt;<br/>(Saves .demo-catalog-&lt;dataset&gt;.json & Sets state.catalog_snapshot_path)"]
+    PreGate5 -->|Direct Modeling| F["Gate 5 (gate_2a_lookml_model): Semantic LookML Modeling"]
+    E --> F
 ```
+
+### Path B: Adopting an Existing BigQuery Dataset (`demo-create data adopt`)
+
+When an existing BigQuery dataset is available and confirmed:
+
+```bash
+demo-create data adopt \
+  --dataset "${DATASET}" \
+  [--gcp-project "${PROJECT_ID}"] \
+  [--location "${LOCATION}"]
+```
+
+`data adopt`:
+1. Queries BigQuery `INFORMATION_SCHEMA.TABLES`, `COLUMN_FIELD_PATHS`, and `TABLE_CONSTRAINTS` via Google Cloud Python SDK ADC.
+2. Identifies all `BASE TABLE` entities, declared primary/foreign keys, and day partitioning/clustering.
+3. Automatically marks Gate 2 (`gate_1a_propose_schema`), Gate 3 (`gate_1b_approve_schema`), and Gate 4 (`gate_1c_generate_data`) as satisfied in `.demo-state.json`.
+4. Advances the state machine directly to Gate 5 (`gate_2a_lookml_model`), suggesting an optional `catalog inspect` command as a secondary action.
+
+---
+
+### Optional Pre-Modeling Step: Dataplex Knowledge Catalog Inspection
+
+Before generating LookML at Gate 5, the agent can inspect Google Cloud Dataplex Universal Catalog (Knowledge Catalog) to extract business glossaries, column-level descriptions, custom aspect types, data quality scores, and join relationships:
+
+```bash
+demo-create catalog inspect \
+  --dataset "${DATASET}" \
+  [--gcp-project "${PROJECT_ID}"] \
+  [--output-file ".demo-catalog-${DATASET}.json"]
+```
+
+This generates a structured `CatalogSnapshot` JSON (`.demo-catalog-${DATASET}.json`) and records `catalog_snapshot_path` in `.demo-state.json`. `demo-create lookml model` at Gate 5 automatically discovers and consumes this snapshot.
+
+- **Available Mapping Profiles**:
+  Run `demo-create catalog profiles` to inspect how catalog metadata maps to LookML:
+  - `rich`: Curated display labels and descriptions on all views/fields, derived filtered measures from glossary terms, Dataplex aspect types mapped to LookML tags.
+  - `hybrid` (default): Curated descriptions & labels where present, fallback to schema-derived identifiers.
+  - `minimal`: Pure BigQuery schema-derived fields with descriptions preserved.
+- **Mock/Testbed Seeding (`catalog seed`)**:
+  In testing environments without live Dataplex aspect types, seed mock catalog metadata from a schema blueprint:
+  ```bash
+  demo-create catalog seed \
+    --dataset "${DATASET}" \
+    --schema-file ./artifacts/generated_data/schema.json \
+    --output-file ".demo-catalog-${DATASET}.json"
+  ```
+
+---
+
+### Path A: Greenfield Synthetic Data Generation (Gates 2–4)
 
 > [!CAUTION]
 > ### 🛑 Strict 2-Step Sequential Visible Presentation Rule (Anti-Zero-Length Turn)
@@ -301,15 +369,24 @@ create_lookml_model(body={
 ### A. Gate 5 (`gate_2a_lookml_model`) — Semantic Modeling, Triage & Filtered Measure Grounding (CLI-First + On-Demand `lookml-snowflake-modeler`)
 
 1. **Fast-Path CLI Scaffolding & Metadata Introspection (Parent Orchestrator)**:
-   - At the start of Gate 5 (`gate_2a_lookml_model`), execute `bigquery-metadata` (`bq query` on `INFORMATION_SCHEMA` / `bq show`) and `knowledge-catalog-metadata` (`gcloud dataplex`) via CLI to populate `SPEC.md` under `## Data Dictionary & Semantic Context` (including primary/foreign keys, null/distinct ratios, low-cardinality `suggestions`, and PII `access_grant` directives). Never invoke MCP servers.
+   - At the start of Gate 5 (`gate_2a_lookml_model`), execute `bigquery-metadata` (`bq query` on `INFORMATION_SCHEMA` / `bq show`) and `knowledge-catalog-metadata` (`demo-create catalog inspect` or `gcloud dataplex`) via CLI to populate `SPEC.md` under `## Data Dictionary & Semantic Context` (including primary/foreign keys, null/distinct ratios, low-cardinality `suggestions`, and PII `access_grant` directives). Never invoke MCP servers.
    - Run `demo-create lookml model` directly in the parent session:
      ```bash
      demo-create lookml model \
        --looker-project "${LOOKER_PROJECT}" \
        --dataset "${DATASET}" \
        --connection "${CONNECTION}" \
-       --gcp-project "${PROJECT_ID}"
+       --gcp-project "${PROJECT_ID}" \
+       [--catalog ".demo-catalog-${DATASET}.json"] \
+       [--profile rich|hybrid|minimal]
      ```
+   - **Knowledge Catalog (Dataplex) Integration**:
+     - **Auto-Discovery**: If `state.catalog_snapshot_path` is recorded or `.demo-catalog-<dataset>.json` exists in the current working directory, `lookml model` automatically discovers and applies catalog metadata (unless `--no-catalog` is passed).
+     - **Mapping Profiles (`--profile`)**:
+       - `rich`: Curated Dataplex display labels & business descriptions on all views, dimensions, and measures. Generates filtered measures from glossary terms, and maps custom aspect types to LookML tags / dimension groups.
+       - `hybrid` (default): Curated descriptions & labels where present, falling back to schema-derived identifiers.
+       - `minimal`: Pure BigQuery schema-derived fields with descriptions preserved.
+     - **Curated Explores & Descriptions**: Explores in `.model.lkml` automatically inherit curated business labels (e.g. `explore: fct_orders { label: "Order Operations" ... }`) and view descriptions are preserved in the LookML view definitions.
    - **Mandatory `SELECT DISTINCT` Grounding ([`lookml-filtered-measures`](../lookml-filtered-measures/SKILL.md))**: Never guess categorical filter strings (e.g., `"2xx"`, `"active"`). Before writing any `filters: [...]` block inside a measure, inspect the actual distinct values in the local Parquet file or run `SELECT DISTINCT` against BigQuery so filtered measures and derived ratios (`SAFE_DIVIDE(${num}, NULLIF(${den}, 0))`) never evaluate to `0` or `NULL`.
    - **Mandatory Field Standards**: Explicit `label:` and `description:` parameters on EVERY dimension, dimension group, and measure (Title Case, e.g. `label: "Monthly Recurring Revenue"`).
 
@@ -648,8 +725,12 @@ When performing isolated operations or advancing through the 13-stage state mach
 | | `approve-schema` | **Gate 3** (`gate_1b_approve_schema`) | Records user approval of the proposed schema ERD and target fact row volume | `--row-count`, `--dataset`, `--schema-file`, `--json` |
 | | `generate` | **Gate 4** (`gate_1c_generate_data`) | Synthesizes Parquet dataset via Modular DAG and uploads to BigQuery via ADC | `--schema-file`, `--domain`, `--row-count`, `--output-dir`, `--gcp-project`, `--dataset`, `--upload`, `--json-scorecard` |
 | | `upload` | **Gate 4** (`gate_1c_generate_data`) | Creates dataset and uploads local Parquet tables to BigQuery with Day Partitioning & Clustering | `--parquet-dir`, `--gcp-project`, `--dataset`, `--location`, `--verify-only` |
+| | `adopt` | **Gates 2–4** | Adopts existing BigQuery dataset, validates tables/constraints, satisfies Gates 2–4 | `--dataset`, `--gcp-project`, `--location`, `--json` |
 | | `inspect` | — | Introspects tables and schema in an existing BigQuery dataset | `--gcp-project`, `--dataset`, `--location`, `--json` |
-| **`demo-create lookml`** | `model` | **Gate 5** (`gate_2a_lookml_model`) | Generates LookML views, explores, and draft dashboards from BigQuery or Parquet | `--looker-project`, `--dataset`, `--parquet-dir`, `--connection`, `--gcp-project`, `--output-dir` |
+| **`demo-create catalog`** | `inspect` | — | Discovers Dataplex entry aspects, glossaries, profiling, and quality scans into `.demo-catalog-<dataset>.json` | `--dataset`, `--gcp-project`, `--location`, `--output-file`, `--json` |
+| | `profiles` | — | Lists available catalog-to-LookML mapping profiles (`rich`, `hybrid`, `minimal`) | `--json` |
+| | `seed` | — | Seeds mock Dataplex catalog snapshot from schema blueprint for testbeds | `--dataset`, `--schema-file`, `--output-file`, `--json` |
+| **`demo-create lookml`** | `model` | **Gate 5** (`gate_2a_lookml_model`) | Generates LookML views, explores, and draft dashboards from BigQuery or Parquet | `--looker-project`, `--dataset`, `--parquet-dir`, `--connection`, `--gcp-project`, `--catalog`, `--profile`, `--use-catalog/--no-catalog`, `--output-dir` |
 | | `certify-polish` | **Gate 6** (`gate_2b_certify_polish`) | Audits dashboard LookML for 3-Pass Executive Polish and `SELECT DISTINCT` filtered measure grounding | `--lookml-dir`, `--strict`, `--json` |
 | | `optimize` | **Gate 7** (`gate_3a_optimize`) | Applies (or skips with `--skip`) Google Cloud LookML Server Performance optimizations | `--lookml-dir`, `--backup/--no-backup`, `--skip`, `--json` |
 | | `restore` | — | Restores LookML files from the `.backup_pre_opt` snapshot | `--lookml-dir`, `--json` |

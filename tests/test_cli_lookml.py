@@ -9,6 +9,7 @@ import pytest
 import responses
 from conftest import envelope, read_state
 
+from looker_demo_cli.catalog.models import CatalogSnapshot, ColumnMeta, TableMeta
 from looker_demo_cli.errors import (
     AuthError,
     ConfigError,
@@ -327,7 +328,216 @@ def test_model_missing_connection_or_tables_raises_config_error(invoke, sample_p
     assert envelope(no_tables)["errors"][0]["message"] == "No tables found to model."
 
 
-# ---------------------------------------------------------------------------
+def _create_sample_catalog_snapshot(path: Path) -> CatalogSnapshot:
+    """Helper creating a test CatalogSnapshot and saving to disk."""
+    col_id = ColumnMeta(
+        name="customer_id",
+        data_type="INT64",
+        is_primary_key=True,
+        description="Unique customer ID",
+    )
+    col_name = ColumnMeta(
+        name="full_name",
+        data_type="STRING",
+        business_label="Customer Full Name",
+        description="Full legal name",
+    )
+    col_spend = ColumnMeta(
+        name="lifetime_spend",
+        data_type="FLOAT64",
+        business_label="Lifetime Spend (USD)",
+        format_pattern="usd_0",
+        description="Aggregate customer spend in USD",
+    )
+    table = TableMeta(
+        name="dim_customers",
+        role="dimension",
+        primary_key=["customer_id"],
+        business_label="Curated Customers",
+        description="Curated customer master directory",
+        columns={
+            "customer_id": col_id,
+            "full_name": col_name,
+            "lifetime_spend": col_spend,
+        },
+    )
+    snapshot = CatalogSnapshot(
+        dataset_id="fintech_ds",
+        project_id="test-proj",
+        location="us",
+        tables={"dim_customers": table},
+    )
+    snapshot.compute_coverage()
+    snapshot.save(path)
+    return snapshot
+
+
+def test_model_from_catalog_snapshot_explicit_path(invoke, tmp_path: Path, isolated_cwd: Path) -> None:
+    """`lookml model --catalog <path>` enriches views, explores, and dashboards with Knowledge Catalog metadata."""
+    snap_path = tmp_path / "test_catalog.json"
+    _create_sample_catalog_snapshot(snap_path)
+
+    out = tmp_path / "lkml_cat"
+    res = invoke(
+        [
+            "lookml",
+            "model",
+            "--catalog",
+            str(snap_path),
+            "--output-dir",
+            str(out),
+            "--looker-project",
+            "fintech_demo",
+            "--dataset",
+            "fintech_ds",
+            "--connection",
+            "fintech_conn",
+            "--json",
+        ]
+    )
+    assert res.exit_code == 0, res.output
+    payload = envelope(res)
+    assert payload["data"]["source"] == "knowledge_catalog"
+    assert payload["data"]["catalog_snapshot"] == str(snap_path)
+    assert payload["data"]["catalog_profile"] == "rich"
+
+    # Verify generated view contains curated business labels and format patterns
+    view_content = (out / "views" / "dim_customers.view.lkml").read_text(encoding="utf-8")
+    assert 'label: "Curated Customers"' in view_content
+    assert 'label: "Customer Full Name"' in view_content
+    assert 'label: "Lifetime Spend (USD)"' in view_content
+    assert "value_format_name: usd_0" in view_content
+
+    # Verify generated model contains curated explore label
+    model_content = (out / "models" / "fintech_demo.model.lkml").read_text(encoding="utf-8")
+    assert "explore: dim_customers {" in model_content
+    assert 'label: "Curated Customers"' in model_content
+
+    # Verify state saved
+    state = read_state(isolated_cwd)
+    assert state["catalog_profile"] == "rich"
+    assert state["catalog_snapshot_path"] == str(snap_path)
+
+
+def test_model_from_catalog_snapshot_state_discovery(invoke, tmp_path: Path, isolated_cwd: Path, state_file) -> None:
+    """`lookml model` automatically discovers and uses catalog snapshot recorded in flow state."""
+    snap_path = tmp_path / "discovered_catalog.json"
+    _create_sample_catalog_snapshot(snap_path)
+
+    state_file(
+        catalog_snapshot_path=str(snap_path),
+        catalog_profile="rich",
+        bq_dataset_id="fintech_ds",
+        looker_connection_name="fintech_conn",
+    )
+
+    out = tmp_path / "lkml_discovered"
+    res = invoke(
+        [
+            "lookml",
+            "model",
+            "--output-dir",
+            str(out),
+            "--looker-project",
+            "fintech_demo",
+            "--json",
+        ]
+    )
+    assert res.exit_code == 0, res.output
+    payload = envelope(res)
+    assert payload["data"]["source"] == "knowledge_catalog"
+    assert payload["data"]["catalog_profile"] == "rich"
+    assert (out / "views" / "dim_customers.view.lkml").exists()
+
+
+def test_model_from_catalog_snapshot_profile_override(invoke, tmp_path: Path) -> None:
+    """`--profile minimal` overrides rich metadata and suppresses Dataplex aspect annotations."""
+    snap_path = tmp_path / "test_catalog.json"
+    _create_sample_catalog_snapshot(snap_path)
+
+    out = tmp_path / "lkml_minimal"
+    res = invoke(
+        [
+            "lookml",
+            "model",
+            "--catalog",
+            str(snap_path),
+            "--profile",
+            "minimal",
+            "--output-dir",
+            str(out),
+            "--looker-project",
+            "fintech_demo",
+            "--dataset",
+            "fintech_ds",
+            "--connection",
+            "fintech_conn",
+            "--json",
+        ]
+    )
+    assert res.exit_code == 0, res.output
+    payload = envelope(res)
+    assert payload["data"]["source"] == "knowledge_catalog"
+    assert payload["data"]["catalog_profile"] == "minimal"
+
+    view_content = (out / "views" / "dim_customers.view.lkml").read_text(encoding="utf-8")
+    # In minimal mode, business_label is suppressed
+    assert 'label: "Curated Customers"' not in view_content
+    assert 'label: "Customer Full Name"' not in view_content
+
+
+def test_model_with_no_catalog_flag(invoke, tmp_path: Path, state_file, stub_introspection, spec_factory) -> None:
+    """`--no-catalog` suppresses recorded catalog snapshot and falls back to BigQuery native path."""
+    snap_path = tmp_path / "test_catalog.json"
+    _create_sample_catalog_snapshot(snap_path)
+
+    stub_introspection([spec_factory("customers")])
+    state_file(
+        catalog_snapshot_path=str(snap_path),
+        bq_dataset_id="fintech_ds",
+        dataset_exists=True,
+        looker_connection_name="fintech_conn",
+    )
+
+    out = tmp_path / "lkml_no_cat"
+    res = invoke(
+        [
+            "lookml",
+            "model",
+            "--no-catalog",
+            "--output-dir",
+            str(out),
+            "--looker-project",
+            "fintech_demo",
+            "--json",
+        ]
+    )
+    assert res.exit_code == 0, res.output
+    payload = envelope(res)
+    assert payload["data"]["source"] == "bigquery"
+
+
+def test_model_missing_catalog_file_raises_config_error(invoke, tmp_path: Path) -> None:
+    """Passing a nonexistent path to `--catalog` raises ConfigError."""
+    res = invoke(
+        [
+            "lookml",
+            "model",
+            "--catalog",
+            str(tmp_path / "does_not_exist.json"),
+            "--output-dir",
+            str(tmp_path / "out"),
+            "--looker-project",
+            "demo",
+            "--connection",
+            "conn",
+            "--json",
+        ]
+    )
+    assert res.exit_code == ConfigError.exit_code
+    assert envelope(res)["errors"][0]["code"] == "CONFIG_ERROR"
+
+
 # lookml deploy
 # ---------------------------------------------------------------------------
 

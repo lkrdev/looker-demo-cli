@@ -18,6 +18,7 @@ import typer
 
 from looker_demo_cli.commands import env, precheck, status
 from looker_demo_cli.commands.agent import agent_app
+from looker_demo_cli.commands.catalog import catalog_app
 from looker_demo_cli.commands.data import data_app
 from looker_demo_cli.commands.embed import embed_app
 from looker_demo_cli.commands.env import env_app
@@ -50,6 +51,7 @@ env.register_root(app)
 app.add_typer(agent_app, name="agent")
 app.add_typer(ge_app, name="ge")
 app.add_typer(env_app, name="env")
+app.add_typer(catalog_app, name="catalog")
 app.add_typer(data_app, name="data")
 app.add_typer(lookml_app, name="lookml")
 app.add_typer(embed_app, name="embed")

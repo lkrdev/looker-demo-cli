@@ -66,11 +66,13 @@ def generate_tables(output_dir: Path, row_count: int = 15000) -> dict[str, pd.Da
     org_ids = [f"ORG-{i:05d}" for i in range(1, n_orgs + 1)]
     tiers = rng.choice(["Enterprise", "Growth", "Standard"], size=n_orgs, p=[0.2, 0.35, 0.45])
 
-    df_orgs = pd.DataFrame({
-        "org_id": org_ids,
-        "tier": tiers,
-        "region": rng.choice(["North America", "EMEA", "APAC"], size=n_orgs, p=[0.5, 0.3, 0.2]),
-    })
+    df_orgs = pd.DataFrame(
+        {
+            "org_id": org_ids,
+            "tier": tiers,
+            "region": rng.choice(["North America", "EMEA", "APAC"], size=n_orgs, p=[0.5, 0.3, 0.2]),
+        }
+    )
 
     # Pareto weights (80/20 rule) for FK sampling so top orgs generate majority of usage events
     weights = rng.pareto(a=1.5, size=n_orgs) + 1.0
@@ -89,15 +91,17 @@ def generate_tables(output_dir: Path, row_count: int = 15000) -> dict[str, pd.Da
     start_times = now - pd.to_timedelta(rng.exponential(scale=90, size=row_count).clip(0, 365), unit="D")
     end_times = start_times + pd.to_timedelta(rng.lognormal(mean=4.0, sigma=1.0, size=row_count), unit="s")
 
-    df_usage = pd.DataFrame({
-        "usage_id": [f"USG-{i:06d}" for i in range(1, row_count + 1)],
-        "org_id": [org_ids[idx] for idx in sampled_indices],
-        "session_start_time": start_times.floor("s"),
-        "session_end_time": end_times.floor("s"),
-        "compute_cost_usd": compute_cost,
-        "discount_usd": discount_usd,
-        "net_cost_usd": net_cost_usd,
-    })
+    df_usage = pd.DataFrame(
+        {
+            "usage_id": [f"USG-{i:06d}" for i in range(1, row_count + 1)],
+            "org_id": [org_ids[idx] for idx in sampled_indices],
+            "session_start_time": start_times.floor("s"),
+            "session_end_time": end_times.floor("s"),
+            "compute_cost_usd": compute_cost,
+            "discount_usd": discount_usd,
+            "net_cost_usd": net_cost_usd,
+        }
+    )
     return {"dim_organizations": df_orgs, "fct_cloud_usage": df_usage}
 ```
 
