@@ -197,7 +197,7 @@ def test_model_from_parquet_writes_expected_tree_and_state(
     payload = envelope(result)
     assert payload["data"]["source"] == "parquet"
     assert sorted(payload["data"]["tables"]) == ["dim_products", "dim_users", "fct_orders"]
-    assert payload["next_actions"][0]["gate"] == 6
+    assert payload["next_actions"][0]["gate"] == 7
     assert lkml_tree(out) == {
         "views/dim_products.view.lkml",
         "views/dim_users.view.lkml",
@@ -752,7 +752,7 @@ def test_certify_polish_optimize_skip_deploy_guards_and_approve_critique(
     assert cert.exit_code == 0, cert.output
     cert_payload = envelope(cert)
     assert cert_payload["data"]["certified"] is True
-    assert cert_payload["next_actions"][0]["gate"] == 7
+    assert cert_payload["next_actions"][0]["gate"] == 8
     assert read_state(isolated_cwd)["polish_certified"] is True
 
     # Still blocked at deploy until Gate 3A (optimize or optimize --skip) is resolved
@@ -765,7 +765,7 @@ def test_certify_polish_optimize_skip_deploy_guards_and_approve_critique(
     assert skip_opt.exit_code == 0, skip_opt.output
     skip_payload = envelope(skip_opt)
     assert skip_payload["data"]["skipped"] is True
-    assert skip_payload["next_actions"][0]["gate"] == 8
+    assert skip_payload["next_actions"][0]["gate"] == 9
     assert read_state(isolated_cwd)["optimizer_status"] == "skipped"
 
     # Gate 3C: approve-critique requires deployed_dashboard_url
@@ -781,7 +781,7 @@ def test_certify_polish_optimize_skip_deploy_guards_and_approve_critique(
     assert critique.exit_code == 0, critique.output
     critique_payload = envelope(critique)
     assert critique_payload["data"]["critique_approved"] is True
-    assert critique_payload["next_actions"][0]["gate"] == 10
+    assert critique_payload["next_actions"][0]["gate"] == 11
     assert read_state(isolated_cwd)["critique_approved"] is True
 
 

@@ -40,7 +40,7 @@ Failures are reported by exit code, so a caller never has to parse prose:
 | :--- | :--- |
 | [`status`](#demo-create-status) | Report the completed gates, the current gate, and the exact next command. |
 | [`pre-check`](#demo-create-pre-check) | Audit GCP/ADC credentials, MCP server definitions, and agent skill folders. |
-| [`confirm-targets`](#demo-create-confirm-targets) | Record the 4 human-confirmed environment targets and initialize SPEC.md (Gate 0B). |
+| [`confirm-targets`](#demo-create-confirm-targets) | Record the human-confirmed environment targets and deployment mode, and initialize SPEC.md (Gate 0B). |
 | [`skills`](#demo-create-skills) | View and manage intent-based global agent skills. |
 | [`run-script`](#demo-create-run-script) | Execute a Python script using the CLI's bundled runtime and dependencies. |
 | [`python`](#demo-create-python) | Execute Python within the CLI's environment (e.g. `demo-create python -c '...'`). |
@@ -90,13 +90,14 @@ demo-create pre-check [OPTIONS]
 | `--fix` | Automatically install missing MCP configs and organize global skills |  |
 | `--json` | Emit the result envelope as JSON on stdout |  |
 | `--gcp-project` | Target Google Cloud Project ID |  |
+| `--require-looker` | Block pre-check if Looker authentication is missing (otherwise verified at confirm-targets when --mode full is selected) |  |
 | `--state-file` | Path to .demo-state.json. Defaults to discovering it in the current directory. |  |
 
 ---
 
 ## `demo-create confirm-targets`
 
-Record the 4 human-confirmed environment targets and initialize SPEC.md (Gate 0B).
+Record the human-confirmed environment targets and deployment mode, and initialize SPEC.md (Gate 0B).
 
 ```bash
 demo-create confirm-targets [OPTIONS]
@@ -108,6 +109,7 @@ demo-create confirm-targets [OPTIONS]
 | `--gcp-project` | Confirmed Google Cloud Project ID |  |
 | `--looker-account` | Confirmed Looker OAuth account or instance alias |  |
 | `--connection` | Confirmed Looker database connection name |  |
+| `--mode` | Deployment mode: 'full' (BigQuery + Knowledge Catalog + Looker) or 'bq_only' (BigQuery + Knowledge Catalog only) | `full` |
 | `--dataset` | Optional existing BigQuery dataset ID to adopt |  |
 | `--looker-project` | Optional Looker project/model name |  |
 | `--instance` | Optional Looker instance URL |  |
@@ -368,6 +370,7 @@ demo-create catalog inspect [OPTIONS]
 | `--gcp-project` | GCP Project ID. Defaults to confirmed target project. |  |
 | `--location` | Dataset location (e.g. 'us', 'eu', 'us-central1'). | `us` |
 | `--output-file`, `-o` | Optional path to save the CatalogSnapshot JSON file. |  |
+| `--skip` | Skip Knowledge Catalog inspection and advance to LookML modeling |  |
 | `--json` | Emit result envelope as JSON on stdout |  |
 | `--state-file` | Path to .demo-state.json. Defaults to discovering it in the current directory. |  |
 
@@ -393,12 +396,13 @@ demo-create catalog seed [OPTIONS]
 
 | Option | Description | Default |
 | :--- | :--- | :--- |
-| `--dataset` | Target BigQuery dataset ID to seed metadata for **(required)** |  |
+| `--dataset` | Target BigQuery dataset ID to seed metadata for. Defaults to state dataset. |  |
 | `--gcp-project` | Target GCP Project ID. Defaults to confirmed target project. |  |
 | `--location` | Dataset location | `us` |
 | `--aspect-type-name` | Name for the semantic curation Aspect Type | `semantic-curation` |
 | `--glossary-name` | Name for the Dataplex Business Glossary | `fintech-glossary` |
 | `--mode` | Execution mode: 'plan' or 'execute' | `execute` |
+| `--skip` | Skip Knowledge Catalog metadata seeding and advance to LookML modeling |  |
 | `--json` | Emit result envelope as JSON on stdout |  |
 | `--state-file` | Path to .demo-state.json. Defaults to discovering it in the current directory. |  |
 
@@ -419,6 +423,7 @@ demo-create catalog sync [OPTIONS]
 | `--profile` | Knowledge Catalog mapping profile ('rich', 'hybrid', 'minimal'). Defaults to state or recommended. |  |
 | `--layered`, `--no-layered` | Use layered LookML views (base/ and refinements/). Defaults to auto-detecting project structure. |  |
 | `--dry-run` | Report planned metadata diffs without modifying LookML files. |  |
+| `--skip` | Skip Knowledge Catalog LookML synchronization |  |
 | `--location` | Dataset/Catalog location (e.g. 'us', 'eu', 'us-central1'). | `us` |
 | `--json` | Emit result envelope as JSON on stdout |  |
 | `--state-file` | Path to .demo-state.json. Defaults to discovering it in the current directory. |  |

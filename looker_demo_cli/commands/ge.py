@@ -77,7 +77,7 @@ def ge_status(
         result.add_next_action(
             "Configure Gemini Enterprise in Looker",
             "demo-create ge configure --gcp-project <gcp-project-id>",
-            gate=11,
+            gate=12,
             requires_human_confirmation=True,
         )
 
@@ -172,7 +172,7 @@ def ge_configure(
     ).add_next_action(
         "Publish the Conversational Analytics agent to Gemini Enterprise",
         "demo-create agent publish --agent-id <agent-id>",
-        gate=11,
+        gate=12,
         requires_human_confirmation=True,
     )
 

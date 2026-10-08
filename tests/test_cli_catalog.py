@@ -96,9 +96,9 @@ def test_catalog_inspect_happy_path(invoke, fake_bigquery, fake_catalog, isolate
     assert state.get("catalog_coverage_pct") is not None
     assert state.get("catalog_profile") is not None
 
-    # Check next_actions transitions to Gate 5 with --catalog
+    # Check next_actions transitions to Gate 6 with --catalog
     assert len(payload["next_actions"]) >= 1
-    assert payload["next_actions"][0]["gate"] == 5
+    assert payload["next_actions"][0]["gate"] == 6
     assert "--catalog" in payload["next_actions"][0]["command"]
 
 
@@ -301,11 +301,12 @@ def test_data_adopt_happy_path(invoke, fake_bigquery, isolated_cwd: Path) -> Non
     assert state["data_source_mode"] == "existing"
     assert state["existing_tables"] == ["customers", "orders", "line_items"]
 
-    # Verify next_actions has Gate 5 and optional catalog inspect step
-    assert len(payload["next_actions"]) == 2
+    # Verify next_actions has Gate 5 (gate_1d_catalog)
+    assert len(payload["next_actions"]) == 1
     assert payload["next_actions"][0]["gate"] == 5
-    assert payload["next_actions"][1]["description"] == "Optional: Inspect Knowledge Catalog (Dataplex) metadata"
-    assert "catalog inspect --dataset production_dw" in payload["next_actions"][1]["command"]
+    assert "gate_1d_catalog" in payload["next_actions"][0]["description"]
+    assert "catalog inspect --dataset production_dw" in payload["next_actions"][0]["command"]
+    assert payload["next_actions"][0]["requires_human_confirmation"] is True
 
 
 def test_data_adopt_with_table_filter(invoke, fake_bigquery, isolated_cwd: Path) -> None:
@@ -561,3 +562,30 @@ def test_catalog_sync_dry_run_and_apply(invoke, tmp_path: Path, isolated_cwd: Pa
 
     ref_text = (lookml_dir / "views" / "refinements" / "dim_users.refinement.lkml").read_text()
     assert 'label: "Platform Accounts"' in ref_text
+
+
+def test_catalog_skip_branches(invoke, isolated_cwd: Path) -> None:
+    """`catalog inspect --skip`, `catalog seed --skip`, and `catalog sync --skip` set catalog_status='skipped'."""
+    # 1. catalog inspect --skip
+    res_insp = invoke(["catalog", "inspect", "--skip", "--json"])
+    assert res_insp.exit_code == 0
+    payload_insp = envelope(res_insp)
+    assert payload_insp["data"]["status"] == "skipped"
+    state = read_state(isolated_cwd)
+    assert state["catalog_status"] == "skipped"
+
+    # 2. catalog seed --skip
+    res_seed = invoke(["catalog", "seed", "--skip", "--json"])
+    assert res_seed.exit_code == 0
+    payload_seed = envelope(res_seed)
+    assert payload_seed["data"]["status"] == "skipped"
+    state = read_state(isolated_cwd)
+    assert state["catalog_status"] == "skipped"
+
+    # 3. catalog sync --skip
+    res_sync = invoke(["catalog", "sync", "--skip", "--json"])
+    assert res_sync.exit_code == 0
+    payload_sync = envelope(res_sync)
+    assert payload_sync["data"]["status"] == "skipped"
+    state = read_state(isolated_cwd)
+    assert state["catalog_status"] == "skipped"

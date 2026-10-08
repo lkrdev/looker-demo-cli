@@ -101,6 +101,7 @@ class _AuditFindings:
     mcp_statuses: list[MCPStatus]
     skill_statuses: list[SkillInstallStatus]
     looker_status: LookerAuthStatus
+    require_looker: bool = False
 
     @property
     def no_accounts_configured(self) -> bool:
@@ -134,7 +135,9 @@ class _AuditFindings:
         dependency order, and the three GCP conditions are mutually exclusive:
         "no accounts" subsumes "needs reauth", which subsumes "no access".
         Reporting all three would tell the user to fix problems that only exist
-        because of the first one.
+        because of the first one. Looker authentication is only a hard blocker
+        at Gate 0 when ``require_looker`` is true; otherwise it is enforced at
+        Gate 1 (``confirm-targets``) when ``--mode full`` is selected.
 
         Returns:
             One human-readable sentence per blocker; empty when unblocked.
@@ -155,7 +158,7 @@ class _AuditFindings:
                 f"No configured GCP account has BigQuery access on project '{self.effective_project or 'default'}'."
             )
 
-        if not self.looker_status.is_authenticated:
+        if self.require_looker and not self.looker_status.is_authenticated:
             reasons.append(
                 "Looker is not authenticated "
                 f"({self.looker_status.error_message or 'No active OAuth session or API key'})."
@@ -221,7 +224,7 @@ def _audit_mcp_servers(fix: bool) -> list[MCPStatus]:
     return mcp_statuses
 
 
-def _collect_findings(*, fix: bool, gcp_project: str) -> _AuditFindings:
+def _collect_findings(*, fix: bool, gcp_project: str, require_looker: bool = False) -> _AuditFindings:
     """Run every gate 0 probe and gather the results.
 
     The call order is part of the contract: GCP context must be resolved before
@@ -232,6 +235,7 @@ def _collect_findings(*, fix: bool, gcp_project: str) -> _AuditFindings:
         fix: Apply remediations (venv bootstrap, MCP patch, skill symlinks)
             rather than only reporting on what is missing.
         gcp_project: The ``--gcp-project`` value.
+        require_looker: Whether unauthenticated Looker should block Gate 0.
 
     Returns:
         The complete set of observations.
@@ -256,6 +260,7 @@ def _collect_findings(*, fix: bool, gcp_project: str) -> _AuditFindings:
         mcp_statuses=mcp_statuses,
         skill_statuses=skill_statuses,
         looker_status=looker_status,
+        require_looker=require_looker,
     )
 
 
@@ -660,6 +665,7 @@ def _persist_gate_zero_verdict(app_ctx: AppContext, findings: _AuditFindings) ->
     """
     state = app_ctx.state
     state.precheck_passed = not findings.is_blocked
+    state.looker_authenticated = findings.looker_status.is_authenticated
     if findings.effective_project:
         state.gcp_project_id = findings.effective_project
     if findings.gcp_context.active_account:
@@ -681,6 +687,13 @@ def pre_check(
     gcp_project: Annotated[
         str, typer.Option("--gcp-project", help="Target Google Cloud Project ID")
     ] = DEFAULT_GCP_PROJECT,
+    require_looker: Annotated[
+        bool,
+        typer.Option(
+            "--require-looker",
+            help="Block pre-check if Looker authentication is missing (otherwise verified at confirm-targets when --mode full is selected)",
+        ),
+    ] = False,
     state_file: StateFileOption = None,
 ):
     """Audit GCP/ADC credentials, MCP server definitions, and agent skill folders.
@@ -696,6 +709,7 @@ def pre_check(
             global skills, rather than only reporting on them.
         output_json: Emit the JSON envelope on stdout.
         gcp_project: Google Cloud project to check BigQuery access against.
+        require_looker: Block Gate 0 if Looker is unauthenticated.
         state_file: Optional explicit path to ``.demo-state.json``.
 
     Returns:
@@ -715,7 +729,7 @@ def pre_check(
     if not output_json:
         print_banner("PRE-CHECK: ENVIRONMENT, MCP & SKILL AUDIT", f"Target GCP Project: {gcp_project}")
 
-    findings = _collect_findings(fix=fix, gcp_project=gcp_project)
+    findings = _collect_findings(fix=fix, gcp_project=gcp_project, require_looker=require_looker)
     _persist_gate_zero_verdict(app_ctx, findings)
 
     if output_json:
@@ -739,6 +753,13 @@ def confirm_targets(
     connection: Annotated[
         str | None, typer.Option("--connection", help="Confirmed Looker database connection name")
     ] = None,
+    mode: Annotated[
+        str,
+        typer.Option(
+            "--mode",
+            help="Deployment mode: 'full' (BigQuery + Knowledge Catalog + Looker) or 'bq_only' (BigQuery + Knowledge Catalog only)",
+        ),
+    ] = "full",
     dataset: Annotated[
         str | None, typer.Option("--dataset", help="Optional existing BigQuery dataset ID to adopt")
     ] = None,
@@ -749,7 +770,7 @@ def confirm_targets(
     output_json: Annotated[bool, typer.Option("--json", help="Emit the result envelope as JSON on stdout")] = False,
     state_file: StateFileOption = None,
 ):
-    """Record the 4 human-confirmed environment targets and initialize SPEC.md (Gate 0B).
+    """Record the human-confirmed environment targets and deployment mode, and initialize SPEC.md (Gate 0B).
 
     Args:
         ctx: Typer context carrying the resolved :class:`AppContext`.
@@ -757,6 +778,8 @@ def confirm_targets(
         gcp_project: Confirmed Google Cloud Project ID.
         looker_account: Confirmed Looker OAuth account or instance alias.
         connection: Confirmed Looker database connection name.
+        mode: Deployment scope ('full' or 'bq_only').
+        dataset: Optional existing BigQuery dataset ID to adopt.
         looker_project: Optional Looker project/model name.
         instance_url: Optional Looker instance URL.
         output_json: Emit the JSON envelope on stdout.
@@ -773,6 +796,13 @@ def confirm_targets(
             remediation="Run `demo-create pre-check --fix` and resolve any auth blockers before confirming targets.",
         )
 
+    if mode not in ("full", "bq_only"):
+        raise ConfigError(
+            f"Invalid deployment mode `{mode}`. Expected 'full' or 'bq_only'.",
+            remediation="Pass `--mode full` or `--mode bq_only`.",
+            details={"mode": mode},
+        )
+
     resolved_project = gcp_project or state.gcp_project_id
     resolved_conn = connection or state.looker_connection_name
     resolved_gcp_acct = gcp_account or state.gcp_account
@@ -780,13 +810,26 @@ def confirm_targets(
 
     if not resolved_project:
         raise missing_option("--gcp-project", purpose="the confirmed Google Cloud project ID")
-    if not resolved_conn:
-        raise missing_option("--connection", purpose="the confirmed Looker database connection name")
 
+    if mode == "full":
+        if state.looker_authenticated is False:
+            looker_status = check_looker_auth()
+            if not looker_status.is_authenticated:
+                raise AuthError(
+                    f"Looker authentication is required for `--mode full` ({looker_status.error_message or 'No active OAuth session or API key'}).",
+                    remediation="Run `lkr auth login` (or pass `--mode bq_only` to deploy BigQuery & Knowledge Catalog only).",
+                )
+            state.looker_authenticated = True
+        if not resolved_conn:
+            raise missing_option("--connection", purpose="the confirmed Looker database connection name")
+
+    state.deployment_mode = mode  # type: ignore[assignment]
     state.gcp_project_id = resolved_project
-    state.looker_connection_name = resolved_conn
+    if resolved_conn:
+        state.looker_connection_name = resolved_conn
     state.gcp_account = resolved_gcp_acct
-    state.looker_account = resolved_looker_acct
+    if resolved_looker_acct:
+        state.looker_account = resolved_looker_acct
     state.targets_confirmed = True
     if dataset:
         bq = app_ctx.bigquery(project_id=resolved_project)
@@ -818,10 +861,11 @@ def confirm_targets(
             "## 1. Demo Metadata & Confirmed Environment Targets\n\n"
             "| Target | Confirmed Value |\n"
             "| :--- | :--- |\n"
+            f"| **Deployment Mode** | `{state.deployment_mode}` |\n"
             f"| **GCP Account** | `{resolved_gcp_acct or 'default'}` |\n"
             f"| **GCP Project ID** | `{resolved_project}` |\n"
-            f"| **Looker Account / Instance** | `{resolved_looker_acct or state.looker_instance_url}` |\n"
-            f"| **Database Connection** | `{resolved_conn}` |\n"
+            f"| **Looker Account / Instance** | `{resolved_looker_acct or state.looker_instance_url if mode == 'full' else 'N/A (bq_only)'}` |\n"
+            f"| **Database Connection** | `{resolved_conn if mode == 'full' else 'N/A (bq_only)'}` |\n"
             f"| **BigQuery Dataset** | `{state.bq_dataset_id or 'synthetic'}` |\n"
         )
         spec_path.write_text(spec_content, encoding="utf-8")
@@ -831,6 +875,7 @@ def confirm_targets(
             "confirm-targets",
             data={
                 "targets_confirmed": True,
+                "deployment_mode": state.deployment_mode,
                 "gcp_account": resolved_gcp_acct,
                 "gcp_project": resolved_project,
                 "looker_account": resolved_looker_acct,
@@ -848,7 +893,12 @@ def confirm_targets(
     )
 
     def render(_: CommandResult) -> None:
-        print_success(f"Confirmed environment targets: project=`{resolved_project}`, connection=`{resolved_conn}`.")
+        if mode == "bq_only":
+            print_success(f"Confirmed environment targets (mode=bq_only): project=`{resolved_project}`.")
+        else:
+            print_success(
+                f"Confirmed environment targets (mode=full): project=`{resolved_project}`, connection=`{resolved_conn}`."
+            )
         if state.bq_dataset_id:
             print_info(f"Adopted existing dataset `{state.bq_dataset_id}` with {len(state.existing_tables)} tables.")
         print_info(f"Updated state saved to `{saved_path}`")

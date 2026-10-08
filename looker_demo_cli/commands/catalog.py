@@ -47,6 +47,10 @@ def catalog_inspect(
         Path | None,
         typer.Option("--output-file", "-o", help="Optional path to save the CatalogSnapshot JSON file."),
     ] = None,
+    skip: Annotated[
+        bool,
+        typer.Option("--skip", help="Skip Knowledge Catalog inspection and advance to LookML modeling"),
+    ] = False,
     output_json: Annotated[bool, typer.Option("--json", help="Emit result envelope as JSON on stdout")] = False,
     state_file: StateFileOption = None,
 ):
@@ -55,6 +59,20 @@ def catalog_inspect(
     app_ctx.use_state_file(state_file)
     app_ctx.set_json_mode(output_json)
     state = app_ctx.state
+
+    if skip:
+        state.catalog_status = "skipped"
+        app_ctx.save_state()
+        result = attach_next_gate_action(
+            CommandResult.success("catalog inspect", data={"status": "skipped", "catalog_status": "skipped"}),
+            state,
+        )
+        skip_msg = (
+            "Skipped Knowledge Catalog inspection. BigQuery + Knowledge Catalog workflow complete (mode=bq_only)."
+            if state.deployment_mode == "bq_only"
+            else "Skipped Knowledge Catalog inspection."
+        )
+        return emit(result, json_output=output_json, human_renderer=lambda _: print_info(skip_msg))
 
     proj_id = gcp_project or state.gcp_project_id
     ds_id = dataset or state.bq_dataset_id
@@ -83,6 +101,7 @@ def catalog_inspect(
     # Update flow state if applicable
     state.catalog_snapshot_path = snapshot_path
     state.dataset_exists = True
+    state.catalog_status = "inspected"
     if snapshot.coverage:
         state.catalog_coverage_pct = snapshot.coverage.coverage_percentage
         state.catalog_profile = snapshot.coverage.recommended_profile
@@ -160,7 +179,10 @@ def catalog_inspect(
                 f"{enriched_cols}/{len(tbl.columns)}",
             )
         console.print(t_tables)
-        print_info(f"Next: Run `demo-create lookml model --dataset {ds_id} --catalog {snapshot_path}`.")
+        if state.deployment_mode == "bq_only":
+            print_success("BigQuery + Knowledge Catalog workflow complete (mode=bq_only).")
+        else:
+            print_info(f"Next: Run `demo-create lookml model --dataset {ds_id} --catalog {snapshot_path}`.")
 
     return emit(result, json_output=output_json, human_renderer=render)
 
@@ -252,7 +274,10 @@ def catalog_profiles(
 @catalog_app.command(name="seed")
 def catalog_seed(
     ctx: typer.Context,
-    dataset: Annotated[str, typer.Option("--dataset", help="Target BigQuery dataset ID to seed metadata for")],
+    dataset: Annotated[
+        str | None,
+        typer.Option("--dataset", help="Target BigQuery dataset ID to seed metadata for. Defaults to state dataset."),
+    ] = None,
     gcp_project: Annotated[
         str | None, typer.Option("--gcp-project", help="Target GCP Project ID. Defaults to confirmed target project.")
     ] = None,
@@ -264,6 +289,10 @@ def catalog_seed(
         str, typer.Option("--glossary-name", help="Name for the Dataplex Business Glossary")
     ] = "fintech-glossary",
     mode: Annotated[str, typer.Option("--mode", help="Execution mode: 'plan' or 'execute'")] = "execute",
+    skip: Annotated[
+        bool,
+        typer.Option("--skip", help="Skip Knowledge Catalog metadata seeding and advance to LookML modeling"),
+    ] = False,
     output_json: Annotated[bool, typer.Option("--json", help="Emit result envelope as JSON on stdout")] = False,
     state_file: StateFileOption = None,
 ):
@@ -273,29 +302,46 @@ def catalog_seed(
     app_ctx.set_json_mode(output_json)
     state = app_ctx.state
 
+    if skip:
+        state.catalog_status = "skipped"
+        app_ctx.save_state()
+        result = attach_next_gate_action(
+            CommandResult.success("catalog seed", data={"status": "skipped", "catalog_status": "skipped"}),
+            state,
+        )
+        skip_msg = (
+            "Skipped Knowledge Catalog metadata seeding. BigQuery + Knowledge Catalog workflow complete (mode=bq_only)."
+            if state.deployment_mode == "bq_only"
+            else "Skipped Knowledge Catalog metadata seeding."
+        )
+        return emit(result, json_output=output_json, human_renderer=lambda _: print_info(skip_msg))
+
     proj_id = gcp_project or state.gcp_project_id
+    ds_id = dataset or state.bq_dataset_id
     if not proj_id:
         raise missing_option("--gcp-project", purpose="the BigQuery project containing the dataset")
+    if not ds_id:
+        raise missing_option("--dataset", purpose="the BigQuery dataset ID to seed metadata for")
 
     bq_client = app_ctx.bigquery(project_id=proj_id, location=location)
-    if not bq_client.dataset_exists(dataset):
+    if not bq_client.dataset_exists(ds_id):
         raise ConfigError(
-            f"Dataset `{dataset}` was not found in project `{proj_id}`.",
+            f"Dataset `{ds_id}` was not found in project `{proj_id}`.",
             remediation="Verify dataset ID and project ID before seeding metadata.",
-            details={"dataset": dataset, "project": proj_id},
+            details={"dataset": ds_id, "project": proj_id},
         )
 
-    tables = bq_client.list_tables(dataset)
+    tables = bq_client.list_tables(ds_id)
     if not tables:
         raise ConfigError(
-            f"Dataset `{dataset}` has no tables to seed metadata for.",
+            f"Dataset `{ds_id}` has no tables to seed metadata for.",
             remediation="Ensure tables exist before seeding.",
-            details={"dataset": dataset, "project": proj_id},
+            details={"dataset": ds_id, "project": proj_id},
         )
 
     seed_summary = {
         "project_id": proj_id,
-        "dataset_id": dataset,
+        "dataset_id": ds_id,
         "location": location,
         "aspect_type": f"projects/{proj_id}/locations/{location}/aspectTypes/{aspect_type_name}",
         "glossary": f"projects/{proj_id}/locations/{location}/glossaries/{glossary_name}",
@@ -304,19 +350,34 @@ def catalog_seed(
         "status": "SUCCESS" if mode == "execute" else "PLANNED",
     }
 
-    result = CommandResult.success("catalog seed", data=seed_summary)
+    if mode == "execute":
+        state.catalog_status = "seeded"
+        cat_client = app_ctx.catalog(project_id=proj_id, location=location.lower())
+        snapshot = build_catalog_snapshot(bq_client, cat_client, ds_id, location=location.lower())
+        snapshot_path = Path.cwd() / f".demo-catalog-{ds_id}.json"
+        snapshot.save(snapshot_path)
+        state.catalog_snapshot_path = snapshot_path
+        if snapshot.coverage:
+            state.catalog_coverage_pct = snapshot.coverage.coverage_percentage
+            state.catalog_profile = snapshot.coverage.recommended_profile
+        app_ctx.save_state()
+
+    result = attach_next_gate_action(CommandResult.success("catalog seed", data=seed_summary), state)
 
     def render(_: CommandResult) -> None:
         if mode == "plan":
-            console.print(f"\n[bold yellow]Metadata Seeding Plan for {proj_id}.{dataset}[/bold yellow]")
+            console.print(f"\n[bold yellow]Metadata Seeding Plan for {proj_id}.{ds_id}[/bold yellow]")
             console.print(f"Target Aspect Type: [cyan]{seed_summary['aspect_type']}[/cyan]")
             console.print(f"Target Glossary: [cyan]{seed_summary['glossary']}[/cyan]")
             console.print(f"Tables to Seed ({len(tables)}): {', '.join(tables)}")
             print_info("Re-run with `--mode execute` to apply metadata changes.")
         else:
-            print_success(f"Knowledge Catalog metadata verified/seeded for `{proj_id}.{dataset}`.")
+            print_success(f"Knowledge Catalog metadata verified/seeded for `{proj_id}.{ds_id}`.")
             print_info(f"Seeded {len(tables)} tables with curation aspects and glossary links.")
-            print_info(f"Run `demo-create catalog inspect --dataset {dataset}` to review coverage.")
+            if state.deployment_mode == "bq_only":
+                print_success("BigQuery + Knowledge Catalog workflow complete (mode=bq_only).")
+            else:
+                print_info(f"Run `demo-create catalog inspect --dataset {ds_id}` to review coverage.")
 
     return emit(result, json_output=output_json, human_renderer=render)
 
@@ -363,6 +424,10 @@ def catalog_sync(
             help="Report planned metadata diffs without modifying LookML files.",
         ),
     ] = False,
+    skip: Annotated[
+        bool,
+        typer.Option("--skip", help="Skip Knowledge Catalog LookML synchronization"),
+    ] = False,
     location: Annotated[
         str,
         typer.Option("--location", help="Dataset/Catalog location (e.g. 'us', 'eu', 'us-central1')."),
@@ -375,6 +440,19 @@ def catalog_sync(
     app_ctx.use_state_file(state_file)
     app_ctx.set_json_mode(output_json)
     state = app_ctx.state
+
+    if skip:
+        state.catalog_status = "skipped"
+        app_ctx.save_state()
+        result = attach_next_gate_action(
+            CommandResult.success("catalog sync", data={"status": "skipped", "catalog_status": "skipped"}),
+            state,
+        )
+        return emit(
+            result,
+            json_output=output_json,
+            human_renderer=lambda _: print_info("Skipped Knowledge Catalog LookML synchronization."),
+        )
 
     proj_id = gcp_project or state.gcp_project_id
     ds_id = dataset or state.bq_dataset_id
@@ -424,6 +502,9 @@ def catalog_sync(
     )
 
     result_data = report.model_dump()
+    if not dry_run:
+        state.catalog_status = "synced"
+        app_ctx.save_state()
     result = attach_next_gate_action(CommandResult.success("catalog sync", data=result_data), state)
 
     def render(_: CommandResult) -> None:

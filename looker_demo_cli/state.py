@@ -80,7 +80,9 @@ class FlowState(BaseModel):
     # "the environment audit passed" from "it was never run", which is not
     # otherwise observable from any other field.
     precheck_passed: bool = False
+    looker_authenticated: bool | None = None
     targets_confirmed: bool = False
+    deployment_mode: Literal["full", "bq_only"] = "full"
 
     # Dataset & Intent
     dataset_exists: bool = False
@@ -91,6 +93,7 @@ class FlowState(BaseModel):
     catalog_snapshot_path: Path | None = None
     catalog_coverage_pct: float | None = None
     catalog_profile: str | None = None
+    catalog_status: Literal["pending", "seeded", "inspected", "synced", "skipped"] = "pending"
 
     # Domain & Synthesis (Gate 1 Co-Design & Approval)
     domain_name: str | None = None
