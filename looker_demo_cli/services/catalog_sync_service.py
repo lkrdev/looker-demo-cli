@@ -128,12 +128,12 @@ def _extract_blocks_from_lookml(content: str) -> tuple[dict[str, ParsedColumn], 
 
     # View-level label and description
     view_label = None
-    v_lbl_m = re.search(r'^\s*label:\s*"([^"]+)"', content, re.MULTILINE)
+    v_lbl_m = re.search(r"^\s*label:\s*[\"']([^\"']*)[\"']", content, re.MULTILINE)
     if v_lbl_m:
         view_label = v_lbl_m.group(1)
 
     view_desc = None
-    v_desc_m = re.search(r'^\s*(?:#\s*)?description:\s*"([^"]+)"', content, re.MULTILINE)
+    v_desc_m = re.search(r"^\s*(?:#\s*)?description:\s*[\"']([^\"']*)[\"']", content, re.MULTILINE)
     if v_desc_m:
         view_desc = v_desc_m.group(1)
 

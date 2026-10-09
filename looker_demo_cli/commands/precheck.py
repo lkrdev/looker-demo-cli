@@ -837,7 +837,13 @@ def confirm_targets(
             state.bq_dataset_id = dataset
             state.dataset_exists = True
             state.data_source_mode = "existing"
-            state.existing_tables = bq.list_tables(dataset)
+            try:
+                state.gcp_location = bq.get_dataset_location(dataset)
+            except Exception:
+                state.gcp_location = "us"
+            bq_loc = state.gcp_location or "us"
+            bq_localized = app_ctx.bigquery(project_id=resolved_project, location=bq_loc)
+            state.existing_tables = bq_localized.list_tables(dataset)
         else:
             raise ConfigError(
                 f"Dataset `{dataset}` was not found in BigQuery project `{resolved_project}`.",

@@ -95,7 +95,12 @@ def test_introspect_bq_table_specs_with_constraints_and_metadata():
     ]
     mock_client.get_table.side_effect = lambda ref: merchants_tbl if "dim_merchants" in str(ref) else tx_tbl
 
-    with patch("google.cloud.bigquery.Client", return_value=mock_client):
+    with (
+        patch(
+            "looker_demo_cli.services.knowledge_service.google.auth.default", return_value=(MagicMock(), "test-proj")
+        ),
+        patch("google.cloud.bigquery.Client", return_value=mock_client),
+    ):
         specs = introspect_bq_table_specs("test-proj", "test-ds")
 
     assert len(specs) == 2

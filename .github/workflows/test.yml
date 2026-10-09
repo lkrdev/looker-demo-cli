@@ -39,7 +39,7 @@ jobs:
         run: uv sync --group dev
 
       - name: Run pre-commit hooks
-        uses: pre-commit/action@v3.0.1
+        run: uv run pre-commit run --all-files --show-diff-on-failure
 
   test:
     name: Unit tests (Python ${{ matrix.python-version }})
@@ -89,11 +89,11 @@ jobs:
       - name: Generate Diff-Coverage Step Summary
         if: matrix.python-version == '3.12' && github.event_name == 'pull_request'
         run: |
-          echo "## 📊 Test Coverage & Diff Summary" >> $GITHUB_STEP_SUMMARY
+          echo "## 📊 Test Coverage & Diff Summary" >> "$GITHUB_STEP_SUMMARY"
           uv run diff-cover coverage.xml \
-            --compare-branch=origin/${{ github.base_ref || 'main' }} \
+            --compare-branch="origin/${{ github.base_ref || 'main' }}" \
             --format=markdown:diff-coverage-report.md || true
-          cat diff-coverage-report.md >> $GITHUB_STEP_SUMMARY
+          cat diff-coverage-report.md >> "$GITHUB_STEP_SUMMARY"
         continue-on-error: true
 
       - name: Upload coverage artifact

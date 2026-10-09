@@ -78,10 +78,12 @@ def isolated_cwd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 @pytest.fixture(autouse=True)
-def _no_ambient_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Re-strip credential env vars for every test."""
+def _no_ambient_credentials(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Re-strip credential env vars and isolate gcloud ADC / GCE metadata for every test."""
     for var in _CREDENTIAL_ENV_VARS:
         monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("CLOUDSDK_CONFIG", str(tmp_path / "nonexistent-gcloud"))
+    monkeypatch.setenv("NO_GCE_CHECK", "true")
 
 
 @pytest.fixture

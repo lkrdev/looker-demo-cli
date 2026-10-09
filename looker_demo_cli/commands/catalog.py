@@ -475,8 +475,8 @@ def catalog_sync(
                 details={"catalog": str(catalog)},
             )
         snapshot = CatalogSnapshot.load(catalog)
-    elif state.catalog_snapshot_path and state.catalog_snapshot_path.exists():
-        snapshot = CatalogSnapshot.load(state.catalog_snapshot_path)
+    elif state.catalog_snapshot_path and Path(state.catalog_snapshot_path).exists():
+        snapshot = CatalogSnapshot.load(Path(state.catalog_snapshot_path))
     else:
         if not proj_id:
             raise missing_option("--gcp-project", purpose="the BigQuery project to inspect Knowledge Catalog")

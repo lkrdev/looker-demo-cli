@@ -276,6 +276,8 @@ def build_catalog_snapshot(
                 elif link_type.endswith("schema-join") or link_type == "schema-join":
                     # Extract joins directly from schema-join links
                     for asp in link.get("aspects", {}).values():
+                        if not isinstance(asp, dict):
+                            continue
                         joins_list = asp.get("data", {}).get("joins", [])
                         for j in joins_list:
                             src = j.get("source", {})

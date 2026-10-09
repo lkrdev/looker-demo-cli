@@ -212,14 +212,17 @@ def deploy_lookml_project(state: FlowState) -> FlowState:
 
     # Refresh OAuth token & SDK client in case `lkr push` refreshed an expired token in ~/.lkr/auth.db
     oauth_instances = get_authenticated_oauth_instances()
-    if state.looker_account:
-        active_oauth = next((i for i in oauth_instances if i["instance_name"] == state.looker_account), active_oauth)
-    elif oauth_instances:
-        active_oauth = next((i for i in oauth_instances if i["is_current"]), None) or oauth_instances[0]
-    if active_oauth and active_oauth.get("access_token"):
-        access_token = active_oauth["access_token"]
-        headers = {"Authorization": f"Bearer {access_token}"}
-        sdk = get_looker_sdk(base_url=state.looker_instance_url, access_token=access_token)
+    if oauth_instances:
+        if state.looker_account:
+            active_oauth = next(
+                (i for i in oauth_instances if i["instance_name"] == state.looker_account), active_oauth
+            )
+        else:
+            active_oauth = next((i for i in oauth_instances if i["is_current"]), None) or oauth_instances[0]
+        if active_oauth and active_oauth.get("access_token"):
+            access_token = active_oauth["access_token"]
+            headers = {"Authorization": f"Bearer {access_token}"}
+            sdk = get_looker_sdk(base_url=state.looker_instance_url, access_token=access_token)
 
     # 2b. Root Duplicate Cleanup Pass: Detect & delete any loose files in root that have views/ or models/ counterparts
     try:

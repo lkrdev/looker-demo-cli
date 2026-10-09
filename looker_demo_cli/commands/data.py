@@ -822,6 +822,12 @@ def data_adopt(
     if tables:
         table_list = [t.strip() for t in tables.split(",") if t.strip()]
         selected_tables = [t for t in all_tables if t in table_list]
+        if not selected_tables:
+            raise ConfigError(
+                f"None of the specified tables {table_list} were found in dataset `{dataset}`.",
+                remediation="Verify the table names or omit `--tables` to adopt all tables.",
+                details={"specified": table_list, "existing": all_tables},
+            )
     else:
         selected_tables = all_tables
 

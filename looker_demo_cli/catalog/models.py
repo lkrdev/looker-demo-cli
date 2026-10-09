@@ -154,7 +154,14 @@ class CatalogSnapshot(BaseModel):
         """Persist snapshot JSON to disk atomically."""
         target = Path(path)
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(self.to_json(), encoding="utf-8")
+        temp_file = target.with_suffix(target.suffix + ".tmp")
+        try:
+            temp_file.write_text(self.to_json(), encoding="utf-8")
+            temp_file.replace(target)
+        except Exception:
+            if temp_file.exists():
+                temp_file.unlink()
+            raise
 
     @classmethod
     def load(cls, path: Path | str) -> CatalogSnapshot:

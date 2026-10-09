@@ -94,8 +94,7 @@ When working in sandboxes or CI environments without live Dataplex aspect types,
 ```bash
 demo-create catalog seed \
   --dataset "${DATASET}" \
-  --schema-file ./artifacts/generated_data/schema.json \
-  --output-file ".demo-catalog-${DATASET}.json"
+  --gcp-project "${PROJECT_ID}"
 ```
 
 ---

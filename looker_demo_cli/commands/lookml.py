@@ -206,10 +206,11 @@ def lookml_model(
                 print_warning(f"Could not load recorded catalog snapshot `{state.catalog_snapshot_path}`: {e}")
         elif use_catalog is True:
             print_info(f"Inspecting Knowledge Catalog (Dataplex) for `{gcp_proj}.{ds_name}`...")
-            bq_client = app_ctx.bigquery(project_id=gcp_proj, location=state.gcp_location)
-            cat_client = app_ctx.catalog(project_id=gcp_proj, location=state.gcp_location.lower())
+            gcp_loc = state.gcp_location or "us"
+            bq_client = app_ctx.bigquery(project_id=gcp_proj, location=gcp_loc)
+            cat_client = app_ctx.catalog(project_id=gcp_proj, location=gcp_loc.lower())
             snapshot = build_catalog_snapshot(
-                bq_client, cat_client, ds_name, location=state.gcp_location.lower(), table_filter=table_filter
+                bq_client, cat_client, ds_name, location=gcp_loc.lower(), table_filter=table_filter
             )
             catalog_path = Path.cwd() / f".demo-catalog-{ds_name}.json"
             snapshot.save(catalog_path)
