@@ -38,6 +38,7 @@ _COMPLETION_SIGNAL: dict[str, dict[str, object]] = {
     "gate_1a_propose_schema": {"schema_proposed": True},
     "gate_1b_approve_schema": {"schema_approved": True},
     "gate_1c_generate_data": {"dataset_exists": True},
+    "gate_1d_catalog": {"catalog_status": "seeded"},
     "gate_2a_lookml_model": {"lookml_output_dir": Path("/scratch/lookml")},
     "gate_2b_certify_polish": {"polish_certified": True},
     "gate_3a_optimize": {"optimizer_status": "applied"},
@@ -85,6 +86,7 @@ def _finished_state(**overrides: Any) -> FlowState:
         "ca_agent_status": "created",
         "published_to_ge": True,
         "ge_publish_status": "published",
+        "catalog_status": "seeded",
         "embed_workspace_dir": Path("/scratch/embed_retail_demo"),
         "embed_status": "scaffolded",
     }
@@ -105,10 +107,10 @@ def _state_satisfying(*gate_ids: str) -> FlowState:
 
 
 def test_gate_structural_invariants() -> None:
-    """Gates are numbered 0..12 contiguously, uniquely named, with explicit human confirmation checkpoints."""
-    assert len(GATES) == 13
-    assert [g.number for g in GATES] == list(range(13))
-    assert len(set(_GATE_IDS)) == 13
+    """Gates are numbered 0..13 contiguously, uniquely named, with explicit human confirmation checkpoints."""
+    assert len(GATES) == 14
+    assert [g.number for g in GATES] == list(range(14))
+    assert len(set(_GATE_IDS)) == 14
     for gate in GATES:
         assert gate.id.startswith("gate_")
         assert gate.title.strip()
@@ -126,6 +128,7 @@ def test_gate_structural_invariants() -> None:
     assert pausing == [
         "gate_0b_confirm_targets",
         "gate_1b_approve_schema",
+        "gate_1d_catalog",
         "gate_2b_certify_polish",
         "gate_3a_optimize",
         "gate_3c_critique",
@@ -150,15 +153,16 @@ def test_gate_structural_invariants() -> None:
         (2, "gate_1a_propose_schema"),
         (3, "gate_1b_approve_schema"),
         (4, "gate_1c_generate_data"),
-        (5, "gate_2a_lookml_model"),
-        (6, "gate_2b_certify_polish"),
-        (7, "gate_3a_optimize"),
-        (8, "gate_3b_deploy"),
-        (9, "gate_3c_critique"),
-        (10, "gate_4_agent"),
-        (11, "gate_5_publish"),
-        (12, "gate_6_embed"),
-        (13, None),
+        (5, "gate_1d_catalog"),
+        (6, "gate_2a_lookml_model"),
+        (7, "gate_2b_certify_polish"),
+        (8, "gate_3a_optimize"),
+        (9, "gate_3b_deploy"),
+        (10, "gate_3c_critique"),
+        (11, "gate_4_agent"),
+        (12, "gate_5_publish"),
+        (13, "gate_6_embed"),
+        (14, None),
     ],
 )
 def test_gate_progression_walk(satisfied_count: int, expected_current: str | None) -> None:
@@ -167,7 +171,7 @@ def test_gate_progression_walk(satisfied_count: int, expected_current: str | Non
     current = current_gate(state)
     assert (current.id if current else None) == expected_current
     assert [g.id for g in completed_gates(state)] == _GATE_IDS[:satisfied_count]
-    assert is_pipeline_complete(state) is (satisfied_count == 13)
+    assert is_pipeline_complete(state) is (satisfied_count == 14)
 
     statuses = evaluate_gates(state)
     assert [s.gate.id for s in statuses] == _GATE_IDS
@@ -193,8 +197,9 @@ def test_out_of_order_signals_keep_first_incomplete_as_current() -> None:
 
 
 def test_skip_terminal_states_satisfy_optional_gates() -> None:
-    """Skipping optional gates (3A, 4, 5, 6) marks them complete so pipeline reaches is_pipeline_complete=True."""
+    """Skipping optional gates (1D, 3A, 4, 5, 6) marks them complete so pipeline reaches is_pipeline_complete=True."""
     skipped_state = _finished_state(
+        catalog_status="skipped",
         optimizer_status="skipped",
         ca_agent_id=None,
         ca_agent_status="skipped",
@@ -207,29 +212,82 @@ def test_skip_terminal_states_satisfy_optional_gates() -> None:
     assert current_gate(skipped_state) is None
 
 
+def test_bq_only_mode_completes_at_gate_5_and_supports_upgrade(invoke, state_file) -> None:
+    """In `bq_only` mode, satisfying Gates 0-5 completes all 14 gates; upgrading to `full` resumes at Gate 6 (`gate_2a_lookml_model`)."""
+    from looker_demo_cli.gates import attach_next_gate_action
+    from looker_demo_cli.output import CommandResult
+
+    state = FlowState(
+        deployment_mode="bq_only",
+        precheck_passed=True,
+        targets_confirmed=True,
+        gcp_project_id="p",
+        schema_proposed=True,
+        schema_approved=True,
+        bq_dataset_id="ds",
+        dataset_exists=True,
+        catalog_status="seeded",
+    )
+    statuses = evaluate_gates(state)
+    assert all(s.complete for s in statuses)
+    assert not any(s.is_current for s in statuses)
+    assert is_pipeline_complete(state) is True
+    assert current_gate(state) is None
+    assert len(completed_gates(state)) == 14
+    assert attach_next_gate_action(CommandResult.success("catalog seed"), state).next_actions == []
+
+    state_file(**state.model_dump())
+    res_bq = envelope(invoke(["status", "--json"]))
+    assert res_bq["data"]["is_complete"] is True
+    assert res_bq["data"]["current_gate"] is None
+    assert res_bq["next_actions"] == []
+    assert len(res_bq["data"]["completed_gates"]) == 14
+
+    # Upgrading the same state to "full" resumes at Gate 6 (gate_2a_lookml_model)
+    state.deployment_mode = "full"
+    statuses_full = evaluate_gates(state)
+    assert is_pipeline_complete(state) is False
+    curr = current_gate(state)
+    assert curr is not None
+    assert curr.number == 6
+    assert curr.id == "gate_2a_lookml_model"
+    assert [s.gate.number for s in statuses_full if s.is_current] == [6]
+
+    state_file(**state.model_dump())
+    res_full = envelope(invoke(["status", "--json"]))
+    assert res_full["data"]["is_complete"] is False
+    assert res_full["data"]["current_gate"]["number"] == 6
+    assert res_full["data"]["current_gate"]["id"] == "gate_2a_lookml_model"
+    assert res_full["next_actions"][0]["gate"] == 6
+
+
 # ===========================================================================
 # Gate command interpolation & branches
 # ===========================================================================
 
 
 def test_gate_command_branch_behaviors() -> None:
-    """Verify Gate 1C generate/upload switch, Gate 3B account flag, Gate 4 fct_ explore preference, and blank handling."""
+    """Verify Gate 1C generate/upload switch, Gate 1D seed/inspect switch, Gate 3B account flag, Gate 4 fct_ explore preference, and blank handling."""
     # Gate 1C (index 4) switches from generate to upload once Parquet exists
     assert GATES[4].command(_unstarted_state()).startswith("demo-create data generate ")
     with_parquet = _unstarted_state(generated_parquet_dir=Path("/scratch/retail"), bq_dataset_id="retail")
     assert GATES[4].command(with_parquet).startswith("demo-create data upload ")
 
-    # Gate 3B (index 8) omits --looker-account when None
-    assert "--looker-account" not in GATES[8].command(_finished_state(looker_account=None))
+    # Gate 1D (index 5) switches from seed (synthetic) to inspect (existing)
+    assert GATES[5].command(_unstarted_state(data_source_mode="synthetic")).startswith("demo-create catalog seed ")
+    assert GATES[5].command(_unstarted_state(data_source_mode="existing")).startswith("demo-create catalog inspect ")
 
-    # Gate 4 (index 10) prefers primary_explore_name, then fct_ tables over dim_ tables
+    # Gate 3B (index 9) omits --looker-account when None
+    assert "--looker-account" not in GATES[9].command(_finished_state(looker_account=None))
+
+    # Gate 4 (index 11) prefers primary_explore_name, then fct_ tables over dim_ tables
     byo_state = _finished_state(
         primary_explore_name=None,
         generated_tables=[],
         existing_tables=["dim_carriers", "fct_shipments"],
     )
     assert _resolve_primary_explore(byo_state) == "fct_shipments"
-    assert "--explore fct_shipments" in GATES[10].command(byo_state)
+    assert "--explore fct_shipments" in GATES[11].command(byo_state)
 
     # Whitespace-only values render as placeholders
     assert "--gcp-project <gcp-project>" in GATES[0].command(_unstarted_state(gcp_project_id="   "))

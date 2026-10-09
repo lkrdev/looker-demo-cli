@@ -153,7 +153,7 @@ def test_ge_status_configured_unconfigured_and_errors(
     assert unconf.exit_code == 0
     payload = envelope(unconf)
     assert payload["data"]["configured"] is False
-    assert payload["next_actions"][0]["gate"] == 11
+    assert payload["next_actions"][0]["gate"] == 12
 
     patch_cli("get_looker_ge_config", Recorder({}))
     empty = invoke(["ge", "status", "--json"])
@@ -238,7 +238,7 @@ def test_agent_create_happy_path_and_golden_queries(
     payload = envelope(res)
     assert payload["data"]["agent_id"] == "42"
     assert payload["data"]["golden_queries_linked"] == 2
-    assert payload["next_actions"][0]["gate"] == 11
+    assert payload["next_actions"][0]["gate"] == 12
     assert read_state(isolated_cwd)["ca_agent_id"] == "42"
     assert read_state(isolated_cwd)["golden_queries_count"] == 2
 
@@ -557,7 +557,7 @@ def test_agent_publish_and_embed_skip_branches_and_critique_guard(invoke, state_
     assert unapproved.exit_code == StateError.exit_code
     assert "Gate 3C" in envelope(unapproved)["errors"][0]["message"]
 
-    # Approve critique, then skip agent create -> jumps directly to Gate 12 (embed scaffold)
+    # Approve critique, then skip agent create -> jumps directly to Gate 13 (embed scaffold)
     state_file(
         precheck_passed=True,
         deployed_dashboard_url="https://fake.cloud.looker.com/dashboards/42",
@@ -566,7 +566,7 @@ def test_agent_publish_and_embed_skip_branches_and_critique_guard(invoke, state_
     skip_ca = invoke(["agent", "create", "--skip", "--json"])
     assert skip_ca.exit_code == 0, skip_ca.output
     assert envelope(skip_ca)["data"]["skipped"] is True
-    assert envelope(skip_ca)["next_actions"][0]["gate"] == 12
+    assert envelope(skip_ca)["next_actions"][0]["gate"] == 13
     assert read_state(isolated_cwd)["ca_agent_status"] == "skipped"
 
     # ge publish --skip

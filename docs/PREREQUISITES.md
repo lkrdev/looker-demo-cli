@@ -12,6 +12,7 @@ This document is the complete setup and permissions reference for running `looke
 | **`lkr-dev-cli` (`lkr`)** | Automatically installed alongside `looker-demo-cli` (`lkr-dev-cli[codemode] >= 0.2.3`). Used for OAuth login (`lkr auth login`), dev workspace sync (`lkr tools lookml push`), and production release. |
 | **Google Cloud SDK (`gcloud` & `bq`)** | Authenticated via `gcloud auth login` and `gcloud auth application-default login` (ADC). Includes `bq` CLI for schema metadata inspection and Parquet table loading. |
 | **Looker Instance** | Looker (Google Cloud Core or Hosted) instance with **API 4.0** accessible and a pre-configured **BigQuery Database Connection** targeting your GCP project. |
+| **Dataplex Universal Catalog** *(Optional)* | Google Cloud Dataplex enabled (`dataplex.googleapis.com`) with Universal Catalog entries, aspect types (`semantic-curation`), or DataScans (Data Profile / Data Quality) to enrich LookML generation (`demo-create catalog inspect`). |
 | **Gemini Enterprise (GE) Instance** *(Gate 5)* | An active **Gemini Enterprise / Discovery Engine App** in Google Cloud Console (`global`, `us`, or `eu` region) to receive published Looker Conversational Analytics (CA) Agents. |
 | **Node.js & `pnpm`** *(Optional)* | Required only when scaffolding and running the standalone React/Vite Embed Portal (`demo-create embed scaffold`). |
 
@@ -27,14 +28,15 @@ Ensure the following APIs are enabled on your target GCP project:
 - `bigquery.googleapis.com` — BigQuery API (dataset creation, Parquet loading, and query validation)
 - `aiplatform.googleapis.com` — Vertex AI API (LLM/Gemini calls and AI-assisted synthesis/grounding)
 - `discoveryengine.googleapis.com` — Discovery Engine API (Gemini Enterprise app discovery and CA Agent publishing)
-- `dataplex.googleapis.com` & `datacatalog.googleapis.com` — *(Optional)* Knowledge Catalog / Dataplex metadata enrichment
+- `dataplex.googleapis.com` — Dataplex API (Universal Catalog entries, aspect types, glossaries, and Data Profile/Quality scans)
+- `datacatalog.googleapis.com` — Data Catalog API (Legacy tag templates, policy tags, and catalog search fallback)
 - `cloudresourcemanager.googleapis.com` — Project listing and automated IAM policy binding
 
 ### GCP IAM Matrix by Principal
 
 | Principal | Where Used | Least-Privilege IAM Roles | Quick-Start / Sandbox Role | Purpose |
 | :--- | :--- | :--- | :--- | :--- |
-| **1. Developer / Local ADC User**<br/>*(Your `gcloud` user account)* | Gates 0–2 & Gate 5 (`pre-check`, `data`, `lookml`, `ge`) | • `roles/bigquery.dataEditor`<br/>• `roles/bigquery.jobUser`<br/>• `roles/aiplatform.user`<br/>• `roles/serviceusage.serviceUsageConsumer`<br/>• `roles/dataplex.viewer` *(optional)*<br/>• `roles/discoveryengine.viewer`<br/>• `roles/resourcemanager.projectIamAdmin` *(to auto-grant Looker SA IAM)* | `roles/editor` + `roles/resourcemanager.projectIamAdmin` | Create BigQuery datasets/tables, load Parquet files, run `SELECT DISTINCT` measure grounding queries, invoke Vertex AI / Gemini models, inspect Dataplex metadata, discover GE apps, and bind IAM roles for the Looker GE Service Account. |
+| **1. Developer / Local ADC User**<br/>*(Your `gcloud` user account)* | Gates 0–2 & Gate 5 (`pre-check`, `data`, `lookml`, `catalog`, `ge`) | • `roles/bigquery.dataEditor`<br/>• `roles/bigquery.jobUser`<br/>• `roles/aiplatform.user`<br/>• `roles/serviceusage.serviceUsageConsumer`<br/>• `roles/dataplex.metadataViewer` *(Universal Catalog entries & aspects)*<br/>• `roles/dataplex.dataScanViewer` *(Data Profile & Quality scans)*<br/>• `roles/datacatalog.viewer` *(Data Catalog fallback)*<br/>• `roles/discoveryengine.viewer`<br/>• `roles/resourcemanager.projectIamAdmin` *(to auto-grant Looker SA IAM)* | `roles/editor` + `roles/resourcemanager.projectIamAdmin` | Create BigQuery datasets/tables, load Parquet files, run `SELECT DISTINCT` measure grounding queries, invoke Vertex AI / Gemini models, inspect Dataplex Knowledge Catalog metadata & data scans (`demo-create catalog inspect`), discover GE apps, and bind IAM roles for the Looker GE Service Account. |
 | **2. Looker BigQuery Connection SA**<br/>*(Configured in Looker Admin > Connections)* | Gate 3 (`lookml deploy` & inline query validation) & Live Dashboards | • `roles/bigquery.dataEditor`<br/>• `roles/bigquery.jobUser` | `roles/bigquery.admin` | Execute live Looker Explore/Dashboard queries (`run_inline_query`) and materialize Native Derived Tables (NDTs) or Persistent Derived Tables (PDTs) in the scratch schema. |
 | **3. Looker Gemini Service Account**<br/>*(`ai_ge_service_account_email` returned by `/api/4.0/gemini_enablement`)* | Gate 5 (`ge configure`, `agent publish`) | • `roles/discoveryengine.admin`<br/>• **Active Gemini Enterprise License** *(assigned in GCP / Workspace Admin)* | `roles/discoveryengine.admin` + **GE License** | Register, synchronize, and publish Looker Conversational Analytics (CA) Agents directly into your connected Gemini Enterprise app. *(Note: `demo-create ge configure` automatically runs the `roles/discoveryengine.admin` binding if your ADC user has `projectIamAdmin`.)* |
 
@@ -57,13 +59,15 @@ gcloud services enable \
   cloudresourcemanager.googleapis.com \
   --project="${PROJECT_ID}"
 
-# 2. Grant Developer / Local ADC Roles (BigQuery + Vertex AI LLM + Dataplex + GE Discovery)
+# 2. Grant Developer / Local ADC Roles (BigQuery + Vertex AI LLM + Dataplex Knowledge Catalog + GE Discovery)
 for ROLE in \
   roles/bigquery.dataEditor \
   roles/bigquery.jobUser \
   roles/aiplatform.user \
   roles/serviceusage.serviceUsageConsumer \
-  roles/dataplex.viewer \
+  roles/dataplex.metadataViewer \
+  roles/dataplex.dataScanViewer \
+  roles/datacatalog.viewer \
   roles/discoveryengine.viewer; do
   gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
     --member="user:${USER_EMAIL}" \
@@ -82,6 +86,35 @@ done
 gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
   --member="serviceAccount:${LOOKER_GE_SA}" \
   --role="roles/discoveryengine.admin"
+```
+
+### Dataplex Universal Catalog (Knowledge Catalog) & DataScans Permissions Reference
+
+When using `demo-create catalog inspect` or generating LookML from Dataplex metadata via `demo-create lookml model --catalog <snapshot>`, Google Cloud credentials (ADC or Service Account) require specific permissions:
+
+| Functional Area | Granular IAM Permissions | Pre-Built Role |
+| :--- | :--- | :--- |
+| **Universal Catalog Entries & Aspects** | `dataplex.entries.get`<br/>`dataplex.entries.lookup`<br/>`dataplex.entryGroups.get`<br/>`dataplex.aspectTypes.get`<br/>`dataplex.entryTypes.get` | `roles/dataplex.metadataViewer` |
+| **Business Glossaries & Terms** | `dataplex.glossaries.get`<br/>`dataplex.glossaryTerms.get`<br/>`dataplex.glossaryTerms.list` | `roles/dataplex.metadataViewer` |
+| **Data Profiling & Quality Scans** | `dataplex.datascans.get`<br/>`dataplex.datascans.list`<br/>`dataplex.datascans.getData`<br/>`dataplex.datascans.listJobs`<br/>`dataplex.datascans.getJob` | `roles/dataplex.dataScanViewer` |
+| **Data Catalog Fallback** | `datacatalog.entries.get`<br/>`datacatalog.tagTemplates.get` | `roles/datacatalog.viewer` |
+
+#### OAuth 2.0 Scopes (ADC & Service Accounts)
+- **Application Default Credentials (ADC)**: When running `gcloud auth application-default login`, the default `https://www.googleapis.com/auth/cloud-platform` scope grants full access to Dataplex APIs.
+- **Dedicated Service Accounts**: If using a custom Service Account key or token with restricted scopes, ensure either:
+  - `https://www.googleapis.com/auth/cloud-platform` (recommended)
+  - `https://www.googleapis.com/auth/dataplex`
+
+#### CLI Verification Commands
+```bash
+# Verify Dataplex APIs are enabled
+gcloud services list --enabled --filter="name:(dataplex.googleapis.com OR datacatalog.googleapis.com)"
+
+# Test catalog inspection on a target dataset
+demo-create catalog inspect \
+  --dataset "${DATASET}" \
+  --gcp-project "${PROJECT_ID}" \
+  --json
 ```
 
 ---

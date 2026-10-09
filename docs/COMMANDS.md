@@ -40,13 +40,14 @@ Failures are reported by exit code, so a caller never has to parse prose:
 | :--- | :--- |
 | [`status`](#demo-create-status) | Report the completed gates, the current gate, and the exact next command. |
 | [`pre-check`](#demo-create-pre-check) | Audit GCP/ADC credentials, MCP server definitions, and agent skill folders. |
-| [`confirm-targets`](#demo-create-confirm-targets) | Record the 4 human-confirmed environment targets and initialize SPEC.md (Gate 0B). |
+| [`confirm-targets`](#demo-create-confirm-targets) | Record the human-confirmed environment targets and deployment mode, and initialize SPEC.md (Gate 0B). |
 | [`skills`](#demo-create-skills) | View and manage intent-based global agent skills. |
 | [`run-script`](#demo-create-run-script) | Execute a Python script using the CLI's bundled runtime and dependencies. |
 | [`python`](#demo-create-python) | Execute Python within the CLI's environment (e.g. `demo-create python -c '...'`). |
 | [`agent`](#demo-create-agent) | Provision Looker Conversational Analytics AI agents, ground golden queries, and publish to GE. |
 | [`ge`](#demo-create-ge) | Inspect and configure Looker Gemini Enterprise (GE) integration. |
 | [`env`](#demo-create-env) | Manage local demo workspace virtual environment and runtime health. |
+| [`catalog`](#demo-create-catalog) | Inspect Knowledge Catalog (Dataplex) metadata, view mapping profiles, and seed curation semantics. |
 | [`data`](#demo-create-data) | Design, synthesize, inspect, and upload BigQuery demo datasets. |
 | [`lookml`](#demo-create-lookml) | Generate LookML models from BigQuery/Knowledge Catalog or Parquet, and deploy. |
 | [`embed`](#demo-create-embed) | Scaffold standalone Embedded Analytics web applications and portals. |
@@ -89,13 +90,14 @@ demo-create pre-check [OPTIONS]
 | `--fix` | Automatically install missing MCP configs and organize global skills |  |
 | `--json` | Emit the result envelope as JSON on stdout |  |
 | `--gcp-project` | Target Google Cloud Project ID |  |
+| `--require-looker` | Block pre-check if Looker authentication is missing (otherwise verified at confirm-targets when --mode full is selected) |  |
 | `--state-file` | Path to .demo-state.json. Defaults to discovering it in the current directory. |  |
 
 ---
 
 ## `demo-create confirm-targets`
 
-Record the 4 human-confirmed environment targets and initialize SPEC.md (Gate 0B).
+Record the human-confirmed environment targets and deployment mode, and initialize SPEC.md (Gate 0B).
 
 ```bash
 demo-create confirm-targets [OPTIONS]
@@ -107,6 +109,8 @@ demo-create confirm-targets [OPTIONS]
 | `--gcp-project` | Confirmed Google Cloud Project ID |  |
 | `--looker-account` | Confirmed Looker OAuth account or instance alias |  |
 | `--connection` | Confirmed Looker database connection name |  |
+| `--mode` | Deployment mode: 'full' (BigQuery + Knowledge Catalog + Looker) or 'bq_only' (BigQuery + Knowledge Catalog only) | `full` |
+| `--dataset` | Optional existing BigQuery dataset ID to adopt |  |
 | `--looker-project` | Optional Looker project/model name |  |
 | `--instance` | Optional Looker instance URL |  |
 | `--json` | Emit the result envelope as JSON on stdout |  |
@@ -341,17 +345,119 @@ demo-create env init [OPTIONS]
 
 ---
 
+## `demo-create catalog`
+
+Inspect Knowledge Catalog (Dataplex) metadata, view mapping profiles, and seed curation semantics.
+
+| Subcommand | Description |
+| :--- | :--- |
+| [`inspect`](#demo-create-catalog-inspect) | Inspect BigQuery tables and Dataplex Knowledge Catalog metadata, generating a CatalogSnapshot. |
+| [`profiles`](#demo-create-catalog-profiles) | Display Knowledge Catalog -> LookML mapping profiles and configuration rules. |
+| [`seed`](#demo-create-catalog-seed) | Seed Knowledge Catalog curation metadata (Aspect Types, Aspects, Glossaries, EntryLinks, PK/FK constraints). |
+| [`sync`](#demo-create-catalog-sync) | Synchronize Knowledge Catalog (Dataplex) metadata into LookML views and refinements. |
+
+### `demo-create catalog inspect`
+
+Inspect BigQuery tables and Dataplex Knowledge Catalog metadata, generating a CatalogSnapshot.
+
+```bash
+demo-create catalog inspect [OPTIONS]
+```
+
+| Option | Description | Default |
+| :--- | :--- | :--- |
+| `--dataset` | Target BigQuery dataset ID to inspect. Defaults to state dataset. |  |
+| `--gcp-project` | GCP Project ID. Defaults to confirmed target project. |  |
+| `--location` | Dataset location (e.g. 'us', 'eu', 'us-central1'). | `us` |
+| `--output-file`, `-o` | Optional path to save the CatalogSnapshot JSON file. |  |
+| `--skip` | Skip Knowledge Catalog inspection and advance to LookML modeling |  |
+| `--json` | Emit result envelope as JSON on stdout |  |
+| `--state-file` | Path to .demo-state.json. Defaults to discovering it in the current directory. |  |
+
+### `demo-create catalog profiles`
+
+Display Knowledge Catalog -> LookML mapping profiles and configuration rules.
+
+```bash
+demo-create catalog profiles [OPTIONS]
+```
+
+| Option | Description | Default |
+| :--- | :--- | :--- |
+| `--json` | Emit result envelope as JSON on stdout |  |
+
+### `demo-create catalog seed`
+
+Seed Knowledge Catalog curation metadata (Aspect Types, Aspects, Glossaries, EntryLinks, PK/FK constraints).
+
+```bash
+demo-create catalog seed [OPTIONS]
+```
+
+| Option | Description | Default |
+| :--- | :--- | :--- |
+| `--dataset` | Target BigQuery dataset ID to seed metadata for. Defaults to state dataset. |  |
+| `--gcp-project` | Target GCP Project ID. Defaults to confirmed target project. |  |
+| `--location` | Dataset location | `us` |
+| `--aspect-type-name` | Name for the semantic curation Aspect Type | `semantic-curation` |
+| `--glossary-name` | Name for the Dataplex Business Glossary | `fintech-glossary` |
+| `--mode` | Execution mode: 'plan' or 'execute' | `execute` |
+| `--skip` | Skip Knowledge Catalog metadata seeding and advance to LookML modeling |  |
+| `--json` | Emit result envelope as JSON on stdout |  |
+| `--state-file` | Path to .demo-state.json. Defaults to discovering it in the current directory. |  |
+
+### `demo-create catalog sync`
+
+Synchronize Knowledge Catalog (Dataplex) metadata into LookML views and refinements.
+
+```bash
+demo-create catalog sync [OPTIONS]
+```
+
+| Option | Description | Default |
+| :--- | :--- | :--- |
+| `--dataset` | Target BigQuery dataset ID to sync. Defaults to state dataset. |  |
+| `--gcp-project` | GCP Project ID. Defaults to confirmed target project. |  |
+| `--lookml-dir` | Path to LookML directory to sync. Defaults to state output dir or ./lookml. |  |
+| `--catalog` | Optional path to CatalogSnapshot JSON file to sync against. |  |
+| `--profile` | Knowledge Catalog mapping profile ('rich', 'hybrid', 'minimal'). Defaults to state or recommended. |  |
+| `--layered`, `--no-layered` | Use layered LookML views (base/ and refinements/). Defaults to auto-detecting project structure. |  |
+| `--dry-run` | Report planned metadata diffs without modifying LookML files. |  |
+| `--skip` | Skip Knowledge Catalog LookML synchronization |  |
+| `--location` | Dataset/Catalog location (e.g. 'us', 'eu', 'us-central1'). | `us` |
+| `--json` | Emit result envelope as JSON on stdout |  |
+| `--state-file` | Path to .demo-state.json. Defaults to discovering it in the current directory. |  |
+
+---
+
 ## `demo-create data`
 
 Design, synthesize, inspect, and upload BigQuery demo datasets.
 
 | Subcommand | Description |
 | :--- | :--- |
+| [`adopt`](#demo-create-data-adopt) | Adopt an existing BigQuery dataset, skipping synthetic data generation gates. |
 | [`approve-schema`](#demo-create-data-approve-schema) | Record user approval of the proposed schema and target row volume (Gate 1B). |
 | [`generate`](#demo-create-data-generate) | Synthesize high-fidelity relational Parquet dataset tables locally. |
 | [`inspect`](#demo-create-data-inspect) | Inspect tables, schemas, and metadata in a BigQuery dataset. |
 | [`propose-schema`](#demo-create-data-propose-schema) | Validate a schema blueprint and synthesize a 5-row micro-sample preview & Mermaid ERD (Gate 1A). |
 | [`upload`](#demo-create-data-upload) | Upload local Parquet tables into a BigQuery dataset via ADC with automated partitioning & clustering. |
+
+### `demo-create data adopt`
+
+Adopt an existing BigQuery dataset, skipping synthetic data generation gates.
+
+```bash
+demo-create data adopt [OPTIONS]
+```
+
+| Option | Description | Default |
+| :--- | :--- | :--- |
+| `--dataset` | BigQuery dataset ID to adopt as demo source **(required)** |  |
+| `--gcp-project` | GCP Project ID. Defaults to confirmed target project. |  |
+| `--tables` | Optional comma-separated list of table IDs to include |  |
+| `--json` | Emit the result envelope as JSON on stdout |  |
+| `--state-file` | Path to .demo-state.json. Defaults to discovering it in the current directory. |  |
 
 ### `demo-create data approve-schema`
 
@@ -547,6 +653,10 @@ demo-create lookml model [OPTIONS]
 | `--connection` | Looker database connection name; reused from prior state if omitted |  |
 | `--output-dir` | Directory to output generated LookML files |  |
 | `--gcp-project` | Target GCP Project ID |  |
+| `--catalog` | Path to a CatalogSnapshot JSON file to enrich LookML with Knowledge Catalog metadata |  |
+| `--profile` | Knowledge Catalog mapping profile ('rich', 'hybrid', 'minimal'). Defaults to snapshot recommendation |  |
+| `--use-catalog`, `--no-catalog` | Explicitly enable or disable Knowledge Catalog metadata enrichment |  |
+| `--layered`, `--no-layered` | Generate layered LookML (views/base/ for physical schema, views/refinements/ for semantic layer) |  |
 | `--json` | Emit the result envelope as JSON on stdout |  |
 | `--state-file` | Path to .demo-state.json. Defaults to discovering it in the current directory. |  |
 

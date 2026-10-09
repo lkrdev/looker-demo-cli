@@ -11,7 +11,30 @@ class LookMLTableSpec(BaseModel):
     table_type: str = "dimension"  # fact or dimension
     schema_fields: dict[str, str] = Field(default_factory=dict)
     primary_key: str | None = None
+    primary_keys: list[str] = Field(default_factory=list)
     foreign_keys: dict[str, str] = Field(default_factory=dict)  # fk_col -> TargetTable.TargetCol
+    description: str | None = None
+    business_label: str | None = None
+    column_descriptions: dict[str, str] = Field(default_factory=dict)
+    column_labels: dict[str, str] = Field(default_factory=dict)
+    column_formats: dict[str, str] = Field(default_factory=dict)
+    column_synonyms: dict[str, list[str]] = Field(default_factory=dict)
+    column_allowed_values: dict[str, list[str]] = Field(default_factory=dict)
+    partition_field: str | None = None
+    clustering_fields: list[str] = Field(default_factory=list)
+
+
+def _escape_lookml_str(val: str | None) -> str:
+    """Safely escape a string for LookML double-quoted strings."""
+    if not val:
+        return ""
+    cleaned = (
+        str(val).replace("\\", "\\\\").replace('"', '\\"').replace("\r\n", " ").replace("\n", " ").replace("\r", " ")
+    )
+    return cleaned.strip()
+
+
+NUMERIC_TYPES = ("FLOAT64", "NUMERIC", "BIGNUMERIC", "INT64", "DOUBLE", "FLOAT", "INTEGER", "INT")
 
 
 class DashboardFilterSpec(BaseModel):
@@ -152,24 +175,45 @@ class LookMLGenerator:
         lines = [
             f"view: {spec.table_name} {{",
             f"  sql_table_name: `{self.project_id}.{self.dataset_id}.{spec.table_name}` ;;",
-            "",
-            "  # -------------------------------------------------------------",
-            "  # Dimensions",
-            "  # -------------------------------------------------------------",
         ]
+        if spec.business_label:
+            lines.append(f'  label: "{_escape_lookml_str(spec.business_label)}"')
+        if spec.description:
+            lines.append(f'  # description: "{_escape_lookml_str(spec.description)}"')
+        lines.extend(
+            [
+                "",
+                "  # -------------------------------------------------------------",
+                "  # Dimensions",
+                "  # -------------------------------------------------------------",
+            ]
+        )
 
         for field_name, field_type in spec.schema_fields.items():
-            is_pk = field_name == spec.primary_key
-            is_fk = field_name in spec.foreign_keys or (field_name.endswith("_id") and not is_pk)
-            label = self._format_label(field_name)
-            desc = self._format_description(
-                field_name, field_type, is_pk=is_pk, is_fk=is_fk, table_name=spec.table_name
+            is_pk = bool(
+                field_name == spec.primary_key
+                or (not spec.primary_key and spec.primary_keys and field_name == spec.primary_keys[0])
             )
+            is_fk = field_name in spec.foreign_keys or (field_name.endswith("_id") and not is_pk)
 
-            is_time_col = field_type in ("TIMESTAMP", "DATETIME", "DATE") or field_name.endswith(
+            # Resolve label: prioritize curated column_labels over inferred label
+            if field_name in spec.column_labels:
+                label = _escape_lookml_str(spec.column_labels[field_name])
+            else:
+                label = self._format_label(field_name)
+
+            # Resolve description: prioritize curated column_descriptions over generic template
+            if field_name in spec.column_descriptions:
+                desc = _escape_lookml_str(spec.column_descriptions[field_name])
+            else:
+                desc = self._format_description(
+                    field_name, field_type, is_pk=is_pk, is_fk=is_fk, table_name=spec.table_name
+                )
+
+            is_time_col = field_type.upper() in ("TIMESTAMP", "DATETIME", "DATE", "TIME") or field_name.endswith(
                 ("_time", "_date", "_at", "_day")
             )
-            if is_time_col and field_type not in ("INT64", "FLOAT64", "NUMERIC", "DOUBLE", "INTEGER"):
+            if is_time_col and field_type.upper() not in NUMERIC_TYPES:
                 group_name = field_name
                 for sfx in ["_time", "_date", "_at", "_day"]:
                     if group_name.endswith(sfx):
@@ -177,7 +221,9 @@ class LookMLGenerator:
                         break
                 group_label = self._format_label(group_name)
                 is_date_only = (
-                    (field_type == "DATE") or field_name.endswith(("_date", "_day")) or field_name.startswith("date_")
+                    (field_type.upper() == "DATE")
+                    or field_name.endswith(("_date", "_day"))
+                    or field_name.startswith("date_")
                 )
                 dt_param = "date" if is_date_only else "timestamp"
                 t_frames = (
@@ -185,11 +231,16 @@ class LookMLGenerator:
                     if is_date_only
                     else "[raw, time, date, week, month, quarter, year]"
                 )
+                synonyms = [str(s).strip() for s in spec.column_synonyms.get(field_name, []) if str(s).strip()]
+                tags_line = (
+                    [f"    tags: [{', '.join(f'"{_escape_lookml_str(s)}"' for s in synonyms)}]"] if synonyms else []
+                )
                 lines.extend(
                     [
                         f"  dimension_group: {group_name} {{",
                         f'    label: "{group_label}"',
                         f'    description: "{desc}"',
+                        *tags_line,
                         "    type: time",
                         f"    datatype: {dt_param}",
                         f"    timeframes: {t_frames}",
@@ -198,18 +249,24 @@ class LookMLGenerator:
                         "",
                     ]
                 )
-            elif field_type in ("INT64", "FLOAT64", "NUMERIC", "DOUBLE", "INTEGER"):
+            elif field_type.upper() in NUMERIC_TYPES:
+                synonyms = [str(s).strip() for s in spec.column_synonyms.get(field_name, []) if str(s).strip()]
                 dim_lines = [
                     f"  dimension: {field_name} {{",
                     f'    label: "{label}"',
                     f'    description: "{desc}"',
                 ]
+                if synonyms:
+                    tags_str = ", ".join(f'"{_escape_lookml_str(s)}"' for s in synonyms)
+                    dim_lines.append(f"    tags: [{tags_str}]")
                 if is_pk:
                     dim_lines.append("    primary_key: yes")
                     dim_lines.append("    suggestable: no")
                 elif is_fk:
                     dim_lines.append("    hidden: yes")
                     dim_lines.append("    suggestable: no")
+                if field_name in spec.column_formats:
+                    dim_lines.append(f"    value_format_name: {spec.column_formats[field_name]}")
                 dim_lines.extend(
                     [
                         "    type: number",
@@ -219,12 +276,17 @@ class LookMLGenerator:
                     ]
                 )
                 lines.extend(dim_lines)
-            elif field_type in ("BOOL", "BOOLEAN"):
+            elif field_type.upper() in ("BOOL", "BOOLEAN"):
+                synonyms = [str(s).strip() for s in spec.column_synonyms.get(field_name, []) if str(s).strip()]
+                tags_line = (
+                    [f"    tags: [{', '.join(f'"{_escape_lookml_str(s)}"' for s in synonyms)}]"] if synonyms else []
+                )
                 lines.extend(
                     [
                         f"  dimension: {field_name} {{",
                         f'    label: "{label}"',
                         f'    description: "{desc}"',
+                        *tags_line,
                         "    type: yesno",
                         f"    sql: ${{TABLE}}.{field_name} ;;",
                         "  }",
@@ -232,17 +294,28 @@ class LookMLGenerator:
                     ]
                 )
             else:
+                synonyms = [str(s).strip() for s in spec.column_synonyms.get(field_name, []) if str(s).strip()]
+                allowed_vals = [
+                    str(v).strip() for v in spec.column_allowed_values.get(field_name, []) if str(v).strip()
+                ]
                 dim_lines = [
                     f"  dimension: {field_name} {{",
                     f'    label: "{label}"',
                     f'    description: "{desc}"',
                 ]
+                if synonyms:
+                    tags_str = ", ".join(f'"{_escape_lookml_str(s)}"' for s in synonyms)
+                    dim_lines.append(f"    tags: [{tags_str}]")
                 if is_pk:
                     dim_lines.append("    primary_key: yes")
                     dim_lines.append("    suggestable: no")
                 elif is_fk:
                     dim_lines.append("    hidden: yes")
                     dim_lines.append("    suggestable: no")
+                elif allowed_vals and len(allowed_vals) <= 25:
+                    suggestions_str = ", ".join(f'"{_escape_lookml_str(v)}"' for v in allowed_vals)
+                    dim_lines.append(f"    suggestions: [{suggestions_str}]")
+                    dim_lines.append('    suggest_persist_for: "24 hours"')
                 elif any(
                     sfx in field_name.lower()
                     for sfx in ["uuid", "hash", "token", "payload", "raw", "description", "content"]
@@ -278,15 +351,16 @@ class LookMLGenerator:
             ]
         )
 
-        if spec.primary_key:
-            pk_label = self._format_label(spec.primary_key)
+        effective_pk = spec.primary_key or (spec.primary_keys[0] if spec.primary_keys else None)
+        if effective_pk:
+            pk_label = self._format_label(effective_pk)
             lines.extend(
                 [
                     f"  measure: count_distinct_{spec.table_name} {{",
                     f'    label: "Distinct {self._format_label(spec.table_name)} Count"',
                     f'    description: "Distinct unique count of {pk_label}."',
                     "    type: count_distinct",
-                    f"    sql: ${{{spec.primary_key}}} ;;",
+                    f"    sql: ${{{effective_pk}}} ;;",
                     "  }",
                     "",
                 ]
@@ -294,29 +368,35 @@ class LookMLGenerator:
 
         # Sum/Avg measures for numeric columns
         for field_name, field_type in spec.schema_fields.items():
-            if field_name != spec.primary_key and not field_name.endswith("_id"):
-                if field_type in ("FLOAT64", "NUMERIC", "INT64", "DOUBLE"):
+            if field_name != effective_pk and not field_name.endswith("_id"):
+                if field_type.upper() in NUMERIC_TYPES:
+                    custom_fmt = spec.column_formats.get(field_name)
                     val_format = (
-                        "usd_0"
-                        if any(
-                            k in field_name.lower()
-                            for k in [
-                                "usd",
-                                "cost",
-                                "rev",
-                                "price",
-                                "loss",
-                                "fee",
-                                "val",
-                                "amount",
-                                "payout",
-                                "premium",
-                                "spend",
-                            ]
+                        custom_fmt
+                        if custom_fmt
+                        else (
+                            "usd_0"
+                            if any(
+                                k in field_name.lower()
+                                for k in [
+                                    "usd",
+                                    "cost",
+                                    "rev",
+                                    "price",
+                                    "loss",
+                                    "fee",
+                                    "val",
+                                    "amount",
+                                    "payout",
+                                    "premium",
+                                    "spend",
+                                ]
+                            )
+                            else "decimal_1"
                         )
-                        else "decimal_1"
                     )
-                    field_label = self._format_label(field_name)
+                    field_label = spec.column_labels.get(field_name) or self._format_label(field_name)
+                    field_label = _escape_lookml_str(field_label)
                     lines.extend(
                         [
                             f"  measure: total_{field_name} {{",
@@ -341,44 +421,382 @@ class LookMLGenerator:
         lines.append("}")
         return "\n".join(lines)
 
-    def generate_model_lkml(self, model_name: str, tables: list[LookMLTableSpec]) -> str:
+    def generate_base_view_lkml(self, spec: LookMLTableSpec) -> str:
+        """Generate a bare physical LookML base view file (views/base/<name>.view.lkml)."""
+        lines = [
+            f"view: {spec.table_name} {{",
+            f"  sql_table_name: `{self.project_id}.{self.dataset_id}.{spec.table_name}` ;;",
+            "",
+            "  # -------------------------------------------------------------",
+            "  # Dimensions (Physical Layer)",
+            "  # -------------------------------------------------------------",
+        ]
+
+        for field_name, field_type in spec.schema_fields.items():
+            is_pk = bool(
+                field_name == spec.primary_key
+                or (not spec.primary_key and spec.primary_keys and field_name == spec.primary_keys[0])
+            )
+            is_fk = field_name in spec.foreign_keys or (field_name.endswith("_id") and not is_pk)
+
+            is_time_col = field_type.upper() in ("TIMESTAMP", "DATETIME", "DATE", "TIME") or field_name.endswith(
+                ("_time", "_date", "_at", "_day")
+            )
+            if is_time_col and field_type.upper() not in NUMERIC_TYPES:
+                group_name = field_name
+                for sfx in ["_time", "_date", "_at", "_day"]:
+                    if group_name.endswith(sfx):
+                        group_name = group_name[: -len(sfx)]
+                        break
+                is_date_only = (
+                    (field_type.upper() == "DATE")
+                    or field_name.endswith(("_date", "_day"))
+                    or field_name.startswith("date_")
+                )
+                dt_param = "date" if is_date_only else "timestamp"
+                t_frames = (
+                    "[raw, date, week, month, quarter, year]"
+                    if is_date_only
+                    else "[raw, time, date, week, month, quarter, year]"
+                )
+                lines.extend(
+                    [
+                        f"  dimension_group: {group_name} {{",
+                        "    type: time",
+                        f"    datatype: {dt_param}",
+                        f"    timeframes: {t_frames}",
+                        f"    sql: ${{TABLE}}.{field_name} ;;",
+                        "  }",
+                        "",
+                    ]
+                )
+            elif field_type.upper() in NUMERIC_TYPES:
+                dim_lines = [
+                    f"  dimension: {field_name} {{",
+                    "    type: number",
+                    f"    sql: ${{TABLE}}.{field_name} ;;",
+                ]
+                if is_pk:
+                    dim_lines.append("    primary_key: yes")
+                    dim_lines.append("    suggestable: no")
+                elif is_fk:
+                    dim_lines.append("    hidden: yes")
+                    dim_lines.append("    suggestable: no")
+                dim_lines.append("  }")
+                dim_lines.append("")
+                lines.extend(dim_lines)
+            elif field_type.upper() in ("BOOL", "BOOLEAN"):
+                lines.extend(
+                    [
+                        f"  dimension: {field_name} {{",
+                        "    type: yesno",
+                        f"    sql: ${{TABLE}}.{field_name} ;;",
+                        "  }",
+                        "",
+                    ]
+                )
+            else:
+                dim_lines = [
+                    f"  dimension: {field_name} {{",
+                    "    type: string",
+                    f"    sql: ${{TABLE}}.{field_name} ;;",
+                ]
+                if is_pk:
+                    dim_lines.append("    primary_key: yes")
+                    dim_lines.append("    suggestable: no")
+                elif is_fk:
+                    dim_lines.append("    hidden: yes")
+                    dim_lines.append("    suggestable: no")
+                dim_lines.append("  }")
+                dim_lines.append("")
+                lines.extend(dim_lines)
+
+        lines.extend(
+            [
+                "  # -------------------------------------------------------------",
+                "  # Measures (Physical Layer)",
+                "  # -------------------------------------------------------------",
+                "  measure: count {",
+                "    type: count",
+                "  }",
+                "",
+            ]
+        )
+
+        effective_pk = spec.primary_key or (spec.primary_keys[0] if spec.primary_keys else None)
+        if effective_pk:
+            lines.extend(
+                [
+                    f"  measure: count_distinct_{spec.table_name} {{",
+                    "    type: count_distinct",
+                    f"    sql: ${{{effective_pk}}} ;;",
+                    "  }",
+                    "",
+                ]
+            )
+
+        lines.append("}")
+        return "\n".join(lines)
+
+    def generate_refinement_view_lkml(self, spec: LookMLTableSpec) -> str:
+        """Generate a semantic LookML refinement view file (views/refinements/<name>.refinement.lkml)."""
+        lines = [
+            f'include: "/views/base/{spec.table_name}.view.lkml"',
+            "",
+            f"view: +{spec.table_name} {{",
+        ]
+        if spec.business_label:
+            lines.append(f'  label: "{_escape_lookml_str(spec.business_label)}"')
+        if spec.description:
+            lines.append(f'  # description: "{_escape_lookml_str(spec.description)}"')
+
+        lines.extend(
+            [
+                "",
+                "  # -------------------------------------------------------------",
+                "  # Dimensions Refinements (Business Semantics & Curation)",
+                "  # -------------------------------------------------------------",
+            ]
+        )
+
+        for field_name, field_type in spec.schema_fields.items():
+            is_pk = bool(
+                field_name == spec.primary_key
+                or (not spec.primary_key and spec.primary_keys and field_name == spec.primary_keys[0])
+            )
+            is_fk = field_name in spec.foreign_keys or (field_name.endswith("_id") and not is_pk)
+
+            # Resolve label: prioritize curated column_labels over inferred label
+            if field_name in spec.column_labels:
+                label = _escape_lookml_str(spec.column_labels[field_name])
+            else:
+                label = self._format_label(field_name)
+
+            # Resolve description: prioritize curated column_descriptions over generic template
+            if field_name in spec.column_descriptions:
+                desc = _escape_lookml_str(spec.column_descriptions[field_name])
+            else:
+                desc = self._format_description(
+                    field_name, field_type, is_pk=is_pk, is_fk=is_fk, table_name=spec.table_name
+                )
+
+            synonyms = [str(s).strip() for s in spec.column_synonyms.get(field_name, []) if str(s).strip()]
+            tags_line = [f"    tags: [{', '.join(f'"{_escape_lookml_str(s)}"' for s in synonyms)}]"] if synonyms else []
+
+            is_time_col = field_type.upper() in ("TIMESTAMP", "DATETIME", "DATE", "TIME") or field_name.endswith(
+                ("_time", "_date", "_at", "_day")
+            )
+            if is_time_col and field_type.upper() not in NUMERIC_TYPES:
+                group_name = field_name
+                for sfx in ["_time", "_date", "_at", "_day"]:
+                    if group_name.endswith(sfx):
+                        group_name = group_name[: -len(sfx)]
+                        break
+                group_label = self._format_label(group_name)
+                lines.extend(
+                    [
+                        f"  dimension_group: {group_name} {{",
+                        f'    label: "{group_label}"',
+                        f'    description: "{desc}"',
+                        *tags_line,
+                        "  }",
+                        "",
+                    ]
+                )
+            elif field_type.upper() in NUMERIC_TYPES:
+                dim_lines = [
+                    f"  dimension: {field_name} {{",
+                    f'    label: "{label}"',
+                    f'    description: "{desc}"',
+                ]
+                if synonyms:
+                    tags_str = ", ".join(f'"{_escape_lookml_str(s)}"' for s in synonyms)
+                    dim_lines.append(f"    tags: [{tags_str}]")
+                if field_name in spec.column_formats:
+                    dim_lines.append(f"    value_format_name: {spec.column_formats[field_name]}")
+                dim_lines.append("  }")
+                dim_lines.append("")
+                lines.extend(dim_lines)
+            elif field_type.upper() in ("BOOL", "BOOLEAN"):
+                lines.extend(
+                    [
+                        f"  dimension: {field_name} {{",
+                        f'    label: "{label}"',
+                        f'    description: "{desc}"',
+                        *tags_line,
+                        "  }",
+                        "",
+                    ]
+                )
+            else:
+                allowed_vals = [
+                    str(v).strip() for v in spec.column_allowed_values.get(field_name, []) if str(v).strip()
+                ]
+                dim_lines = [
+                    f"  dimension: {field_name} {{",
+                    f'    label: "{label}"',
+                    f'    description: "{desc}"',
+                ]
+                if synonyms:
+                    tags_str = ", ".join(f'"{_escape_lookml_str(s)}"' for s in synonyms)
+                    dim_lines.append(f"    tags: [{tags_str}]")
+                if allowed_vals and len(allowed_vals) <= 25:
+                    suggestions_str = ", ".join(f'"{_escape_lookml_str(v)}"' for v in allowed_vals)
+                    dim_lines.append(f"    suggestions: [{suggestions_str}]")
+                    dim_lines.append('    suggest_persist_for: "24 hours"')
+                elif any(
+                    kw in field_name.lower()
+                    for kw in ["status", "type", "state", "priority", "tier", "category", "channel"]
+                ):
+                    dim_lines.append('    suggest_persist_for: "24 hours"')
+                dim_lines.append("  }")
+                dim_lines.append("")
+                lines.extend(dim_lines)
+
+        lines.extend(
+            [
+                "  # -------------------------------------------------------------",
+                "  # Measures Refinements & Derived Metrics",
+                "  # -------------------------------------------------------------",
+                "  measure: count {",
+                f'    label: "Total {self._format_label(spec.table_name)} Count"',
+                f'    description: "Total record count of {self._format_label(spec.table_name)}."',
+                "  }",
+                "",
+            ]
+        )
+
+        effective_pk = spec.primary_key or (spec.primary_keys[0] if spec.primary_keys else None)
+        if effective_pk:
+            pk_label = self._format_label(effective_pk)
+            lines.extend(
+                [
+                    f"  measure: count_distinct_{spec.table_name} {{",
+                    f'    label: "Distinct {self._format_label(spec.table_name)} Count"',
+                    f'    description: "Distinct unique count of {pk_label}."',
+                    "  }",
+                    "",
+                ]
+            )
+
+        # Derived business measures (sum / avg)
+        for field_name, field_type in spec.schema_fields.items():
+            if field_name != effective_pk and not field_name.endswith("_id"):
+                if field_type.upper() in NUMERIC_TYPES:
+                    custom_fmt = spec.column_formats.get(field_name)
+                    val_format = (
+                        custom_fmt
+                        if custom_fmt
+                        else (
+                            "usd_0"
+                            if any(
+                                k in field_name.lower()
+                                for k in [
+                                    "usd",
+                                    "cost",
+                                    "rev",
+                                    "price",
+                                    "loss",
+                                    "fee",
+                                    "val",
+                                    "amount",
+                                    "payout",
+                                    "premium",
+                                    "spend",
+                                ]
+                            )
+                            else "decimal_1"
+                        )
+                    )
+                    field_label = spec.column_labels.get(field_name) or self._format_label(field_name)
+                    field_label = _escape_lookml_str(field_label)
+                    lines.extend(
+                        [
+                            f"  measure: total_{field_name} {{",
+                            f'    label: "Total {field_label}"',
+                            f'    description: "Sum of {field_label}."',
+                            "    type: sum",
+                            f"    sql: ${{TABLE}}.{field_name} ;;",
+                            f"    value_format_name: {val_format}",
+                            "  }",
+                            "",
+                            f"  measure: average_{field_name} {{",
+                            f'    label: "Average {field_label}"',
+                            f'    description: "Average of {field_label}."',
+                            "    type: average",
+                            f"    sql: ${{TABLE}}.{field_name} ;;",
+                            f"    value_format_name: {val_format}",
+                            "  }",
+                            "",
+                        ]
+                    )
+
+        lines.append("}")
+        return "\n".join(lines)
+
+    def generate_model_lkml(self, model_name: str, tables: list[LookMLTableSpec], layered: bool = False) -> str:
         """Generate LookML model string with explores, joins, and Google Cloud performance caching."""
         lines = [
             f'connection: "{self.connection_name}"',
             "",
-            'include: "/views/**/*.view.lkml"',
-            'include: "/dashboards/**/*.dashboard.lookml"',
-            "",
-            "# Google Cloud Looker Server Performance Best Practice: Model Datagroup Caching",
-            "datagroup: default_caching_policy {",
-            '  max_cache_age: "4 hours"',
-            '  description: "Default caching policy for operational dashboard and explore queries"',
-            "}",
-            "",
-            "persist_with: default_caching_policy",
-            "",
         ]
+        if layered:
+            lines.extend(
+                [
+                    'include: "/views/base/**/*.view.lkml"',
+                    'include: "/views/refinements/**/*.refinement.lkml"',
+                ]
+            )
+        else:
+            lines.append('include: "/views/**/*.view.lkml"')
+        lines.extend(
+            [
+                'include: "/dashboards/**/*.dashboard.lookml"',
+                "",
+                "# Google Cloud Looker Server Performance Best Practice: Model Datagroup Caching",
+                "datagroup: default_caching_policy {",
+                '  max_cache_age: "4 hours"',
+                '  description: "Default caching policy for operational dashboard and explore queries"',
+                "}",
+                "",
+                "persist_with: default_caching_policy",
+                "",
+            ]
+        )
 
         explored_tables = [t for t in tables if t.table_type == "fact" or len(t.foreign_keys) > 0] or tables[:1]
         for ft in explored_tables:
-            label = self._format_label(ft.table_name)
+            label = _escape_lookml_str(ft.business_label) if ft.business_label else self._format_label(ft.table_name)
+            desc = (
+                _escape_lookml_str(ft.description)
+                if ft.description
+                else f"Explore for analyzing {label.lower()} data with relational dimensions."
+            )
             lines.extend(
                 [
                     f"explore: {ft.table_name} {{",
                     f'  label: "{label}"',
-                    f'  description: "Explore for analyzing {label.lower()} data with relational dimensions."',
+                    f'  description: "{desc}"',
                 ]
             )
 
             # Partition pruning filter check (Performance Best Practice Rule 4)
             date_col = None
-            for col, col_type in ft.schema_fields.items():
-                if col_type == "DATE" or col.endswith(("_date", "_day")):
-                    date_col = f"{ft.table_name}.{col}"
-                    break
+            if ft.partition_field:
+                p_field = ft.partition_field
+                p_type = ft.schema_fields.get(p_field, "").upper()
+                if p_type == "DATE" or p_field.endswith(("_date", "_day")) or p_field.startswith("date_"):
+                    date_col = f"{ft.table_name}.{p_field}"
+                else:
+                    date_col = f"{ft.table_name}.{p_field}_date"
             if not date_col:
                 for col, col_type in ft.schema_fields.items():
-                    if col_type in ("TIMESTAMP", "DATETIME") or col.endswith(("_time", "_at")):
+                    if col_type.upper() == "DATE" or col.endswith(("_date", "_day")):
+                        date_col = f"{ft.table_name}.{col}"
+                        break
+            if not date_col:
+                for col, col_type in ft.schema_fields.items():
+                    if col_type.upper() in ("TIMESTAMP", "DATETIME") or col.endswith(("_time", "_at")):
                         for sfx in ["_time", "_at", "_date"]:
                             if col.endswith(sfx):
                                 date_col = f"{ft.table_name}.{col[: -len(sfx)]}_date"
@@ -585,9 +1003,7 @@ class LookMLGenerator:
         numeric_fields = [
             f
             for f, t in primary_fact.schema_fields.items()
-            if t in ("FLOAT64", "NUMERIC", "INT64", "DOUBLE")
-            and f != primary_fact.primary_key
-            and not f.endswith("_id")
+            if t.upper() in NUMERIC_TYPES and f != primary_fact.primary_key and not f.endswith("_id")
         ]
         kpi_1 = numeric_fields[0] if numeric_fields else "count"
         kpi_2 = numeric_fields[1] if len(numeric_fields) > 1 else (numeric_fields[0] if numeric_fields else "count")
@@ -908,27 +1324,45 @@ class LookMLGenerator:
         model_name: str,
         tables: list[LookMLTableSpec],
         dashboard_content: str | None = None,
+        layered: bool = False,
     ) -> list[Path]:
         """Write all LookML files to local output folder."""
-        views_dir = output_dir / "views"
         models_dir = output_dir / "models"
         dashboards_dir = output_dir / "dashboards"
 
-        views_dir.mkdir(parents=True, exist_ok=True)
         models_dir.mkdir(parents=True, exist_ok=True)
         dashboards_dir.mkdir(parents=True, exist_ok=True)
 
         written_files = []
 
         # 1. Write Views
-        for t in tables:
-            v_content = self.generate_view_lkml(t)
-            v_path = views_dir / f"{t.table_name}.view.lkml"
-            v_path.write_text(v_content, encoding="utf-8")
-            written_files.append(v_path)
+        if layered:
+            base_dir = output_dir / "views" / "base"
+            refinements_dir = output_dir / "views" / "refinements"
+            base_dir.mkdir(parents=True, exist_ok=True)
+            refinements_dir.mkdir(parents=True, exist_ok=True)
+
+            for t in tables:
+                b_content = self.generate_base_view_lkml(t)
+                b_path = base_dir / f"{t.table_name}.view.lkml"
+                b_path.write_text(b_content, encoding="utf-8")
+                written_files.append(b_path)
+
+                r_content = self.generate_refinement_view_lkml(t)
+                r_path = refinements_dir / f"{t.table_name}.refinement.lkml"
+                r_path.write_text(r_content, encoding="utf-8")
+                written_files.append(r_path)
+        else:
+            views_dir = output_dir / "views"
+            views_dir.mkdir(parents=True, exist_ok=True)
+            for t in tables:
+                v_content = self.generate_view_lkml(t)
+                v_path = views_dir / f"{t.table_name}.view.lkml"
+                v_path.write_text(v_content, encoding="utf-8")
+                written_files.append(v_path)
 
         # 2. Write Model
-        m_content = self.generate_model_lkml(model_name, tables)
+        m_content = self.generate_model_lkml(model_name, tables, layered=layered)
         m_path = models_dir / f"{model_name}.model.lkml"
         m_path.write_text(m_content, encoding="utf-8")
         written_files.append(m_path)

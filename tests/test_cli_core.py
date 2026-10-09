@@ -288,8 +288,10 @@ def test_pre_check_json_and_human_happy_path(invoke, precheck_doubles) -> None:
 
 
 def test_pre_check_blocking_conditions_and_fix_mode(invoke, precheck_doubles) -> None:
-    """`pre-check` exits with `AuthError.exit_code` (3) when GCP/Looker auth is missing, and `--fix` repairs config."""
-    # Blocked when no GCP accounts and Looker unauthenticated
+    """`pre-check` exits with `AuthError.exit_code` (3) when GCP auth is missing (or Looker with `--require-looker`), and `--fix` repairs config."""
+    from looker_demo_cli.state import load_flow_state
+
+    # Blocked when no GCP accounts; Looker auth is non-blocking by default
     precheck_doubles.gcp_accounts = []
     precheck_doubles.looker = LookerAuthStatus(is_authenticated=False, error_message="No session")
 
@@ -297,41 +299,84 @@ def test_pre_check_blocking_conditions_and_fix_mode(invoke, precheck_doubles) ->
     assert blocked.exit_code == AuthError.exit_code
     payload = envelope(blocked)
     assert payload["status"] == "BLOCKED"
-    assert len(payload["errors"]) == 2
+    assert len(payload["errors"]) == 1
     assert payload["next_actions"] == []
+
+    # --require-looker makes unauthenticated Looker a blocking error as well
+    blocked_require_looker = invoke(["pre-check", "--require-looker", "--json"])
+    assert blocked_require_looker.exit_code == AuthError.exit_code
+    payload_rl = envelope(blocked_require_looker)
+    assert payload_rl["status"] == "BLOCKED"
+    assert len(payload_rl["errors"]) == 2
+    assert payload_rl["next_actions"] == []
 
     # Human mode blocked panel
     blocked_human = invoke(["pre-check"])
     assert blocked_human.exit_code == AuthError.exit_code
     assert "EXECUTION BLOCKED" in blocked_human.output
 
-    # --fix mode with healthy auth and non-virtualenv
+    # Healthy GCP account with unauthenticated Looker succeeds by default and records looker_authenticated=False
     precheck_doubles.gcp_accounts = [
-        GCPAccountInfo(account_id="u@example.com", is_active=True, has_bigquery_access=True)
+        GCPAccountInfo(account_id="user@example.com", is_active=True, has_bigquery_access=True)
     ]
+    precheck_doubles.looker = LookerAuthStatus(is_authenticated=False, error_message="No session")
+
+    gcp_only_ok = invoke(["pre-check", "--json"])
+    assert gcp_only_ok.exit_code == 0
+    persisted = load_flow_state()
+    assert persisted.precheck_passed is True
+    assert persisted.looker_authenticated is False
+
+    # --fix mode with healthy auth and non-virtualenv
     precheck_doubles.looker = LookerAuthStatus(is_authenticated=True)
     precheck_doubles.env_status.is_virtualenv = False
 
     fixed = invoke(["pre-check", "--fix", "--json"])
     assert fixed.exit_code == 0
     assert precheck_doubles.patch_mcp_calls == 1
-    assert precheck_doubles.skills_fix_args == [False, False, True]
+    assert precheck_doubles.skills_fix_args == [False, False, False, False, True]
     assert precheck_doubles.venv_init_calls == [Path.cwd()]
 
 
-def test_confirm_targets_guards_and_spec_initialization(invoke, state_file, isolated_cwd: Path) -> None:
-    """`confirm-targets` requires `precheck_passed=True`, validates required targets, persists state, and initializes SPEC.md."""
+def test_confirm_targets_guards_and_spec_initialization(
+    invoke, precheck_doubles, state_file, isolated_cwd: Path
+) -> None:
+    """`confirm-targets` requires `precheck_passed=True`, validates mode/targets, persists state, and initializes SPEC.md."""
+    from looker_demo_cli.state import load_flow_state
+
     # Fails with StateError (exit 7) when pre-check hasn't passed
     unready = invoke(["confirm-targets", "--gcp-project", "p1", "--connection", "c1", "--json"])
     assert unready.exit_code == StateError.exit_code
     assert envelope(unready)["errors"][0]["code"] == "STATE_ERROR"
 
-    # Missing --connection raises ConfigError (exit 4)
+    # Invalid --mode raises ConfigError (exit 4)
     state_file(precheck_passed=True, gcp_project_id="p1")
+    bad_mode = invoke(["confirm-targets", "--mode", "invalid", "--gcp-project", "p", "--json"])
+    assert bad_mode.exit_code == ConfigError.exit_code
+
+    # Missing --connection in full mode raises ConfigError (exit 4)
     missing_conn = invoke(["confirm-targets", "--json"])
     assert missing_conn.exit_code == ConfigError.exit_code
 
-    # Happy path persists targets, initializes SPEC.md, and points to Gate 2 (gate_1a_propose_schema)
+    # Full mode when Looker is unauthenticated raises AuthError (exit 3)
+    state_file(precheck_passed=True, looker_authenticated=False, gcp_project_id="p")
+    precheck_doubles.looker = LookerAuthStatus(is_authenticated=False, error_message="No session")
+    unauth_full = invoke(["confirm-targets", "--mode", "full", "--gcp-project", "p", "--connection", "c", "--json"])
+    assert unauth_full.exit_code == AuthError.exit_code
+
+    # bq_only mode succeeds without --connection or --looker-account, sets deployment_mode="bq_only", and writes SPEC.md
+    bq_only_ok = invoke(["confirm-targets", "--mode", "bq_only", "--gcp-project", "p", "--json"])
+    assert bq_only_ok.exit_code == 0, bq_only_ok.output
+    bq_payload = envelope(bq_only_ok)
+    assert bq_payload["data"]["targets_confirmed"] is True
+    assert bq_payload["data"]["deployment_mode"] == "bq_only"
+    assert load_flow_state().deployment_mode == "bq_only"
+    assert (isolated_cwd / "SPEC.md").exists()
+    assert "bq_only" in (isolated_cwd / "SPEC.md").read_text(encoding="utf-8")
+
+    # Happy path (full mode) persists targets, initializes SPEC.md, and points to Gate 2 (gate_1a_propose_schema)
+    (isolated_cwd / "SPEC.md").unlink()
+    precheck_doubles.looker = LookerAuthStatus(is_authenticated=True)
     ok = invoke(
         [
             "confirm-targets",

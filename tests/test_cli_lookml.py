@@ -9,6 +9,7 @@ import pytest
 import responses
 from conftest import envelope, read_state
 
+from looker_demo_cli.catalog.models import CatalogSnapshot, ColumnMeta, TableMeta
 from looker_demo_cli.errors import (
     AuthError,
     ConfigError,
@@ -196,7 +197,7 @@ def test_model_from_parquet_writes_expected_tree_and_state(
     payload = envelope(result)
     assert payload["data"]["source"] == "parquet"
     assert sorted(payload["data"]["tables"]) == ["dim_products", "dim_users", "fct_orders"]
-    assert payload["next_actions"][0]["gate"] == 6
+    assert payload["next_actions"][0]["gate"] == 7
     assert lkml_tree(out) == {
         "views/dim_products.view.lkml",
         "views/dim_users.view.lkml",
@@ -327,7 +328,256 @@ def test_model_missing_connection_or_tables_raises_config_error(invoke, sample_p
     assert envelope(no_tables)["errors"][0]["message"] == "No tables found to model."
 
 
-# ---------------------------------------------------------------------------
+def _create_sample_catalog_snapshot(path: Path) -> CatalogSnapshot:
+    """Helper creating a test CatalogSnapshot and saving to disk."""
+    col_id = ColumnMeta(
+        name="customer_id",
+        data_type="INT64",
+        is_primary_key=True,
+        description="Unique customer ID",
+    )
+    col_name = ColumnMeta(
+        name="full_name",
+        data_type="STRING",
+        business_label="Customer Full Name",
+        description="Full legal name",
+    )
+    col_spend = ColumnMeta(
+        name="lifetime_spend",
+        data_type="FLOAT64",
+        business_label="Lifetime Spend (USD)",
+        format_pattern="usd_0",
+        description="Aggregate customer spend in USD",
+    )
+    table = TableMeta(
+        name="dim_customers",
+        role="dimension",
+        primary_key=["customer_id"],
+        business_label="Curated Customers",
+        description="Curated customer master directory",
+        columns={
+            "customer_id": col_id,
+            "full_name": col_name,
+            "lifetime_spend": col_spend,
+        },
+    )
+    snapshot = CatalogSnapshot(
+        dataset_id="fintech_ds",
+        project_id="test-proj",
+        location="us",
+        tables={"dim_customers": table},
+    )
+    snapshot.compute_coverage()
+    snapshot.save(path)
+    return snapshot
+
+
+def test_model_from_catalog_snapshot_explicit_path(invoke, tmp_path: Path, isolated_cwd: Path) -> None:
+    """`lookml model --catalog <path>` enriches views, explores, and dashboards with Knowledge Catalog metadata."""
+    snap_path = tmp_path / "test_catalog.json"
+    _create_sample_catalog_snapshot(snap_path)
+
+    out = tmp_path / "lkml_cat"
+    res = invoke(
+        [
+            "lookml",
+            "model",
+            "--catalog",
+            str(snap_path),
+            "--output-dir",
+            str(out),
+            "--looker-project",
+            "fintech_demo",
+            "--dataset",
+            "fintech_ds",
+            "--connection",
+            "fintech_conn",
+            "--json",
+        ]
+    )
+    assert res.exit_code == 0, res.output
+    payload = envelope(res)
+    assert payload["data"]["source"] == "knowledge_catalog"
+    assert payload["data"]["catalog_snapshot"] == str(snap_path)
+    assert payload["data"]["catalog_profile"] == "rich"
+
+    # Verify generated view contains curated business labels and format patterns
+    view_content = (out / "views" / "dim_customers.view.lkml").read_text(encoding="utf-8")
+    assert 'label: "Curated Customers"' in view_content
+    assert 'label: "Customer Full Name"' in view_content
+    assert 'label: "Lifetime Spend (USD)"' in view_content
+    assert "value_format_name: usd_0" in view_content
+
+    # Verify generated model contains curated explore label
+    model_content = (out / "models" / "fintech_demo.model.lkml").read_text(encoding="utf-8")
+    assert "explore: dim_customers {" in model_content
+    assert 'label: "Curated Customers"' in model_content
+
+    # Verify state saved
+    state = read_state(isolated_cwd)
+    assert state["catalog_profile"] == "rich"
+    assert state["catalog_snapshot_path"] == str(snap_path)
+
+
+def test_model_from_catalog_snapshot_state_discovery(invoke, tmp_path: Path, isolated_cwd: Path, state_file) -> None:
+    """`lookml model` automatically discovers and uses catalog snapshot recorded in flow state."""
+    snap_path = tmp_path / "discovered_catalog.json"
+    _create_sample_catalog_snapshot(snap_path)
+
+    state_file(
+        catalog_snapshot_path=str(snap_path),
+        catalog_profile="rich",
+        bq_dataset_id="fintech_ds",
+        looker_connection_name="fintech_conn",
+    )
+
+    out = tmp_path / "lkml_discovered"
+    res = invoke(
+        [
+            "lookml",
+            "model",
+            "--output-dir",
+            str(out),
+            "--looker-project",
+            "fintech_demo",
+            "--json",
+        ]
+    )
+    assert res.exit_code == 0, res.output
+    payload = envelope(res)
+    assert payload["data"]["source"] == "knowledge_catalog"
+    assert payload["data"]["catalog_profile"] == "rich"
+    assert (out / "views" / "dim_customers.view.lkml").exists()
+
+
+def test_model_from_catalog_snapshot_profile_override(invoke, tmp_path: Path) -> None:
+    """`--profile minimal` overrides rich metadata and suppresses Dataplex aspect annotations."""
+    snap_path = tmp_path / "test_catalog.json"
+    _create_sample_catalog_snapshot(snap_path)
+
+    out = tmp_path / "lkml_minimal"
+    res = invoke(
+        [
+            "lookml",
+            "model",
+            "--catalog",
+            str(snap_path),
+            "--profile",
+            "minimal",
+            "--output-dir",
+            str(out),
+            "--looker-project",
+            "fintech_demo",
+            "--dataset",
+            "fintech_ds",
+            "--connection",
+            "fintech_conn",
+            "--json",
+        ]
+    )
+    assert res.exit_code == 0, res.output
+    payload = envelope(res)
+    assert payload["data"]["source"] == "knowledge_catalog"
+    assert payload["data"]["catalog_profile"] == "minimal"
+
+    view_content = (out / "views" / "dim_customers.view.lkml").read_text(encoding="utf-8")
+    # In minimal mode, business_label is suppressed
+    assert 'label: "Curated Customers"' not in view_content
+    assert 'label: "Customer Full Name"' not in view_content
+
+
+def test_model_with_no_catalog_flag(invoke, tmp_path: Path, state_file, stub_introspection, spec_factory) -> None:
+    """`--no-catalog` suppresses recorded catalog snapshot and falls back to BigQuery native path."""
+    snap_path = tmp_path / "test_catalog.json"
+    _create_sample_catalog_snapshot(snap_path)
+
+    stub_introspection([spec_factory("customers")])
+    state_file(
+        catalog_snapshot_path=str(snap_path),
+        bq_dataset_id="fintech_ds",
+        dataset_exists=True,
+        looker_connection_name="fintech_conn",
+    )
+
+    out = tmp_path / "lkml_no_cat"
+    res = invoke(
+        [
+            "lookml",
+            "model",
+            "--no-catalog",
+            "--output-dir",
+            str(out),
+            "--looker-project",
+            "fintech_demo",
+            "--json",
+        ]
+    )
+    assert res.exit_code == 0, res.output
+    payload = envelope(res)
+    assert payload["data"]["source"] == "bigquery"
+
+
+def test_model_missing_catalog_file_raises_config_error(invoke, tmp_path: Path) -> None:
+    """Passing a nonexistent path to `--catalog` raises ConfigError."""
+    res = invoke(
+        [
+            "lookml",
+            "model",
+            "--catalog",
+            str(tmp_path / "does_not_exist.json"),
+            "--output-dir",
+            str(tmp_path / "out"),
+            "--looker-project",
+            "demo",
+            "--connection",
+            "conn",
+            "--json",
+        ]
+    )
+    assert res.exit_code == ConfigError.exit_code
+    assert envelope(res)["errors"][0]["code"] == "CONFIG_ERROR"
+
+
+def test_model_layered_writes_base_and_refinements(
+    invoke,
+    stub_introspection,
+    spec_factory,
+    tmp_path: Path,
+    state_file,
+) -> None:
+    """`lookml model --layered` writes base and refinement views and records layered state."""
+    stub_introspection([spec_factory("users"), spec_factory("orders", table_type="fact")])
+    out = tmp_path / "lkml_layered"
+    state_file(
+        bq_dataset_id="test_ds",
+        gcp_project_id="test-proj",
+        looker_connection_name="bq_conn",
+    )
+
+    res = invoke(
+        [
+            "lookml",
+            "model",
+            "--layered",
+            "--output-dir",
+            str(out),
+            "--looker-project",
+            "layered_demo",
+            "--json",
+        ]
+    )
+    assert res.exit_code == 0, res.output
+    payload = envelope(res)
+    assert payload["data"]["layered"] is True
+    files = payload["data"]["files"]
+    assert "views/base/users.view.lkml" in files
+    assert "views/refinements/users.refinement.lkml" in files
+    assert "views/base/orders.view.lkml" in files
+    assert "views/refinements/orders.refinement.lkml" in files
+    assert (out / "views" / "base" / "users.view.lkml").exists()
+    assert (out / "views" / "refinements" / "users.refinement.lkml").exists()
+
+
 # lookml deploy
 # ---------------------------------------------------------------------------
 
@@ -502,7 +752,7 @@ def test_certify_polish_optimize_skip_deploy_guards_and_approve_critique(
     assert cert.exit_code == 0, cert.output
     cert_payload = envelope(cert)
     assert cert_payload["data"]["certified"] is True
-    assert cert_payload["next_actions"][0]["gate"] == 7
+    assert cert_payload["next_actions"][0]["gate"] == 8
     assert read_state(isolated_cwd)["polish_certified"] is True
 
     # Still blocked at deploy until Gate 3A (optimize or optimize --skip) is resolved
@@ -515,7 +765,7 @@ def test_certify_polish_optimize_skip_deploy_guards_and_approve_critique(
     assert skip_opt.exit_code == 0, skip_opt.output
     skip_payload = envelope(skip_opt)
     assert skip_payload["data"]["skipped"] is True
-    assert skip_payload["next_actions"][0]["gate"] == 8
+    assert skip_payload["next_actions"][0]["gate"] == 9
     assert read_state(isolated_cwd)["optimizer_status"] == "skipped"
 
     # Gate 3C: approve-critique requires deployed_dashboard_url
@@ -531,7 +781,7 @@ def test_certify_polish_optimize_skip_deploy_guards_and_approve_critique(
     assert critique.exit_code == 0, critique.output
     critique_payload = envelope(critique)
     assert critique_payload["data"]["critique_approved"] is True
-    assert critique_payload["next_actions"][0]["gate"] == 10
+    assert critique_payload["next_actions"][0]["gate"] == 11
     assert read_state(isolated_cwd)["critique_approved"] is True
 
 

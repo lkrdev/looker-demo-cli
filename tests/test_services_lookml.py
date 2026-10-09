@@ -143,3 +143,24 @@ def test_clean_root_deletes_each_duplicate() -> None:
     assert result["status"] == "SUCCESS"
     assert len(result["cleaned_files"]) == 2
     assert mock_delete.call_count == 2
+
+
+def test_optimize_layered_refinement_files(tmp_path: Path) -> None:
+    """Optimizer finds and patches suggestable flags in layered refinement files."""
+    ref_dir = tmp_path / "views" / "refinements"
+    ref_dir.mkdir(parents=True)
+    ref_file = ref_dir / "users.refinement.lkml"
+    ref_file.write_text(
+        """
+view: +users {
+  dimension: user_uuid {
+    type: string
+  }
+}
+""",
+        encoding="utf-8",
+    )
+    result = optimize_lookml_project(tmp_path, backup=False)
+    assert result["status"] == "SUCCESS"
+    updated = ref_file.read_text(encoding="utf-8")
+    assert "suggestable: no" in updated

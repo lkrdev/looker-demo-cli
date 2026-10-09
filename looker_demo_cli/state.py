@@ -80,13 +80,20 @@ class FlowState(BaseModel):
     # "the environment audit passed" from "it was never run", which is not
     # otherwise observable from any other field.
     precheck_passed: bool = False
+    looker_authenticated: bool | None = None
     targets_confirmed: bool = False
+    deployment_mode: Literal["full", "bq_only"] = "full"
 
     # Dataset & Intent
     dataset_exists: bool = False
     bq_dataset_id: str | None = None
     existing_tables: list[str] = Field(default_factory=list)
     demo_scope: Literal["internal_looker", "external_embed"] = "internal_looker"
+    data_source_mode: Literal["synthetic", "existing"] = "synthetic"
+    catalog_snapshot_path: Path | None = None
+    catalog_coverage_pct: float | None = None
+    catalog_profile: str | None = None
+    catalog_status: Literal["pending", "seeded", "inspected", "synced", "skipped"] = "pending"
 
     # Domain & Synthesis (Gate 1 Co-Design & Approval)
     domain_name: str | None = None
@@ -102,6 +109,7 @@ class FlowState(BaseModel):
     lookml_model_name: str | None = None
     primary_explore_name: str | None = None
     lookml_output_dir: Path | None = None
+    lookml_layered: bool = False
     polish_certified: bool = False
     optimizer_status: Literal["pending", "applied", "skipped"] = "pending"
     deployed_dashboard_id: str | None = None

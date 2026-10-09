@@ -115,6 +115,38 @@ class DynamicDataSynthesizer:
                 else:
                     schema_fields[str(col_name)] = "STRING"
 
+            column_descriptions: dict[str, str] = {}
+            column_allowed_values: dict[str, list[str]] = {}
+            skip_suffixes = ("uuid", "hash", "token", "payload", "raw", "description", "content", "email", "name")
+
+            for f in entity.fields:
+                if f.description:
+                    column_descriptions[f.name] = str(f.description)
+                if (
+                    f.sample_values
+                    and schema_fields.get(f.name) == "STRING"
+                    and f.name != pk_col
+                    and f.name not in entity.foreign_keys
+                    and not f.name.endswith("_id")
+                ):
+                    vals = [str(v).strip() for v in f.sample_values if v is not None and str(v).strip()]
+                    if 1 <= len(vals) <= 15:
+                        column_allowed_values[f.name] = vals
+
+            for col_name, col_type in schema_fields.items():
+                if (
+                    col_type == "STRING"
+                    and col_name not in column_allowed_values
+                    and col_name != pk_col
+                    and col_name not in entity.foreign_keys
+                    and not col_name.endswith("_id")
+                    and not any(sfx in col_name.lower() for sfx in skip_suffixes)
+                    and col_name in df.columns
+                ):
+                    uniq = [str(v).strip() for v in df[col_name].dropna().unique().tolist() if str(v).strip()]
+                    if 1 <= len(uniq) <= 15:
+                        column_allowed_values[col_name] = uniq
+
             table_specs.append(
                 LookMLTableSpec(
                     table_name=entity.table_name,
@@ -122,6 +154,8 @@ class DynamicDataSynthesizer:
                     schema_fields=schema_fields,
                     primary_key=pk_col,
                     foreign_keys=entity.foreign_keys,
+                    column_descriptions=column_descriptions,
+                    column_allowed_values=column_allowed_values,
                 )
             )
 

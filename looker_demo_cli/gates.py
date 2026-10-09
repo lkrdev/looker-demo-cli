@@ -128,40 +128,55 @@ def _gate_1c_complete(state: FlowState) -> bool:
     return state.dataset_exists
 
 
+def _gate_1d_complete(state: FlowState) -> bool:
+    """Whether Knowledge Catalog metadata was seeded, inspected, synced, or skipped."""
+    return (
+        state.catalog_status in ("seeded", "inspected", "synced", "skipped") or state.catalog_snapshot_path is not None
+    )
+
+
+def _is_bq_only_complete(state: FlowState) -> bool:
+    """Whether the build is in bq_only mode and Gate 5 (catalog) has finished."""
+    return state.deployment_mode == "bq_only" and _gate_1d_complete(state)
+
+
 def _gate_2a_complete(state: FlowState) -> bool:
-    """Whether ``lookml model`` has written a LookML tree."""
-    return state.lookml_output_dir is not None
+    """Whether ``lookml model`` has written a LookML tree (or auto-satisfied in bq_only mode)."""
+    return _is_bq_only_complete(state) or state.lookml_output_dir is not None
 
 
 def _gate_2b_complete(state: FlowState) -> bool:
     """Whether the 3-Pass Executive Dashboard Polish and filtered measure checks passed ``lookml certify-polish``."""
-    return state.polish_certified
+    return _is_bq_only_complete(state) or state.polish_certified
 
 
 def _gate_3a_complete(state: FlowState) -> bool:
     """Whether the human has made an explicit decision on ``lookml optimize`` (applied or skipped)."""
-    return state.optimizer_status in ("applied", "skipped")
+    return _is_bq_only_complete(state) or state.optimizer_status in ("applied", "skipped")
 
 
 def _gate_3b_complete(state: FlowState) -> bool:
     """Whether a dashboard is live in production."""
-    return state.deployed_dashboard_url is not None
+    return _is_bq_only_complete(state) or state.deployed_dashboard_url is not None
 
 
 def _gate_3c_complete(state: FlowState) -> bool:
     """Whether the post-deploy visual layout critique (Pass 3) has been approved via ``lookml approve-critique``."""
-    return state.critique_approved
+    return _is_bq_only_complete(state) or state.critique_approved
 
 
 def _gate_4_complete(state: FlowState) -> bool:
     """Whether a Conversational Analytics agent has been provisioned or explicitly skipped."""
-    return state.ca_agent_id is not None or state.ca_agent_status in ("created", "skipped")
+    return (
+        _is_bq_only_complete(state) or state.ca_agent_id is not None or state.ca_agent_status in ("created", "skipped")
+    )
 
 
 def _gate_5_complete(state: FlowState) -> bool:
     """Whether the agent has been published to Gemini Enterprise or explicitly skipped."""
     return (
-        state.published_to_ge
+        _is_bq_only_complete(state)
+        or state.published_to_ge
         or state.ge_publish_status in ("published", "skipped")
         or state.ca_agent_status == "skipped"
     )
@@ -169,7 +184,11 @@ def _gate_5_complete(state: FlowState) -> bool:
 
 def _gate_6_complete(state: FlowState) -> bool:
     """Whether the external embed portal has been scaffolded or explicitly skipped."""
-    return state.embed_workspace_dir is not None or state.embed_status in ("scaffolded", "skipped")
+    return (
+        _is_bq_only_complete(state)
+        or state.embed_workspace_dir is not None
+        or state.embed_status in ("scaffolded", "skipped")
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -184,9 +203,11 @@ def _gate_0a_command(state: FlowState) -> str:
 
 
 def _gate_0b_command(state: FlowState) -> str:
-    """Build the gate 0B command: record the 4 human-confirmed environment targets."""
+    """Build the gate 0B command: record the human-confirmed environment targets."""
     account = _resolved(state.gcp_account, _PLACEHOLDER_GCP_ACCOUNT)
     project = _resolved(state.gcp_project_id, _PLACEHOLDER_GCP_PROJECT)
+    if state.deployment_mode == "bq_only":
+        return f"demo-create confirm-targets --mode bq_only --gcp-account {account} --gcp-project {project}"
     looker_account = _resolved(state.looker_account, _PLACEHOLDER_LOOKER_ACCOUNT)
     connection = _resolved(state.looker_connection_name, _PLACEHOLDER_CONNECTION)
     return (
@@ -227,16 +248,28 @@ def _gate_1c_command(state: FlowState) -> str:
     )
 
 
+def _gate_1d_command(state: FlowState) -> str:
+    """Build the gate 1D command: seed (synthetic), inspect (existing), or sync Knowledge Catalog."""
+    dataset = _resolved(state.bq_dataset_id or state.domain_name, _PLACEHOLDER_DATASET)
+    project = _resolved(state.gcp_project_id, _PLACEHOLDER_GCP_PROJECT)
+    if state.data_source_mode == "synthetic":
+        return f"demo-create catalog seed --dataset {dataset} --gcp-project {project}"
+    return f"demo-create catalog inspect --dataset {dataset} --gcp-project {project}"
+
+
 def _gate_2a_command(state: FlowState) -> str:
     """Build the gate 2A command: generate views, explores, and draft dashboards."""
     looker_project = _resolved(state.looker_project_name, _PLACEHOLDER_LOOKER_PROJECT)
     dataset = _resolved(state.bq_dataset_id, _PLACEHOLDER_DATASET)
     connection = _resolved(state.looker_connection_name, _PLACEHOLDER_CONNECTION)
     project = _resolved(state.gcp_project_id, _PLACEHOLDER_GCP_PROJECT)
-    return (
+    cmd = (
         f"demo-create lookml model --looker-project {looker_project} "
         f"--dataset {dataset} --connection {connection} --gcp-project {project}"
     )
+    if state.catalog_snapshot_path:
+        cmd += f" --catalog {state.catalog_snapshot_path}"
+    return cmd
 
 
 def _gate_2b_command(state: FlowState) -> str:
@@ -419,9 +452,10 @@ GATES: Final[tuple[Gate, ...]] = (
         title="4-target environment confirmation",
         requires_human_confirmation=True,
         human_checkpoint=(
-            "Prompt the user via `ask_question` to confirm all four environment targets before designing schemas "
-            "or running any synthesis: (1) GCP user account, (2) target Google Cloud project ID, (3) Looker instance "
-            "/ OAuth account, and (4) Looker database connection name. Then record them with `demo-create confirm-targets`."
+            "Prompt the user via `ask_question` to select the deployment mode (`full` Looker deployment vs `bq_only` "
+            "BigQuery + Knowledge Catalog only) and confirm environment targets: (1) GCP user account, (2) target "
+            "Google Cloud project ID, and when `mode=full`: (3) Looker instance / OAuth account, and (4) Looker "
+            "database connection name. Then record them with `demo-create confirm-targets`."
         ),
         _is_complete=_gate_0b_complete,
         _command=_gate_0b_command,
@@ -460,6 +494,22 @@ GATES: Final[tuple[Gate, ...]] = (
     ),
     Gate(
         number=5,
+        id="gate_1d_catalog",
+        title="Knowledge Catalog semantic curation & enrichment",
+        requires_human_confirmation=True,
+        human_checkpoint=(
+            "Call `ask_question` to confirm Knowledge Catalog (Dataplex) enrichment before LookML modeling: "
+            "for net-new datasets, prompt to seed semantic curation aspect types and business glossaries "
+            "(`demo-create catalog seed --dataset <dataset-id> --gcp-project <gcp-project>`); for existing datasets, "
+            "prompt to inspect Dataplex metadata (`demo-create catalog inspect --dataset <dataset-id> --gcp-project <gcp-project>`); "
+            "for existing LookML projects, sync from Knowledge Catalog (`demo-create catalog sync ...`); "
+            "or skip (`demo-create catalog seed --skip` / `demo-create catalog inspect --skip`)."
+        ),
+        _is_complete=_gate_1d_complete,
+        _command=_gate_1d_command,
+    ),
+    Gate(
+        number=6,
         id="gate_2a_lookml_model",
         title="Semantic LookML modeling & draft dashboard scaffolding",
         requires_human_confirmation=False,
@@ -468,7 +518,7 @@ GATES: Final[tuple[Gate, ...]] = (
         _command=_gate_2a_command,
     ),
     Gate(
-        number=6,
+        number=7,
         id="gate_2b_certify_polish",
         title="3-Pass Executive Dashboard Polish & filtered measure audit",
         requires_human_confirmation=True,
@@ -482,7 +532,7 @@ GATES: Final[tuple[Gate, ...]] = (
         _command=_gate_2b_command,
     ),
     Gate(
-        number=7,
+        number=8,
         id="gate_3a_optimize",
         title="LookML Server Performance Optimizer gate",
         requires_human_confirmation=True,
@@ -495,7 +545,7 @@ GATES: Final[tuple[Gate, ...]] = (
         _command=_gate_3a_command,
     ),
     Gate(
-        number=8,
+        number=9,
         id="gate_3b_deploy",
         title="Pre-deployment LookML validation, query testing & production release",
         requires_human_confirmation=False,
@@ -504,7 +554,7 @@ GATES: Final[tuple[Gate, ...]] = (
         _command=_gate_3b_command,
     ),
     Gate(
-        number=9,
+        number=10,
         id="gate_3c_critique",
         title="Post-deploy dashboard screenshot critique (Pass 3)",
         requires_human_confirmation=True,
@@ -517,7 +567,7 @@ GATES: Final[tuple[Gate, ...]] = (
         _command=_gate_3c_command,
     ),
     Gate(
-        number=10,
+        number=11,
         id="gate_4_agent",
         title="Conversational Analytics agent provisioning & golden queries",
         requires_human_confirmation=True,
@@ -530,7 +580,7 @@ GATES: Final[tuple[Gate, ...]] = (
         _command=_gate_4_command,
     ),
     Gate(
-        number=11,
+        number=12,
         id="gate_5_publish",
         title="Gemini Enterprise publishing",
         requires_human_confirmation=True,
@@ -543,7 +593,7 @@ GATES: Final[tuple[Gate, ...]] = (
         _command=_gate_5_command,
     ),
     Gate(
-        number=12,
+        number=13,
         id="gate_6_embed",
         title="External Embedded Analytics portal scaffolding",
         requires_human_confirmation=True,
@@ -638,6 +688,10 @@ _COMMAND_TO_GATE_ID: Final[dict[str, str]] = {
     "data approve-schema": "gate_1b_approve_schema",
     "data generate": "gate_1c_generate_data",
     "data upload": "gate_1c_generate_data",
+    "data adopt": "gate_1c_generate_data",
+    "catalog seed": "gate_1d_catalog",
+    "catalog inspect": "gate_1d_catalog",
+    "catalog sync": "gate_1d_catalog",
     "lookml model": "gate_2a_lookml_model",
     "lookml certify-polish": "gate_2b_certify_polish",
     "lookml optimize": "gate_3a_optimize",

@@ -492,10 +492,45 @@ class ModularDAGSynthesizer:
             else:
                 schema_fields[str(col_name)] = "STRING"
 
+        column_descriptions: dict[str, str] = {}
+        column_allowed_values: dict[str, list[str]] = {}
+        fks = getattr(entity, "foreign_keys", None) or {}
+        skip_suffixes = ("uuid", "hash", "token", "payload", "raw", "description", "content", "email", "name")
+
+        for f in getattr(entity, "fields", []) or []:
+            if getattr(f, "description", None):
+                column_descriptions[f.name] = str(f.description)
+            if (
+                getattr(f, "sample_values", None)
+                and schema_fields.get(f.name) == "STRING"
+                and f.name != pk_col
+                and f.name not in fks
+                and not f.name.endswith("_id")
+            ):
+                vals = [str(v).strip() for v in f.sample_values if v is not None and str(v).strip()]
+                if 1 <= len(vals) <= 15:
+                    column_allowed_values[f.name] = vals
+
+        for col_name, col_type in schema_fields.items():
+            if (
+                col_type == "STRING"
+                and col_name not in column_allowed_values
+                and col_name != pk_col
+                and col_name not in fks
+                and not col_name.endswith("_id")
+                and not any(sfx in col_name.lower() for sfx in skip_suffixes)
+                and col_name in df.columns
+            ):
+                uniq = [str(v).strip() for v in df[col_name].dropna().unique().tolist() if str(v).strip()]
+                if 1 <= len(uniq) <= 15:
+                    column_allowed_values[col_name] = uniq
+
         return LookMLTableSpec(
             table_name=entity.table_name,
             table_type=getattr(entity, "table_type", "dimension"),
             schema_fields=schema_fields,
             primary_key=pk_col,
-            foreign_keys=getattr(entity, "foreign_keys", None) or {},
+            foreign_keys=fks,
+            column_descriptions=column_descriptions,
+            column_allowed_values=column_allowed_values,
         )

@@ -9,9 +9,12 @@
 import os, sys
 
 log_msgs = []
+
+
 def log(msg):
     log_msgs.append(msg)
     sys.stderr.write(msg + "\n")
+
 
 try:
     target_domain = os.getenv("LOOKER_EMBED_DOMAIN", "https://localhost:8008")
@@ -23,14 +26,16 @@ try:
     uas = all_user_attributes()
     if not any(ua["name"] == "brand" for ua in uas):
         log("Creating 'brand' user attribute...")
-        create_user_attribute(body={
-            "name": "brand",
-            "label": "Brand",
-            "type": "string",
-            "value_is_hidden": False,
-            "user_can_view": True,
-            "user_can_edit": False,
-        })
+        create_user_attribute(
+            body={
+                "name": "brand",
+                "label": "Brand",
+                "type": "string",
+                "value_is_hidden": False,
+                "user_can_view": True,
+                "user_can_edit": False,
+            }
+        )
 
     # 2. Enforce Instance Embed Settings (Allowlist & Cookieless v2)
     log("Inspecting instance embed settings...")
@@ -56,11 +61,13 @@ try:
     embed_config["domain_allowlist"] = allowlist
 
     log("Committing updated embed configuration via PATCH /api/4.0/setting...")
-    set_setting(body={
-        "embed_config": embed_config,
-        "embed_enabled": True,
-        "embed_cookieless_v2": True,
-    })
+    set_setting(
+        body={
+            "embed_config": embed_config,
+            "embed_enabled": True,
+            "embed_cookieless_v2": True,
+        }
+    )
 
     # 3. Provision Dedicated Embed Content Access Group (<Brand> Embed Users)
     target_group_name = f"{brand_name} Embed Users"
@@ -74,11 +81,13 @@ try:
 
     # 4. Step 1 of 2-Step Folder Access Protocol: Grant view access on Shared Root (CM 1)
     try:
-        create_content_metadata_access(body={
-            "content_metadata_id": "1",
-            "group_id": group_id,
-            "permission_type": "view",
-        })
+        create_content_metadata_access(
+            body={
+                "content_metadata_id": "1",
+                "group_id": group_id,
+                "permission_type": "view",
+            }
+        )
         log(f"Granted group {group_id} view access on Shared Root (content_metadata_id=1).")
     except Exception as cm_err:
         log(f"Shared Root access notice: {cm_err}")
