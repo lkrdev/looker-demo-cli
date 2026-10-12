@@ -438,6 +438,54 @@ class FakeCatalogClient:
     def lookup_context(self, resources: list[str], format: str = "JSON") -> dict[str, Any]:
         return {"joins": dict(type(self).context_joins)}
 
+    def get_project_number(self) -> str:
+        return "1234567890"
+
+    def ensure_aspect_type(
+        self, aspect_type_id: str, metadata_template: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        return {"name": f"projects/1234567890/locations/{self.location}/aspectTypes/{aspect_type_id}"}
+
+    def ensure_glossary(self, glossary_id: str, display_name: str, description: str = "") -> dict[str, Any]:
+        return {"name": f"projects/1234567890/locations/{self.location}/glossaries/{glossary_id}"}
+
+    def ensure_glossary_term(
+        self, glossary_id: str, term_id: str, display_name: str, description: str = ""
+    ) -> dict[str, Any]:
+        key = f"{glossary_id}/{term_id}"
+        term_obj = {
+            "name": f"projects/1234567890/locations/{self.location}/glossaries/{glossary_id}/terms/{term_id}",
+            "displayName": display_name,
+            "description": description,
+        }
+        type(self).glossary_terms[key] = term_obj
+        return term_obj
+
+    def patch_entry_aspects(self, dataset_id: str, table_id: str, aspects_payload: dict[str, Any]) -> dict[str, Any]:
+        key = f"{dataset_id}.{table_id}"
+        entry = type(self).entries.setdefault(
+            key,
+            {
+                "name": f"projects/1234567890/locations/{self.location}/entryGroups/@bigquery/entries/"
+                f"bigquery.googleapis.com/projects/{self.project_id}/datasets/{dataset_id}/tables/{table_id}",
+                "aspects": {},
+            },
+        )
+        entry.setdefault("aspects", {}).update(aspects_payload)
+        return entry
+
+    def create_entry_link(
+        self,
+        entry_link_id: str,
+        source_entry: str,
+        source_column: str,
+        target_term_entry: str,
+        entry_group: str = "@bigquery",
+    ) -> dict[str, Any]:
+        return {
+            "name": f"projects/1234567890/locations/{self.location}/entryGroups/{entry_group}/entryLinks/{entry_link_id}"
+        }
+
 
 _CATALOG_PATCH_TARGETS = (
     "looker_demo_cli.context",

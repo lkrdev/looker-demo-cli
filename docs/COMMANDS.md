@@ -51,6 +51,7 @@ Failures are reported by exit code, so a caller never has to parse prose:
 | [`data`](#demo-create-data) | Design, synthesize, inspect, and upload BigQuery demo datasets. |
 | [`lookml`](#demo-create-lookml) | Generate LookML models from BigQuery/Knowledge Catalog or Parquet, and deploy. |
 | [`embed`](#demo-create-embed) | Scaffold standalone Embedded Analytics web applications and portals. |
+| [`stream`](#demo-create-stream) | Plan, deploy, and tear down synthetic BigQuery streaming & CDC services. |
 
 ---
 
@@ -400,7 +401,9 @@ demo-create catalog seed [OPTIONS]
 | `--gcp-project` | Target GCP Project ID. Defaults to confirmed target project. |  |
 | `--location` | Dataset location | `us` |
 | `--aspect-type-name` | Name for the semantic curation Aspect Type | `semantic-curation` |
-| `--glossary-name` | Name for the Dataplex Business Glossary | `fintech-glossary` |
+| `--glossary-name` | Name for the Dataplex Business Glossary (defaults to <dataset>-glossary) |  |
+| `--curation-file` | Optional path to declarative catalog curation JSON file |  |
+| `--schema-file` | Optional path to DomainBlueprint schema JSON file |  |
 | `--mode` | Execution mode: 'plan' or 'execute' | `execute` |
 | `--skip` | Skip Knowledge Catalog metadata seeding and advance to LookML modeling |  |
 | `--json` | Emit result envelope as JSON on stdout |  |
@@ -720,5 +723,94 @@ demo-create embed scaffold [OPTIONS]
 | `--client-secret` | Looker API Service Account client secret for headless embed token generation |  |
 | `--looker-account` | Saved Looker OAuth account alias |  |
 | `--skip` | Skip external embed portal scaffolding and complete the pipeline |  |
+| `--json` | Emit the result envelope as JSON on stdout |  |
+| `--state-file` | Path to .demo-state.json. Defaults to discovering it in the current directory. |  |
+
+---
+
+## `demo-create stream`
+
+Plan, deploy, and tear down synthetic BigQuery streaming & CDC services.
+
+| Subcommand | Description |
+| :--- | :--- |
+| [`delete`](#demo-create-stream-delete) | Tear down the GCE streaming daemon, VM, secrets, and optionally drop BigQuery table/dataset. |
+| [`deploy`](#demo-create-stream-deploy) | Scaffold the Go BigQuery Storage Write API streamer and deploy it to a locked-down GCE e2-micro VM. |
+| [`plan`](#demo-create-stream-plan) | Generate a 4-phase BigQuery streaming & CDC execution plan and update SPEC.md Section 4B. |
+
+### `demo-create stream delete`
+
+Tear down the GCE streaming daemon, VM, secrets, and optionally drop BigQuery table/dataset.
+
+```bash
+demo-create stream delete [OPTIONS]
+```
+
+| Option | Description | Default |
+| :--- | :--- | :--- |
+| `--gcp-project` | Target GCP project ID. Defaults to state project. |  |
+| `--dataset` | Target BigQuery dataset ID. Defaults to state dataset. |  |
+| `--target-table` | Target BigQuery table name. |  |
+| `--vm-name` | Locked-down GCE VM name to delete. |  |
+| `--zone` | GCE zone of the streamer VM. |  |
+| `--keep-bq` | Keep the BigQuery dataset and streamed tables intact. |  |
+| `--drop-bq-table` | Drop only the streamed target table in BigQuery. |  |
+| `--drop-bq-dataset` | Drop the entire BigQuery dataset (`bq rm -r -f -d`). |  |
+| `--yes`, `-y` | Skip interactive confirmation prompts. |  |
+| `--dry-run` | Print teardown commands without executing live deletions. |  |
+| `--json` | Emit the result envelope as JSON on stdout |  |
+| `--state-file` | Path to .demo-state.json. Defaults to discovering it in the current directory. |  |
+
+### `demo-create stream deploy`
+
+Scaffold the Go BigQuery Storage Write API streamer and deploy it to a locked-down GCE e2-micro VM.
+
+```bash
+demo-create stream deploy [OPTIONS]
+```
+
+| Option | Description | Default |
+| :--- | :--- | :--- |
+| `--gcp-project` | Target GCP project ID. Defaults to state or plan project. |  |
+| `--dataset` | Target BigQuery dataset ID. Defaults to state or plan dataset. |  |
+| `--target-table` | Target BigQuery table name for streaming & CDC. |  |
+| `--frequency` | Streaming tick interval (e.g. '1m', '5m', '15m', '1h'). |  |
+| `--crud-mode` | Database mutation mode: 'insert_only', 'upsert_cdc', or 'full_crud'. |  |
+| `--backfill-mode` | Backfill mode: 'skip', 'local', 'vm', or 'sample_mirror'. |  |
+| `--log-name` | Cloud Logging structured log name. |  |
+| `--log-severity` | Minimum Cloud Logging severity: 'DEBUG', 'INFO', 'WARNING', or 'ERROR'. | `INFO` |
+| `--vm-name` | Locked-down GCE e2-micro instance name. |  |
+| `--zone` | GCE zone for the locked-down e2-micro instance. |  |
+| `--output-dir` | Directory where the Go streamer service is scaffolded. |  |
+| `--scaffold-only` | Phase A: materialize Go template and emit subagent briefs without executing cloud infrastructure. |  |
+| `--execute-infra` | Phase B: run Go unit tests, apply BigQuery CDC DDL, and deploy to locked-down GCE VM over IAP. |  |
+| `--dry-run` | Record and print infrastructure commands without executing live cloud mutations. |  |
+| `--skip` | Skip live BigQuery streaming & CDC deployment. |  |
+| `--json` | Emit the result envelope as JSON on stdout |  |
+| `--state-file` | Path to .demo-state.json. Defaults to discovering it in the current directory. |  |
+
+### `demo-create stream plan`
+
+Generate a 4-phase BigQuery streaming & CDC execution plan and update SPEC.md Section 4B.
+
+```bash
+demo-create stream plan [OPTIONS]
+```
+
+| Option | Description | Default |
+| :--- | :--- | :--- |
+| `--gcp-project` | Target GCP project ID. Defaults to confirmed target project. |  |
+| `--dataset` | Target BigQuery dataset ID. Defaults to state dataset. |  |
+| `--target-table` | Target BigQuery fact table for streaming & CDC mutations. |  |
+| `--frequency` | Streaming tick interval (e.g. '1m', '5m', '15m', '1h'). | `1m` |
+| `--crud-mode` | Database mutation mode: 'insert_only', 'upsert_cdc', or 'full_crud'. | `upsert_cdc` |
+| `--backfill-mode` | Historical backfill mode before live ticks: 'skip', 'local', 'vm', or 'sample_mirror'. | `skip` |
+| `--log-name` | Cloud Logging structured log name. Defaults to '<dataset>-streamer'. |  |
+| `--log-severity` | Minimum Cloud Logging severity: 'DEBUG', 'INFO', 'WARNING', or 'ERROR'. | `INFO` |
+| `--vm-name` | Locked-down GCE e2-micro instance name. |  |
+| `--zone` | GCE zone for the locked-down e2-micro instance. | `us-central1-a` |
+| `--output-dir` | Directory where the Go streamer service will be scaffolded. |  |
+| `--spec-file` | Path to SPEC.md to update with Section 4B. |  |
+| `--skip` | Skip live BigQuery streaming & CDC deployment and complete the pipeline. |  |
 | `--json` | Emit the result envelope as JSON on stdout |  |
 | `--state-file` | Path to .demo-state.json. Defaults to discovering it in the current directory. |  |

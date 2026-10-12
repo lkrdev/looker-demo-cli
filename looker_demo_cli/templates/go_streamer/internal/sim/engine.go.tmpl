@@ -1,0 +1,239 @@
+package sim
+
+import (
+	"encoding/json"
+	"math"
+	"math/rand/v2"
+	"os"
+	"strings"
+	"time"
+
+	"demo-streamer/internal/model"
+)
+
+type Engine struct {
+	Seed  model.SeedData
+	State *model.State
+	rng   *rand.Rand
+}
+
+func NewEngine(st *model.State, defaultSeed []byte, profilePath string) (*Engine, error) {
+	var seed model.SeedData
+	data := defaultSeed
+	if profilePath != "" {
+		if b, err := os.ReadFile(profilePath); err == nil && len(b) > 0 {
+			data = b
+		}
+	}
+	if err := json.Unmarshal(data, &seed); err != nil {
+		return nil, err
+	}
+	return &Engine{
+		Seed:  seed,
+		State: st,
+		rng:   rand.New(rand.NewPCG(uint64(time.Now().UnixNano()), 0x5448454c4f4f4b)),
+	}, nil
+}
+
+func (e *Engine) Bootstrap(ts time.Time, initialProducts int, emit func(any)) {
+	if e.State.Bootstrapped {
+		return
+	}
+	e.State.Bootstrapped = true
+
+	for _, dc := range e.Seed.DistributionCenters {
+		emit(dc)
+	}
+
+	initialBrands := min(200, len(e.Seed.Brands))
+	if initialProducts < initialBrands*2 {
+		initialBrands = max(6, initialProducts/2)
+	}
+	for i := 0; i < initialBrands; i++ {
+		e.OnboardNewBrand(ts, emit)
+	}
+	for len(e.State.Products) < initialProducts {
+		brand := e.State.OnboardedBrands[e.rng.IntN(len(e.State.OnboardedBrands))]
+		e.createProduct(brand, ts, emit)
+	}
+
+	for i := 0; i < 3; i++ {
+		e.createCampaignTree(ts, emit)
+	}
+}
+
+func (e *Engine) Tick(ts time.Time, initialProducts int, emit func(any)) {
+	ts = ts.UTC().Truncate(time.Minute)
+	if !e.State.Bootstrapped {
+		e.Bootstrap(ts, initialProducts, emit)
+	}
+
+	hrWeight := float64(e.Seed.HourlyWeights[ts.Hour()]) / 10240.0
+	trafficMult, _, _ := CalendarSeason(ts)
+	growthFactor := MonthlyGrowthMultiplier(ts) * hrWeight * trafficMult
+
+	if e.rng.Float64() < (2.0 / (7.0 * 1440.0)) {
+		e.OnboardNewBrand(ts, emit)
+	}
+	if e.rng.Float64() < (3.0 / 1440.0) {
+		brand := e.State.OnboardedBrands[e.rng.IntN(len(e.State.OnboardedBrands))]
+		e.createProduct(brand, ts, emit)
+	}
+
+	if e.rng.Float64() < (1.5 / (7.0 * 1440.0)) {
+		e.createCampaignTree(ts, emit)
+	}
+
+	adEventCount := int(math.Max(1, math.Round(3.0*growthFactor+e.rng.Float64()*2)))
+	for i := 0; i < adEventCount; i++ {
+		kwID := e.State.KeywordIDs[e.rng.IntN(len(e.State.KeywordIDs))]
+		aeID := e.State.NextAdEventID
+		e.State.NextAdEventID++
+		evType := "impression"
+		amt := round2(10 + e.rng.Float64()*490)
+		if e.rng.Float64() < 0.085 {
+			evType = "click"
+			amt = round2(20 + e.rng.Float64()*550)
+			e.State.RecentAdClicks = append(e.State.RecentAdClicks, aeID)
+			if len(e.State.RecentAdClicks) > 1000 {
+				e.State.RecentAdClicks = e.State.RecentAdClicks[len(e.State.RecentAdClicks)-1000:]
+			}
+		}
+		evTime := ts.Add(time.Duration(e.rng.IntN(60)) * time.Second)
+		emit(model.AdEventRow{
+			ID:         aeID,
+			KeywordID:  kwID,
+			Amount:     amt,
+			DeviceType: adDevices[e.rng.IntN(len(adDevices))],
+			EventType:  evType,
+			CreatedAt:  model.FmtDate(evTime),
+		})
+	}
+
+	nowUnix := ts.Unix() + 59
+	remainingOrders := e.State.PendingOrders[:0]
+	for _, po := range e.State.PendingOrders {
+		if po.NextDueUnix <= nowUnix {
+			transTime := time.Unix(max(ts.Unix(), po.NextDueUnix), 0).UTC()
+			po.Status = po.NextStatus
+			switch po.Status {
+			case "Cancelled":
+				if len(po.OrderItems) == 0 || po.IsPrimaryItem {
+					u := e.lookupUser(po.UserID)
+					ob := osBrowsers[e.rng.IntN(len(osBrowsers))]
+					uid := po.UserID
+					e.emitWebEvent(transTime, e.newUUID(), 1, &uid, nil, u, ob[0], ob[1], u.TrafficSource, "/cancel", "Cancel", emit)
+				}
+				if strings.EqualFold(e.State.CrudMode, "full_crud") {
+					po.ChangeType = "DELETE"
+				}
+				e.emitOrderAndTx(po, emit)
+			case "Shipped":
+				shipDate := model.FmtDate(transTime)
+				po.ShippedAt = &shipDate
+				e.emitOrderAndTx(po, emit)
+				if e.rng.Float64() < 0.99 {
+					po.NextStatus = "Complete"
+					transitDays := 1 + e.rng.IntN(5)
+					if IsPeakLogistics(transTime) {
+						transitDays = 4 + e.rng.IntN(6)
+					}
+					po.NextDueUnix = transTime.Unix() + int64(86400*transitDays)
+					remainingOrders = append(remainingOrders, po)
+				}
+			case "Complete":
+				delivDate := model.FmtDate(transTime)
+				po.DeliveredAt = &delivDate
+				e.emitOrderAndTx(po, emit)
+				retRate := 0.011
+				isHolidayOrder := len(po.CreatedAt) >= 10 && (po.CreatedAt[5:7] == "12" || (po.CreatedAt[5:7] == "11" && po.CreatedAt[8:10] >= "20"))
+				if isHolidayOrder {
+					retRate = 0.065
+				}
+				if len(po.OrderItems) > 0 {
+					retRate = 0.0
+				}
+				if e.rng.Float64() < retRate {
+					po.NextStatus = "Returned"
+					returnDays := 1 + e.rng.IntN(7)
+					if isHolidayOrder {
+						returnDays = 5 + e.rng.IntN(20)
+					}
+					po.NextDueUnix = transTime.Unix() + int64(86400*returnDays+e.rng.IntN(3600))
+					remainingOrders = append(remainingOrders, po)
+				}
+			case "Returned":
+				retTS := model.FmtTS(transTime)
+				po.ReturnedAt = &retTS
+				e.emitOrderAndTx(po, emit)
+			}
+		} else {
+			remainingOrders = append(remainingOrders, po)
+		}
+	}
+	e.State.PendingOrders = remainingOrders
+
+	sessionCount := int(math.Max(1, math.Round(2.5*growthFactor+e.rng.Float64()*2)))
+	for i := 0; i < sessionCount; i++ {
+		e.runBrowseSession(ts, emit)
+	}
+
+	if IsFraudAnomalyMinute(ts) && len(e.State.Products) > 0 {
+		e.EmitFraudAnomaly(ts, emit)
+	}
+
+	remainingViews := e.State.ViewedItems[:0]
+	for _, vi := range e.State.ViewedItems {
+		if vi.DueUnix <= nowUnix {
+			cartTime := time.Unix(max(ts.Unix(), vi.DueUnix), 0).UTC()
+			u := e.lookupUser(vi.UserID)
+			uid := vi.UserID
+			vi.SeqNum++
+			e.emitWebEvent(cartTime, vi.SessionID, vi.SeqNum, &uid, vi.AdEventID, u, vi.OS, vi.Browser, vi.TrafficSource, "/cart", "Cart", emit)
+
+			cartChance := 0.55
+			if trafficMult > 1.5 {
+				cartChance = 0.70
+			}
+			if e.rng.Float64() < cartChance {
+				var due int64
+				sessionID := vi.SessionID
+				seq := vi.SeqNum
+				if e.rng.Float64() < 0.65 {
+					due = min(nowUnix, cartTime.Unix()+int64(5+e.rng.IntN(25)))
+				} else {
+					due = cartTime.Unix() + int64(120+e.rng.IntN(86400))
+					sessionID = e.newUUID()
+					seq = 0
+				}
+				e.State.CartedItems = append(e.State.CartedItems, model.FunnelItem{
+					UserID:        vi.UserID,
+					ProductID:     vi.ProductID,
+					SessionID:     sessionID,
+					SeqNum:        seq,
+					AdEventID:     vi.AdEventID,
+					OS:            vi.OS,
+					Browser:       vi.Browser,
+					TrafficSource: vi.TrafficSource,
+					DueUnix:       due,
+				})
+			}
+		} else {
+			remainingViews = append(remainingViews, vi)
+		}
+	}
+	e.State.ViewedItems = remainingViews
+
+	remainingCarts := e.State.CartedItems[:0]
+	for _, ci := range e.State.CartedItems {
+		if ci.DueUnix <= nowUnix {
+			buyTime := time.Unix(max(ts.Unix(), ci.DueUnix), 0).UTC()
+			e.completePurchase(buyTime, ci, emit)
+		} else {
+			remainingCarts = append(remainingCarts, ci)
+		}
+	}
+	e.State.CartedItems = remainingCarts
+
+	e.State.RecordMinute(ts)
+}

@@ -191,6 +191,11 @@ def _gate_6_complete(state: FlowState) -> bool:
     )
 
 
+def _gate_7_complete(state: FlowState) -> bool:
+    """Whether the optional live BigQuery streaming & CDC service has been deployed or skipped."""
+    return state.stream_status in ("deployed", "skipped") or state.stream_deployed
+
+
 # ---------------------------------------------------------------------------
 # Command builders
 # ---------------------------------------------------------------------------
@@ -331,6 +336,15 @@ def _gate_6_command(state: FlowState) -> str:
     """Build the gate 6 command: scaffold the external embedded analytics portal (or pass --skip)."""
     looker_project = _resolved(state.looker_project_name, _PLACEHOLDER_LOOKER_PROJECT)
     return f"demo-create embed scaffold --looker-project {looker_project}"
+
+
+def _gate_7_command(state: FlowState) -> str:
+    """Build the gate 7 command: plan or deploy live BigQuery streaming & CDC on locked-down GCE (or pass --skip)."""
+    project = _resolved(state.gcp_project_id, _PLACEHOLDER_GCP_PROJECT)
+    dataset = _resolved(state.bq_dataset_id or state.domain_name, _PLACEHOLDER_DATASET)
+    if state.stream_status == "planned" or state.stream_planned:
+        return f"demo-create stream deploy --gcp-project {project} --dataset {dataset}"
+    return f"demo-create stream plan --gcp-project {project} --dataset {dataset}"
 
 
 # ---------------------------------------------------------------------------
@@ -608,6 +622,22 @@ GATES: Final[tuple[Gate, ...]] = (
         _is_complete=_gate_6_complete,
         _command=_gate_6_command,
     ),
+    Gate(
+        number=14,
+        id="gate_7_stream",
+        title="Live BigQuery streaming & CDC GCE deployment (optional)",
+        requires_human_confirmation=True,
+        human_checkpoint=(
+            "Call `ask_question` to confirm whether to deploy a live BigQuery streaming & CDC service on a locked-down "
+            "GCE VM (`demo-create stream plan --gcp-project <gcp-project> --dataset <dataset-id>`) or skip "
+            "(`demo-create stream plan --skip`). Note: While the streaming daemon runs on a GCE free-tier `e2-micro` "
+            "compute instance, continuous streaming into BigQuery will accumulate rows and storage/write volume over "
+            "time that may lead to GCP costs being incurred. Consider running `demo-create stream delete` once the "
+            "need for your demo resource is done."
+        ),
+        _is_complete=_gate_7_complete,
+        _command=_gate_7_command,
+    ),
 )
 
 
@@ -701,6 +731,8 @@ _COMMAND_TO_GATE_ID: Final[dict[str, str]] = {
     "agent publish": "gate_5_publish",
     "ge publish": "gate_5_publish",
     "embed scaffold": "gate_6_embed",
+    "stream plan": "gate_7_stream",
+    "stream deploy": "gate_7_stream",
 }
 
 

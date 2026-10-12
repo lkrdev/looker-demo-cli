@@ -575,9 +575,16 @@ def test_agent_publish_and_embed_skip_branches_and_critique_guard(invoke, state_
     assert envelope(skip_ge)["data"]["skipped"] is True
     assert read_state(isolated_cwd)["ge_publish_status"] == "skipped"
 
-    # embed scaffold --skip -> finishes pipeline (next_actions == [])
+    # embed scaffold --skip -> advances to Gate 14 (gate_7_stream)
     skip_embed = invoke(["embed", "scaffold", "--skip", "--json"])
     assert skip_embed.exit_code == 0, skip_embed.output
     assert envelope(skip_embed)["data"]["skipped"] is True
-    assert envelope(skip_embed)["next_actions"] == []
+    assert envelope(skip_embed)["next_actions"][0]["gate"] == 14
     assert read_state(isolated_cwd)["embed_status"] == "skipped"
+
+    # stream plan --skip -> finishes pipeline (next_actions == [])
+    skip_stream = invoke(["stream", "plan", "--skip", "--json"])
+    assert skip_stream.exit_code == 0, skip_stream.output
+    assert envelope(skip_stream)["data"]["skipped"] is True
+    assert envelope(skip_stream)["next_actions"] == []
+    assert read_state(isolated_cwd)["stream_status"] == "skipped"

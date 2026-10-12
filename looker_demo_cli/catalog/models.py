@@ -174,3 +174,53 @@ class CatalogSnapshot(BaseModel):
         report = CoverageReport.compute(self.tables)
         self.coverage = report
         return report
+
+
+class GlossaryTermSeed(BaseModel):
+    """Declarative specification for a Dataplex Business Glossary Term."""
+
+    term_id: str
+    display_name: str
+    description: str
+    category_id: str | None = None
+
+
+class ColumnSeedSpec(BaseModel):
+    """Declarative specification for column-level semantic curation and glossary linking."""
+
+    name: str
+    business_label: str
+    description: str
+    synonyms: list[str] = Field(default_factory=list)
+    allowed_values: list[str] = Field(default_factory=list)
+    format_pattern: str | None = None
+    governance_tags: list[str] = Field(default_factory=list)
+    term_id: str | None = None
+    link_id: str | None = None
+
+
+class TableSeedSpec(BaseModel):
+    """Declarative specification for table-level curation, constraints, and column specs."""
+
+    name: str
+    role: str = "dimension"
+    business_label: str
+    description: str
+    governance_tags: list[str] = Field(default_factory=list)
+    primary_key: list[str] = Field(default_factory=list)
+    foreign_keys: dict[str, str] = Field(default_factory=dict)  # col -> target_table.target_col
+    columns: dict[str, ColumnSeedSpec] = Field(default_factory=dict)
+
+
+class CatalogSeedPlan(BaseModel):
+    """Unified, dataset-agnostic plan for seeding Dataplex Knowledge Catalog and BigQuery metadata."""
+
+    project_id: str
+    dataset_id: str
+    location: str = "us"
+    aspect_type_id: str = "semantic-curation"
+    glossary_id: str
+    glossary_display_name: str
+    glossary_description: str
+    terms: dict[str, GlossaryTermSeed] = Field(default_factory=dict)
+    tables: dict[str, TableSeedSpec] = Field(default_factory=dict)

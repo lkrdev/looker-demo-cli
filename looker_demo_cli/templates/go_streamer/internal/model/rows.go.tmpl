@@ -1,0 +1,281 @@
+package model
+
+import (
+	"strings"
+	"time"
+)
+
+type ProductRow struct {
+	ID                   int64   `json:"id"`
+	Cost                 float64 `json:"cost"`
+	Category             string  `json:"category"`
+	Name                 string  `json:"name"`
+	Brand                string  `json:"brand"`
+	RetailPrice          float64 `json:"retail_price"`
+	Department           string  `json:"department"`
+	SKU                  string  `json:"sku"`
+	DistributionCenterID string  `json:"distribution_center_id"`
+}
+
+type UserRow struct {
+	ID            int64   `json:"id"`
+	FirstName     string  `json:"first_name"`
+	LastName      string  `json:"last_name"`
+	Email         string  `json:"email"`
+	Age           int64   `json:"age"`
+	City          string  `json:"city"`
+	State         string  `json:"state"`
+	Country       string  `json:"country"`
+	Zip           string  `json:"zip"`
+	Latitude      float64 `json:"latitude"`
+	Longitude     float64 `json:"longitude"`
+	Gender        string  `json:"gender"`
+	CreatedAt     string  `json:"created_at"`
+	TrafficSource string  `json:"traffic_source"`
+}
+
+// Slowly changing table #1 (BigQuery CDC UPSERT/DELETE on id): emitted when stocked (sold_at=null) and updated when sold (sold_at!=null).
+type InventoryItemRow struct {
+	ID                          int64   `json:"id"`
+	ProductID                   int64   `json:"product_id"`
+	CreatedAt                   string  `json:"created_at"`
+	SoldAt                      *string `json:"sold_at"`
+	Cost                        float64 `json:"cost"`
+	ProductCategory             string  `json:"product_category"`
+	ProductName                 string  `json:"product_name"`
+	ProductBrand                string  `json:"product_brand"`
+	ProductRetailPrice          float64 `json:"product_retail_price"`
+	ProductDepartment           string  `json:"product_department"`
+	ProductSKU                  string  `json:"product_sku"`
+	ProductDistributionCenterID int64   `json:"product_distribution_center_id"`
+	ChangeType                  string  `json:"-"`
+}
+
+// Slowly changing table #2 (BigQuery CDC UPSERT/DELETE on id): transitions Processing -> Shipped -> Complete -> Returned / Cancelled.
+type OrderItemRow struct {
+	ID              int64   `json:"id"`
+	OrderID         int64   `json:"order_id"`
+	UserID          int64   `json:"user_id"`
+	InventoryItemID int64   `json:"inventory_item_id"`
+	SalePrice       float64 `json:"sale_price"`
+	Status          string  `json:"status"`
+	CreatedAt       string  `json:"created_at"`
+	ReturnedAt      *string `json:"returned_at"`
+	ShippedAt       *string `json:"shipped_at"`
+	DeliveredAt     *string `json:"delivered_at"`
+	ChangeType      string  `json:"-"`
+}
+
+type EventRow struct {
+	ID             int64   `json:"id"`
+	SequenceNumber int64   `json:"sequence_number"`
+	SessionID      string  `json:"session_id"`
+	CreatedAt      string  `json:"created_at"`
+	IPAddress      string  `json:"ip_address"`
+	City           string  `json:"city"`
+	State          string  `json:"state"`
+	Country        string  `json:"country"`
+	Zip            string  `json:"zip"`
+	Latitude       float64 `json:"latitude"`
+	Longitude      float64 `json:"longitude"`
+	OS             string  `json:"os"`
+	Browser        string  `json:"browser"`
+	TrafficSource  string  `json:"traffic_source"`
+	UserID         *int64  `json:"user_id"`
+	URI            string  `json:"uri"`
+	EventType      string  `json:"event_type"`
+	AdEventID      *int64  `json:"ad_event_id"`
+	ReferrerCode   string  `json:"referrer_code"`
+}
+
+type CampaignRow struct {
+	ID                 int64   `json:"id"`
+	AdvertisingChannel string  `json:"advertising_channel"`
+	Amount             float64 `json:"amount"`
+	BidType            string  `json:"bid_type"`
+	CampaignName       string  `json:"campaign_name"`
+	Period             string  `json:"period"`
+	CreatedAt          string  `json:"created_at"`
+}
+
+type AdGroupRow struct {
+	AdID       int64  `json:"ad_id"`
+	CampaignID int64  `json:"campaign_id"`
+	CreatedAt  string `json:"created_at"`
+	Name       string `json:"name"`
+	Period     int64  `json:"period"`
+	AdType     string `json:"ad_type"`
+	Headline   string `json:"headline"`
+}
+
+type KeywordRow struct {
+	KeywordID           int64   `json:"keyword_id"`
+	AdID                int64   `json:"ad_id"`
+	CreatedAt           string  `json:"created_at"`
+	CriterionName       string  `json:"criterion_name"`
+	CPCBidAmount        float64 `json:"cpc_bid_amount"`
+	PeriodID            *int64  `json:"period_id"`
+	SystemServingStatus string  `json:"system_serving_status"`
+	BiddingStrategyType string  `json:"bidding_strategy_type"`
+	QualityScore        int64   `json:"quality_score"`
+	KeywordMatchType    string  `json:"keyword_match_type"`
+}
+
+type AdEventRow struct {
+	ID         int64   `json:"id"`
+	KeywordID  int64   `json:"keyword_id"`
+	Amount     float64 `json:"amount"`
+	DeviceType string  `json:"device_type"`
+	EventType  string  `json:"event_type"`
+	CreatedAt  string  `json:"created_at"`
+}
+
+type DiscountRow struct {
+	ProductID       int64   `json:"product_id"`
+	InventoryItemID int64   `json:"inventory_item_id"`
+	RetailPrice     float64 `json:"retail_price"`
+	DiscountPrice   float64 `json:"discount_price"`
+	DiscountAmount  float64 `json:"discount_amount"`
+	Date            string  `json:"date"`
+}
+
+type TxItem struct {
+	InventoryItemID int64   `json:"inventory_item_id"`
+	ReturnedAt      *string `json:"returned_at"`
+	SalePrice       float64 `json:"sale_price"`
+}
+
+type TxUser struct {
+	UserID        int64  `json:"user_id"`
+	Name          string `json:"name"`
+	Email         string `json:"email"`
+	Age           int64  `json:"age"`
+	City          string `json:"city"`
+	State         string `json:"state"`
+	Country       string `json:"country"`
+	Zip           string `json:"zip"`
+	Location      string `json:"location"`
+	Gender        string `json:"gender"`
+	UserCreatedAt string `json:"user_created_at"`
+	TrafficSource string `json:"traffic_source"`
+}
+
+// Slowly changing table #3 (BigQuery CDC UPSERT/DELETE on order_id): mirrors order_items lifecycle transitions.
+type TransactionDetailRow struct {
+	OrderID     int64    `json:"order_id"`
+	Status      string   `json:"status"`
+	CreatedAt   string   `json:"created_at"`
+	ShippedAt   *string  `json:"shipped_at"`
+	DeliveredAt *string  `json:"delivered_at"`
+	Items       []TxItem `json:"items"`
+	User        TxUser   `json:"user"`
+	ChangeType  string   `json:"-"`
+}
+
+type CombinedOrdersUsersRow struct {
+	UserID int64 `json:"user_id"`
+}
+
+type RetailCalendar454Row struct {
+	ReferenceDate          string `json:"reference_date"`
+	FiscalYear             string `json:"fiscal_year"`
+	FiscalYearNum          int64  `json:"fiscal_year_num"`
+	FiscalQuarterOfYear    string `json:"fiscal_quarter_of_year"`
+	FiscalQuarterOfYearNum int64  `json:"fiscal_quarter_of_year_num"`
+	FiscalWeekOfYear       string `json:"fiscal_week_of_year"`
+	FiscalWeekOfYearNum    int64  `json:"fiscal_week_of_year_num"`
+	FiscalPeriodOfYear     string `json:"fiscal_period_of_year"`
+	FiscalPeriodOfYearNum  int64  `json:"fiscal_period_of_year_num"`
+	Season                 string `json:"season"`
+	SeasonNum              int64  `json:"season_num"`
+	PrevCustomDate         int64  `json:"prev_custom_date"`
+	PrevCustomWeek         int64  `json:"prev_custom_week"`
+}
+
+func RowTable(row any) (table string, pk int64, isCDC bool) {
+	switch r := row.(type) {
+	case DistributionCenterRow:
+		return "distribution_centers", r.ID, false
+	case ProductRow:
+		return "products", r.ID, false
+	case UserRow:
+		return "users", r.ID, false
+	case InventoryItemRow:
+		return "inventory_items", r.ID, true
+	case OrderItemRow:
+		return "order_items", r.ID, true
+	case EventRow:
+		return "events", r.ID, false
+	case CampaignRow:
+		return "campaigns", r.ID, false
+	case AdGroupRow:
+		return "ad_groups", r.AdID, false
+	case KeywordRow:
+		return "keywords", r.KeywordID, false
+	case AdEventRow:
+		return "ad_events", r.ID, false
+	case DiscountRow:
+		return "discounts", r.InventoryItemID, false
+	case TransactionDetailRow:
+		return "transaction_detail", r.OrderID, true
+	case CombinedOrdersUsersRow:
+		return "combined_orders_users", r.UserID, false
+	case RetailCalendar454Row:
+		return "retail_calendar_454", 0, false
+	default:
+		return "", 0, false
+	}
+}
+
+// ExplicitChangeType extracts an explicit CDC change type ("UPSERT" or "DELETE") if set on a row.
+func ExplicitChangeType(row any) string {
+	switch r := row.(type) {
+	case InventoryItemRow:
+		return strings.ToUpper(strings.TrimSpace(r.ChangeType))
+	case OrderItemRow:
+		return strings.ToUpper(strings.TrimSpace(r.ChangeType))
+	case TransactionDetailRow:
+		return strings.ToUpper(strings.TrimSpace(r.ChangeType))
+	default:
+		return ""
+	}
+}
+
+// ResolveChangeType determines the BigQuery Storage Write API _CHANGE_TYPE value
+// given the row, whether the table is CDC-enabled, and the configured crudMode
+// ("insert_only", "upsert_cdc", or "full_crud").
+func ResolveChangeType(row any, isCDC bool, crudMode string) string {
+	mode := strings.ToLower(strings.TrimSpace(crudMode))
+	if mode == "insert_only" || !isCDC {
+		return ""
+	}
+	explicit := ExplicitChangeType(row)
+	if mode == "full_crud" {
+		if explicit == "DELETE" {
+			return "DELETE"
+		}
+		switch r := row.(type) {
+		case OrderItemRow:
+			if r.Status == "Cancelled" && explicit != "UPSERT" {
+				return "DELETE"
+			}
+		case TransactionDetailRow:
+			if r.Status == "Cancelled" && explicit != "UPSERT" {
+				return "DELETE"
+			}
+		}
+		return "UPSERT"
+	}
+	if explicit == "DELETE" {
+		return "DELETE"
+	}
+	return "UPSERT"
+}
+
+func FmtTS(t time.Time) string {
+	return t.UTC().Format("2006-01-02T15:04:05Z")
+}
+
+func FmtDate(t time.Time) string {
+	return t.UTC().Format("2006-01-02")
+}

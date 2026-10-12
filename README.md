@@ -1,72 +1,56 @@
 # Looker Demo Creator (`demo-create`)
 
-> **From zero to production Looker demo in minutes.**
-> Automated, deterministic orchestrator for creating end-to-end Looker demos, synthetic BigQuery datasets, 3NF Snowflake LookML semantic models, 100% test-verified dashboards, Conversational Analytics (CA) Agents published to Gemini Enterprise (GE), and Embedded Analytics portals.
+> **From zero to production Looker, Dataplex Knowledge Catalog, and Real-Time BigQuery CDC demo in minutes.**
+> Automated, deterministic 15-gate orchestrator for creating end-to-end Looker demos, synthetic or adopted BigQuery datasets, Dataplex Universal Catalog (Knowledge Catalog) semantic curations & business glossaries, 3NF Snowflake LookML semantic models, 100% test-verified executive dashboards, Conversational Analytics (CA) Agents published to Gemini Enterprise (GE), private-labeled Embedded Analytics portals, and real-time BigQuery Storage Write API CDC streaming pipelines on locked-down GCE VMs.
 
 ---
 
-## Overview
+## Overview: How `demo-create` Operates
 
-`demo-create` unifies the full-stack Looker demo lifecycle into a deterministic, gated pipeline:
-1. **Pre-Flight & Skill Sync (`pre-check`)**: Audits GCP/Looker credentials, prunes deprecated MCP servers/skills, and installs CLI-first skills into `~/.gemini/config/skills/`.
-2. **Schema Co-Design & Modular DAG Synthesis (`data generate`)**: Designs 3NF relational schemas (Mermaid ERD + sample preview) and synthesizes Parquet tables (`>7,500 rows/sec`) via [`synthetic-data-authoring`](skills/synthetic-data-authoring/SKILL.md).
-3. **BigQuery Ingestion (`data upload`)**: Creates datasets and loads partitioned/clustered Parquet tables into BigQuery.
-4. **LookML Modeling & QA Deployment (`lookml`)**: Introspects BigQuery/Dataplex metadata into `SPEC.md`, generates views/explores/dashboards, validates 100% of queries, and releases via `lkr-dev-cli`.
-5. **Conversational Analytics & Gemini Enterprise (`agent` / `ge`)**: Grounds 1:1 Golden Queries from dashboard tiles, links them to a Looker CA Agent, and publishes to Gemini Enterprise.
-6. **Embedded Portal Scaffolding (`embed`)**: Scaffolds a branded React/Vite `looker-embed-demo` application.
+`demo-create` unifies the full-stack data & analytics demo lifecycle into a deterministic **15-Gate State Machine (`Gates 0..14`)** persisted in `.demo-state.json`. It supports two primary deployment modes at **Gate 1 (`confirm-targets`)**:
+- **`--mode full` (Default — End-to-End Looker + BigQuery + Catalog + Stream)**: Executes all 15 gates (`0..14`) across BigQuery, Dataplex Knowledge Catalog, LookML modeling/polish/optimization/deployment, Conversational Analytics Agent, Gemini Enterprise, Embedded Portal, and Live BigQuery Streaming.
+- **`--mode bq_only` (BigQuery + Knowledge Catalog + Stream Only)**: Executes Gates `0..5` (BigQuery dataset synthesis/adoption + Dataplex Knowledge Catalog curation/seeding), automatically marks Looker Gates `6..13` satisfied, and routes directly to **Gate 14 (`stream`)** without requiring Looker credentials.
+
+### Core Lifecycle Stages
+1. **Pre-Flight & Target Confirmation (`pre-check`, `confirm-targets` — Gates 0–1)**: Audits GCP/Looker credentials, prunes deprecated MCP servers/skills, syncs CLI-first skills into `~/.gemini/config/skills/`, and records human-confirmed targets (`--mode full|bq_only`).
+2. **Schema Co-Design, Modular DAG Synthesis or Dataset Adoption (`data` — Gates 2–4)**: Designs 3NF relational schemas (`propose-schema --preview` + `approve-schema`) and synthesizes Parquet tables (`>7,500 rows/sec`) loaded into BigQuery with Day Partitioning & Clustering (`generate --upload`), **or** adopts an existing BigQuery dataset (`data adopt`).
+3. **Dataplex Knowledge Catalog Semantic Curation (`catalog` — Gate 5)**: Seeds or inspects live Dataplex Universal Catalog `AspectTypes` (`semantic-curation`), Business Glossaries (`<dataset>-glossary`), Glossary Terms, `definition` EntryLinks, and BigQuery `PRIMARY KEY` / `FOREIGN KEY` constraints (`catalog seed` / `inspect` / `sync`), persisting `.demo-catalog-<dataset>.json`.
+4. **LookML Modeling, 3-Pass Polish, Optimization & QA Release (`lookml` — Gates 6–10)**: Generates catalog-enriched LookML views/explores/dashboards (`lookml model`), enforces 3-Pass Executive Dashboard Polish & `SELECT DISTINCT` filtered measure grounding (`lookml certify-polish`), applies server caching/partition optimizations (`lookml optimize`), validates 100% of dashboard queries before production deployment (`lookml deploy`), and records post-deploy visual critique approval (`lookml approve-critique`).
+5. **Conversational Analytics & Gemini Enterprise (`agent` / `ge` — Gates 11–12)**: Grounds 1:1 Golden Queries (`expanded_share_url`) from dashboard tiles, links them to a Looker CA Agent (`agent create`), and publishes to Gemini Enterprise (`agent publish`).
+6. **Private-Labeled Embed Portal (`embed` — Gate 13)**: Provisions Looker instance embed settings (Service Account auth, allowlist, cookieless v2, 2-step shared folder inheritance, LookML dashboard move, CA agent sharing, brand themes) and scaffolds a React/Vite + FastAPI portal (`embed scaffold`).
+7. **Real-Time BigQuery Storage Write API & CDC Streaming (`stream` — Gate 14)**: Plans (`stream plan`), scaffolds & customizes a Go `managedwriter` DefaultStream CDC service (`_CHANGE_TYPE` = `UPSERT`/`DELETE`, `max_staleness = INTERVAL 0 SECOND`) driven by live Dataplex Knowledge Catalog metadata, and deploys it to a locked-down GCE `e2-micro` VM (`--no-address` private IP + IAP tunnel + `<dataset>-streamer.service`) (`stream deploy --execute-infra`), with single-command teardown (`stream delete`).
 
 ---
 
 ## What Gets Automated: Production Deliverables Inventory
 
-Instead of spending days or weeks stitching together synthetic data scripts, debugging LookML joins, hand-crafting dashboard tiles, writing validation queries, and plumbing AI agent endpoints, `demo-create` produces a complete, production-grade enterprise demo in minutes:
-
 | Production Asset | What Gets Automated | Exact Output Format |
 | :--- | :--- | :--- |
-| **BigQuery Data Warehouse** | 3NF relational schema synthesis (Modular DAG with Pareto/Log-Normal distributions, PK/FK referential integrity, and in-memory `TableValidator` scorecard) and batch Parquet upload | Clean BigQuery dataset with partitioned/clustered tables |
-| **LookML 3NF Semantic Model** | CLI-driven BigQuery & Dataplex metadata extraction (`SPEC.md`), Explore Base View selection, Chasm Trap elimination with Native Derived Table (NDT) rollups joined `one_to_one`, role-playing diamond joins, and field metadata (`label:`, `description:`, `value_format_name:`, `drill_fields:`) | Complete `views/*.view.lkml`, `explores/*.explore.lkml`, and `models/*.model.lkml` |
-| **Executive Tabbed Dashboard** | Executive tabbed report architecture, single-value KPI banners, dual-axis timelines, `advanced_vis_config` rounded geometry, cross-filtering, and popovers | Production `dashboards/*.dashboard.lookml` deployed via API |
-| **LookML Performance Optimization** | Static `suggestions: [...]` on low-cardinality dims, `suggestable: no` on unique IDs/text, model datagroup caching, BigQuery partition pruning filters, and raw foreign key hiding | Production-hardened LookML avoiding database query spikes |
-| **Pre-Deployment QA Audit** | Dev branch push, LookML project validator, 100% test execution of all dashboard queries via Looker API, and bounded self-healing (max 3 iterations) | 100% HTTP 200 OK query pass certificate before production release |
+| **BigQuery Data Warehouse** | 3NF relational schema synthesis (Modular DAG with Pareto/Log-Normal distributions, PK/FK referential integrity, and in-memory `TableValidator` scorecard), batch Parquet upload, or live dataset adoption (`data adopt`) | Clean BigQuery dataset with partitioned/clustered tables & `NOT ENFORCED` PK/FK constraints |
+| **Dataplex Knowledge Catalog** | Hybrid curation (`--curation-file` / `--schema-file` + live BigQuery auto-inference): creates custom `semantic-curation` `AspectType`, Business Glossary & Terms, column-to-term `definition` `EntryLinks`, and table/column aspects | Live Dataplex resources + `.demo-catalog-<dataset>.json` (`rich` / `hybrid` / `minimal` profiles) |
+| **LookML 3NF Semantic Model** | Catalog-driven LookML generation (`SPEC.md`), Explore Base View selection, Chasm Trap elimination with Native Derived Table (NDT) rollups joined `one_to_one`, role-playing diamond joins, and curated field metadata | Complete `views/*.view.lkml`, `explores/*.explore.lkml`, and `models/*.model.lkml` |
+| **Executive Tabbed Dashboard** | 3-Pass Executive Dashboard Polish (`lookml-dashboard-designer`), Highcharts `advanced_vis_config` geometry, `SELECT DISTINCT`-grounded filtered measures, and `lookml certify-polish` gate verification | Production `dashboards/*.dashboard.lookml` deployed via API |
+| **LookML Performance Optimization** | Static `suggestions: [...]` on low-cardinality dims, `suggestable: no` on unique IDs/text, model datagroup caching, BigQuery partition pruning filters, and headless `.backup_pre_opt` rollback snapshots (`lookml restore`) | Production-hardened LookML avoiding database query spikes |
+| **Pre-Deployment QA Audit** | Dev branch push, LookML project validator, 100% test execution of all dashboard queries via Looker API, and bounded self-healing (max 3 iterations via `lookml-qa-validator`) | 100% HTTP 200 OK query pass certificate before production release |
 | **Conversational Analytics (CA) Agent** | Auto-generated domain persona and query rules, extraction of dashboard tiles into 1:1 Looker 4.0 Golden Queries with `expanded_share_url` grounding | Live AI Agent in Looker with natural language chat UI |
-| **Gemini Enterprise (GE) Integration** | Automated registration and one-click publishing to connected Gemini Enterprise apps via Looker internal API | Natural language querying across enterprise Gemini apps in minutes |
-| **White-Labeled Embed Portal (Optional)** | Scaffolding of React/Vite application (`looker-embed-demo`), `.env` configuration (`VITE_CHAT_AGENT_ID`), and CSS brand design tokens | Complete web application ready to run (`pnpm install && pnpm dev`) |
+| **Gemini Enterprise (GE) Integration** | Automated registration, IAM binding (`roles/discoveryengine.admin`), and one-click publishing to connected Gemini Enterprise apps | Natural language querying across enterprise Gemini apps in minutes |
+| **Private-Labeled Embed Portal (Optional)** | 6-point Looker instance provisioning (group, folder, `PUT /api/4.0/lookml_dashboards/move`, themes) + React/Vite & FastAPI scaffolding (`looker-embed-demo`) | Complete web application ready to run (`pnpm install && pnpm dev`) |
+| **Real-Time BigQuery CDC Streamer (Optional)** | Catalog-aware Go `managedwriter` Storage Write API streamer (`insert_only`, `upsert_cdc`, `full_crud`), `max_staleness = INTERVAL 0 SECOND` DDL, and locked-down GCE `e2-micro` VM (`--no-address` + Cloud NAT + `--tunnel-through-iap`) | Live `<dataset>-streamer.service` systemd daemon on private GCE VM + `stream delete` teardown |
 
 ---
 
-### ⚡ Spotlight: From Raw Data to Gemini Enterprise in Minutes
+## Subagent Invocation Matrix (`looker-demo-orchestrator`)
 
-A flagship capability of `demo-create` is bridging the gap between raw data synthesis and cross-organizational enterprise AI in minutes:
+`demo-create` follows a **CLI-First Architecture with Explicit & Conditional Subagents**. Deterministic operations run directly via compiled CLI subcommands in the parent session, while specialized creative, modeling, healing, and multi-file Go engineering tasks delegate to isolated subagents under [`skills/looker-demo-orchestrator/subagents/`](skills/looker-demo-orchestrator/subagents/):
 
-```mermaid
-graph LR
-    Tiles["Dashboard Query Tiles"] --> Ground["Extract & Ground Golden Queries<br/>(expanded_share_url)"]
-    Ground --> LinkAgent["Link to Looker CA Agent<br/>(PATCH /api/4.0/agents/{id})"]
-    LinkAgent --> PublishGE["One-Click Publish to GE<br/>(POST /api/4.0/internal/agents/{id}/publish)"]
-    PublishGE --> Chat["Natural Language Querying<br/>in Gemini Enterprise Apps"]
-```
-
-1. **Deterministic Dashboard-to-Query Extraction**: Every query tile from your generated executive dashboard is inspected and translated into an active Looker query.
-2. **Looker 4.0 Golden Query Grounding**: Base queries are created via `POST /api/4.0/queries` to obtain deterministic `expanded_share_url` permalinks, then registered as 1:1 Golden Queries (`POST /api/4.0/golden_queries`).
-3. **Agent Linking**: Golden queries are bound to the Conversational Analytics Agent (`PATCH /api/4.0/agents/{agent_id}`), establishing high-precision semantic grounding.
-4. **One-Click Gemini Enterprise Publishing**: The agent is published directly to connected Gemini Enterprise apps via `POST /api/4.0/internal/agents/{agent_id}/publish`.
-
-> Within minutes of starting the flow, non-technical users and executives can query the entire domain dataset in natural language directly within Gemini Enterprise.
-
----
-
-### 📄 Inspect a Real Deliverable
-
-Curious what the final output looks like? Inspect real deliverables produced by a completed run:
-
-👉 **[View Canonical Technical Spec (SPEC.md): IoT Trucking Fleet Analytics](examples/SPEC_EXAMPLE.md)**
-👉 **[View Canonical Delivery Report (DELIVERY_REPORT.md): IoT Trucking Fleet Analytics](examples/DELIVERY_REPORT_EXAMPLE.md)**
-
-Key highlights from the report:
-- **BigQuery Summary**: 6 relational tables, 21,675 rows across `dim_vehicles`, `fct_trips`, `fct_sensor_telemetry`, etc.
-- **LookML Architecture**: 3NF ERD with Native Derived Table (`vehicle_metrics_ndt`) eliminating Chasm Traps.
-- **Quality Audit**: 19 / 19 (100%) dashboard tile queries tested with HTTP 200 OK before production release.
-- **Live AI Agent**: 7 pre-seeded Golden Queries and verified Gemini Enterprise publish state.
+| Gate | Stage | Subagent(s) | Trigger Condition (Mandatory vs. Conditional) | Owned Files & Responsibility |
+| :--- | :--- | :--- | :--- | :--- |
+| **Gate 4**<br/>(`gate_1c_generate_data`) | Modular DAG Synthesis & BigQuery Load | [`data-engineer`](skills/looker-demo-orchestrator/subagents/data-engineer.md) | **On-Demand / Optional**<br/>*(Parent CLI `demo-create data generate --upload` is default; spawn subagent when custom domain synthesis scripts or complex repair are needed)* | Synthesizes Parquet datasets (`>7,500 rows/sec`), validates PK/FK invariants via `TableValidator`, and uploads to BigQuery with Day Partitioning & Clustering. |
+| **Gate 6**<br/>(`gate_2a_lookml_model`) | Semantic LookML Modeling | [`lookml-snowflake-modeler`](skills/looker-demo-orchestrator/subagents/lookml-snowflake-modeler.md) | **Conditional**<br/>*(Spawned **ONLY** when the schema contains 3NF Snowflake structures with Chasm Traps—multiple `1:N` child fanouts—or diamond role-playing joins)* | Runs `schema_graph_analyzer.py`, sets Explore Base Views on leaf facts, builds Native Derived Table (NDT) rollups joined `one_to_one`, and resolves diamond joins in `lookml/`. |
+| **Gate 7**<br/>(`gate_2b_certify_polish`) | 3-Pass Executive Dashboard Polish | [`lookml-dashboard-designer`](skills/looker-demo-orchestrator/subagents/lookml-dashboard-designer.md) | **Mandatory at Gate 7**<br/>*(Must transform raw `LookMLGenerator` draft scaffolding into a bespoke, 3-pass polished dashboard before `demo-create lookml certify-polish` will pass)* | Customizes `lookml/dashboards/*.dashboard.lookml` and supporting views with domain KPIs, Highcharts `advanced_vis_config`, `SELECT DISTINCT` filtered measures, and transparent grids. |
+| **Gate 9**<br/>(`gate_3b_deploy`) | Pre-Deployment QA & Production Release | [`lookml-qa-validator`](skills/looker-demo-orchestrator/subagents/lookml-qa-validator.md) | **Conditional (Self-Healing)**<br/>*(Spawned **ONLY** if `demo-create lookml deploy` fails LookML validation or any dashboard tile query test fails)* | Runs up to 3 bounded self-healing loops using `lookml-dashboard-to-query` to patch broken LookML fields/tiles and returns a deploy readiness certificate to the parent orchestrator. |
+| **Gate 13**<br/>(`gate_6_embed`) | External Embed Portal Scaffolding | [`embed-portal-engineer`](skills/looker-demo-orchestrator/subagents/embed-portal-engineer.md) | **Conditional (When Gate 13 Confirmed)**<br/>*(Spawned **ONLY** when the user confirms external embed portal creation rather than `--skip`)* | Audits `group_id`/`folder_id` sync after `demo-create embed scaffold`, adapts domain copy (`Sidebar.tsx`, `LoginPage.tsx`, `Home.tsx`, `SalesActivityFeed.tsx`), customizes `styles.css`, and verifies `pnpm run build`. |
+| **Gate 14**<br/>(`gate_7_stream`) | Live BigQuery Streaming & CDC (Phase A $\to$ Phase B) | 1. [`bq-profiling-researcher`](skills/looker-demo-orchestrator/subagents/bq-profiling-researcher.md)<br/>2. [`catalog-spec-architect`](skills/looker-demo-orchestrator/subagents/catalog-spec-architect.md)<br/>3. [`go-bq-cdc-engineer`](skills/looker-demo-orchestrator/subagents/go-bq-cdc-engineer.md)<br/>4. [`go-sim-cli-engineer`](skills/looker-demo-orchestrator/subagents/go-sim-cli-engineer.md) | **Mandatory 4-Agent Parallel Wave (When Gate 14 Confirmed)**<br/>*(Dispatched concurrently right after Phase A `demo-create stream deploy --scaffold-only` and before Phase B `demo-create stream deploy --execute-infra`)* | • **Agent 1 (`bq-profiling-researcher`)**: `.demo-stream-profile.json`, `streamer/seed_data.json`<br/>• **Agent 2 (`catalog-spec-architect`)**: `SPEC.md` (Section 4B), `.demo-stream-plan.json`, catalog metadata alignment<br/>• **Agent 3 (`go-bq-cdc-engineer`)**: `streamer/internal/bq/*`, `streamer/internal/model/rows.go`, `streamer/bq.go`, `streamer/bq_test.go`, `streamer/schema.sql`<br/>• **Agent 4 (`go-sim-cli-engineer`)**: `streamer/internal/sim/*`, `streamer/main.go`, `streamer/cloud.go`, `streamer/sim.go`, `streamer/deploy-bq.sh`, `streamer/<dataset>-streamer.service` |
 
 ---
 
@@ -76,9 +60,9 @@ Before running `demo-create`, ensure the following tools, cloud roles, and Looke
 
 | Category | Required Setup |
 | :--- | :--- |
-| **1. Local CLI & Infrastructure** | • **Python `>= 3.11` & [`uv`](https://docs.astral.sh/uv/)** (`uv tool install looker-demo-cli` installs both `demo-create` and `lkr-dev-cli`).<br/>• **Google Cloud SDK (`gcloud` & `bq`)** authenticated via `gcloud auth login` and `gcloud auth application-default login`.<br/>• **Looker Instance** (API 4.0) with a pre-configured **BigQuery Connection**.<br/>• **Gemini Enterprise (GE) App** in GCP (`global`, `us`, or `eu`) for Gate 5 agent publishing. |
-| **2. Google Cloud APIs & IAM** | • **APIs**: `bigquery`, `aiplatform` (Vertex AI / LLM), `discoveryengine` (GE), `cloudresourcemanager`, and optional `dataplex`/`datacatalog`.<br/>• **Developer / Local ADC**: `roles/bigquery.dataEditor`, `roles/bigquery.jobUser`, `roles/aiplatform.user`, `roles/serviceusage.serviceUsageConsumer`, `roles/discoveryengine.viewer`, and `roles/resourcemanager.projectIamAdmin` (to auto-bind Looker SA IAM).<br/>• **Looker BigQuery SA**: `roles/bigquery.dataEditor` + `roles/bigquery.jobUser`.<br/>• **Looker Gemini SA** (`ai_ge_service_account_email`): `roles/discoveryengine.admin` + an assigned **Gemini Enterprise License**. |
-| **3. Looker Permissions** | • **Instance Settings**: `lkr-cli` OAuth app registered (`register_oauth_client_app`) and **Admin > Platform > Gemini** enabled (CA + Publish to GE).<br/>• **User Role**: Looker **`Admin`** role *(Recommended for all gates)* — or granular permissions by gate: **Developer** + `manage_project_models` (Gates 2–3 LookML dev/deploy), **CA Agent Author** (`create_agents`/`manage_agents`, `create_queries`, `explore` for Gate 4), and **Admin** (Gate 5 GE config & publish). |
+| **1. Local CLI & Infrastructure** | • **Python `>= 3.11` & [`uv`](https://docs.astral.sh/uv/)** (`uv tool install looker-demo-cli` installs both `demo-create` and `lkr-dev-cli`).<br/>• **Google Cloud SDK (`gcloud` & `bq`)** authenticated via `gcloud auth login` and `gcloud auth application-default login`.<br/>• **Go `>= 1.22`** *(required only when deploying the Gate 14 BigQuery CDC streamer)*.<br/>• **Looker Instance** (API 4.0) with a pre-configured **BigQuery Connection** *(required for `--mode full`, optional for `--mode bq_only`)*. |
+| **2. Google Cloud APIs & IAM** | • **APIs**: `bigquery`, `bigquerystorage`, `dataplex`, `datacatalog`, `compute`, `iap`, `logging`, `secretmanager`, `aiplatform`, `discoveryengine`, `cloudresourcemanager`.<br/>• **Developer / Local ADC**: `roles/bigquery.dataEditor`, `roles/bigquery.jobUser`, `roles/dataplex.admin` (or `metadataEditor` + `taxonomyAdmin` for `catalog seed`), `roles/compute.instanceAdmin.v1` + `roles/iap.tunnelResourceAccessor` (for Gate 14 GCE streamer), `roles/discoveryengine.viewer`, and `roles/resourcemanager.projectIamAdmin`.<br/>• **Looker BigQuery SA**: `roles/bigquery.dataEditor` + `roles/bigquery.jobUser`.<br/>• **Looker Gemini SA** (`ai_ge_service_account_email`): `roles/discoveryengine.admin` + an assigned **Gemini Enterprise License**. |
+| **3. Looker Permissions** | • **Instance Settings**: `lkr-cli` OAuth app registered (`register_oauth_client_app`) and **Admin > Platform > Gemini** enabled (CA + Publish to GE).<br/>• **User Role**: Looker **`Admin`** role *(Recommended for all gates)*. |
 
 👉 **[Full Setup, IAM Matrix & `gcloud` Bootstrap Script → `docs/PREREQUISITES.md`](docs/PREREQUISITES.md)**
 
@@ -88,11 +72,13 @@ Before running `demo-create`, ensure the following tools, cloud roles, and Looke
 
 ### 🚀 Mode 1: AI Agent Pair-Programmer (Primary Hero Flow)
 
-Run interactively with your AI coding assistant (Antigravity, Claude Code, or AgentAPI) using the **[`looker-demo-orchestrator`](skills/looker-demo-orchestrator/SKILL.md)** skill.
+Run interactively with your AI coding assistant using the **[`looker-demo-orchestrator`](skills/looker-demo-orchestrator/SKILL.md)** skill.
 
 #### Step 1: Install Persistent CLI Tools
 ```bash
 uv tool install looker-demo-cli
+# Or from a local checkout during development:
+uv tool install --editable /path/to/looker-demo-cli --force
 ```
 Installs `demo-create`, `looker-demo-cli`, and `lkr` (`lkr-dev-cli`) globally across terminal sessions.
 
@@ -100,45 +86,95 @@ Installs `demo-create`, `looker-demo-cli`, and `lkr` (`lkr-dev-cli`) globally ac
 ```bash
 demo-create pre-check --fix
 ```
-Verifies GCP/Looker credentials, prunes deprecated MCP servers (`data-designer`, `bigquery`, `knowledge-catalog`), and syncs CLI-first skills. Fails fast (exit code `3`) if authentication is missing.
+Verifies GCP/Looker credentials, prunes deprecated MCP servers (`data-designer`, `bigquery`, `knowledge-catalog`), and syncs CLI-first skills.
 
-#### Step 3: Configure Authentication (If Blocked)
-```bash
-# 1. Google Cloud & Application Default Credentials (ADC)
-gcloud auth login
-gcloud auth application-default login
-gcloud config set project <PROJECT_ID>
-
-# 2. Looker OAuth Login
-lkr auth login
-```
-> [!TIP]
-> Need to register the `lkr-cli` OAuth client on Looker for the first time, or authenticating over a remote SSH host (`localhost:8000`)? See **[Looker OAuth & SSH Port Forwarding in `docs/PREREQUISITES.md`](docs/PREREQUISITES.md#3-looker-instance-configuration--user-permissions)**.
-
-#### Step 4: Launch the AI Demo Creation Flow
+#### Step 3: Launch the AI Demo Creation Flow
 Instruct your AI assistant in chat:
-> *"Create an end-to-end Looker demo for IoT Fleet Analytics (or SaaS ARR, Retail, Fintech)."*
-
-The AI agent orchestrates the gated workflow interactively:
-- **Interactive Schema Co-Design & Modular DAG Synthesis**: Proposes a Mermaid ERD and 5–10 row sample preview at Gate 1 before synthesizing Parquet tables (`>7,500 rows/sec`) via [`synthetic-data-authoring`](skills/synthetic-data-authoring/SKILL.md) and loading BigQuery.
-- **Fast-Path Deterministic CLI Execution**: Runs compiled CLI subcommands directly (`demo-create data`, `lookml model`, `lookml optimize`, `lookml deploy`, `agent create`, `agent publish`).
-- **On-Demand Specialized Subagents**: Spawns [`data-engineer`](skills/looker-demo-orchestrator/subagents/data-engineer.md), [`lookml-snowflake-modeler`](skills/looker-demo-orchestrator/subagents/lookml-snowflake-modeler.md), [`lookml-dashboard-designer`](skills/looker-demo-orchestrator/subagents/lookml-dashboard-designer.md), [`lookml-qa-validator`](skills/looker-demo-orchestrator/subagents/lookml-qa-validator.md), and [`embed-portal-engineer`](skills/looker-demo-orchestrator/subagents/embed-portal-engineer.md) only when required by the gate.
+> *"Create an end-to-end Looker demo for Mobile Gaming Telemetry (or IoT Fleet Analytics, SaaS ARR, Retail, Fintech)."*
 
 ---
 
-### 💻 Mode 2: Standalone CLI (Headless Engine)
+### 💻 Mode 2: Standalone CLI (15-Gate Headless Engine)
 
-Execute `demo-create` directly from your terminal or CI/CD pipeline, one gate at a time:
+Execute `demo-create` directly from your terminal or CI/CD pipeline, one gate at a time. State is persisted to `.demo-state.json` between calls:
 
 ```bash
-demo-create pre-check --fix
-demo-create data generate --domain retail --row-count 25000 --output-dir scratch/parquet
-demo-create data upload --parquet-dir scratch/parquet --gcp-project my-gcp-project --dataset retail_analytics
-demo-create lookml model --looker-project retail_analytics --dataset retail_analytics --connection my_bq_connection
-demo-create lookml deploy --looker-project retail_analytics --lookml-dir lookml
+# Gates 0–1: Pre-check & Target Confirmation
+demo-create pre-check --fix --gcp-project my-gcp-project
+demo-create confirm-targets --mode full --gcp-account me@example.com --gcp-project my-gcp-project \
+  --looker-account prod --connection my_bq_connection --dataset mobile_gaming_analytics
+
+# Gates 2–4: Propose/Approve Schema & Generate/Upload Data (or `demo-create data adopt --dataset ...`)
+demo-create data propose-schema --schema-file schema.json --preview
+demo-create data approve-schema --row-count 25000 --dataset mobile_gaming_analytics
+demo-create data generate --schema-file schema.json --row-count 25000 --gcp-project my-gcp-project \
+  --dataset mobile_gaming_analytics --upload --json-scorecard
+
+# Gate 5: Seed or Inspect Dataplex Knowledge Catalog (Glossaries, Terms, Aspects, EntryLinks)
+demo-create catalog seed --dataset mobile_gaming_analytics --gcp-project my-gcp-project --mode execute
+
+# Gates 6–10: LookML Model, 3-Pass Polish Certification, Optimizer, QA Deploy & Visual Critique
+demo-create lookml model --looker-project mobile_gaming --dataset mobile_gaming_analytics \
+  --connection my_bq_connection --gcp-project my-gcp-project --profile rich
+demo-create lookml certify-polish --lookml-dir lookml
+demo-create lookml optimize --lookml-dir lookml
+demo-create lookml deploy --looker-project mobile_gaming --lookml-dir lookml
+demo-create lookml approve-critique --looker-project mobile_gaming
+
+# Gates 11–13: Conversational Analytics Agent, Gemini Enterprise Publish & Embed Portal
+demo-create agent create --model mobile_gaming --explore fct_game_sessions --dashboards-dir lookml/dashboards
+demo-create agent publish --agent-id <agent-id>
+demo-create embed scaffold --looker-project mobile_gaming --skip
+
+# Gate 14: Real-Time BigQuery Storage Write API & CDC Streamer on Locked-Down GCE (--no-address + IAP)
+demo-create stream plan --gcp-project my-gcp-project --dataset mobile_gaming_analytics \
+  --target-table fct_game_sessions --frequency 1m --crud-mode upsert_cdc --backfill-mode skip
+demo-create stream deploy --gcp-project my-gcp-project --dataset mobile_gaming_analytics --scaffold-only
+# (After 4-agent customization of ./streamer)
+demo-create stream deploy --gcp-project my-gcp-project --dataset mobile_gaming_analytics --execute-infra
 ```
 
-State is persisted to `.demo-state.json` between calls, so later gates inherit earlier answers and you only pass what changes. See [`docs/COMMANDS.md`](docs/COMMANDS.md) for ephemeral `uvx`, `.venv`, and local editable installation patterns.
+---
+
+## The 15-Stage Gate Reference (`demo-create status`)
+
+Use `demo-create status` (or `demo-create status --json`) at any point to inspect completed gates and get the literal next command to run:
+
+| Gate `#` | Gate ID | Stage | Human Gate | Canonical CLI Command |
+| ---: | :--- | :--- | :---: | :--- |
+| **0** | `gate_0a_precheck` | Environment, credential & skill-tree audit | `--` | `demo-create pre-check --fix --gcp-project <gcp-project>` |
+| **1** | `gate_0b_confirm_targets` | Deployment mode (`full`\|`bq_only`) & target confirmation | `confirm` | `demo-create confirm-targets --gcp-account <acct> --gcp-project <proj> [--mode full\|bq_only]` |
+| **2** | `gate_1a_propose_schema` | Schema blueprint authoring & 5-row micro-sample preview | `--` | `demo-create data propose-schema --schema-file <schema-file> --preview` *(or `data adopt`)* |
+| **3** | `gate_1b_approve_schema` | Schema ERD & target row volume approval | `confirm` | `demo-create data approve-schema --row-count <row-count> --dataset <dataset-id>` |
+| **4** | `gate_1c_generate_data` | Modular DAG synthesis & BigQuery ADC load | `--` | `demo-create data generate --schema-file <file> --row-count <n> --dataset <ds> --upload --json-scorecard` |
+| **5** | `gate_1d_catalog` | Dataplex Knowledge Catalog semantic curation & seeding | `confirm` | `demo-create catalog seed --dataset <ds> --gcp-project <proj>` *(or `inspect` / `sync` / `--skip`)* |
+| **6** | `gate_2a_lookml_model` | Semantic LookML modeling & draft dashboard scaffolding | `--` | `demo-create lookml model --looker-project <proj> --dataset <ds> --connection <conn>` |
+| **7** | `gate_2b_certify_polish` | 3-Pass Executive Dashboard Polish & filtered measure audit | `confirm` | `demo-create lookml certify-polish --lookml-dir <lookml-dir>` |
+| **8** | `gate_3a_optimize` | LookML Server Performance Optimizer gate | `confirm` | `demo-create lookml optimize --lookml-dir <lookml-dir>` *(or `--skip`)* |
+| **9** | `gate_3b_deploy` | Pre-deployment validation, query testing & production release | `--` | `demo-create lookml deploy --looker-project <looker-project> --lookml-dir <lookml-dir>` |
+| **10** | `gate_3c_critique` | Post-deploy dashboard screenshot critique (Pass 3) | `confirm` | `demo-create lookml approve-critique --looker-project <looker-project>` |
+| **11** | `gate_4_agent` | Conversational Analytics agent provisioning & golden queries | `confirm` | `demo-create agent create --model <model> --explore <explore>` *(or `--skip`)* |
+| **12** | `gate_5_publish` | Gemini Enterprise publishing | `confirm` | `demo-create agent publish --agent-id <agent-id>` *(or `--skip`)* |
+| **13** | `gate_6_embed` | External Embedded Analytics portal scaffolding | `confirm` | `demo-create embed scaffold --looker-project <looker-project>` *(or `--skip`)* |
+| **14** | `gate_7_stream` | Live BigQuery Storage Write API & CDC streamer on GCE | `confirm` | `demo-create stream plan` $\rightarrow$ `stream deploy [--scaffold-only \| --execute-infra]` *(or `--skip`)* |
+
+---
+
+## Commands Quick Reference
+
+| Command Group | Key Subcommands | Purpose |
+| :--- | :--- | :--- |
+| **`status`** | `demo-create status [--json]` | Reports `completed_gates`, `current_gate` (`0..14`), `requires_human_confirmation`, and `next_command`. |
+| **`pre-check`** | `demo-create pre-check [--fix] [--json]` | Audits GCP/Looker auth, prunes deprecated MCP servers/skills, and syncs skills into `~/.gemini/config/skills/`. |
+| **`confirm-targets`** | `demo-create confirm-targets [--mode full\|bq_only]` | Records human-confirmed GCP account, GCP project, Looker account, DB connection, and deployment mode. |
+| **`data`** | `propose-schema`, `approve-schema`, `generate`, `upload`, `adopt`, `inspect` | Co-designs 3NF schemas, synthesizes Parquet files, loads BigQuery datasets with Day Partitioning & Clustering, or adopts existing BigQuery datasets. |
+| **`catalog`** | `seed`, `inspect`, `sync`, `profiles` | Seeds live Dataplex Knowledge Catalog `AspectTypes`, Glossaries, Terms, and `EntryLinks` (hybrid `--curation-file` + BigQuery auto-inference), inspects existing catalog metadata into `.demo-catalog-<dataset>.json`, or syncs catalog metadata into LookML refinements. |
+| **`lookml`** | `model`, `certify-polish`, `optimize`, `restore`, `clean-root`, `deploy`, `approve-critique` | Generates catalog-aware LookML, certifies 3-Pass Dashboard Polish, applies performance optimizations (with `.backup_pre_opt` snapshots), validates 100% of queries, and deploys to production. |
+| **`agent`** | `create`, `golden-queries`, `publish` | Provisions Looker CA AI Agents, extracts & links 1:1 Golden Queries (`expanded_share_url`), and publishes to Gemini Enterprise. |
+| **`ge`** | `status`, `configure`, `publish` | Inspects Looker Gemini enablement, discovers GCP Discovery Engine apps, binds `roles/discoveryengine.admin` to the Looker SA, and publishes agents. |
+| **`embed`** | `scaffold` | Provisions Looker embed settings (group, folder, dashboard move, CA agent share, themes) and scaffolds a branded React/Vite + FastAPI `looker-embed-demo` portal. |
+| **`stream`** | `plan`, `deploy`, `delete` | Plans, scaffolds (`--scaffold-only`), deploys (`--execute-infra`), and tears down (`delete`) a catalog-driven Go BigQuery Storage Write API & CDC streamer on a locked-down GCE `e2-micro` VM (`--no-address` + IAP + `<dataset>-streamer.service`). |
+| **`env`** | `init`, `run-script`, `python` | Initializes a workspace `.venv` or executes ad-hoc Python scripts inside the CLI's bundled environment. |
 
 ---
 
@@ -151,38 +187,3 @@ State is persisted to `.demo-state.json` between calls, so later gates inherit e
 | **[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)** | **Architecture & Invariants** — How the CLI is layered, skill organization, and the invariants a change must preserve. |
 | **[`CONTRIBUTING.md`](CONTRIBUTING.md)** | Setup, the local gate, and how to add a command. |
 | **[`AGENTS.md`](AGENTS.md)** | Instructions for an AI agent orchestrating a build. |
-
-## Commands Quick Reference
-
-Use `demo-create status` (or `demo-create status --json`) at any point to inspect completed gates and get the literal next command to run:
-
-```console
-$ demo-create status
-┏━━━┳━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━┳━━━━━━━━━━━━┓
-┃   ┃ Gate ┃ Stage                                    ┃ Status  ┃ Human gate ┃
-┡━━━╇━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━╇━━━━━━━━━━━━┩
-│ ✓ │    0 │ Environment audit & 4-target confirmation│ done    │ confirm    │
-│ ✓ │    1 │ Schema co-design, synthesis & BQ load    │ done    │ confirm    │
-│ ▶ │    2 │ Semantic modeling & dashboard generation │ current │ --         │
-│ · │    3 │ Optimization, validation & release       │ pending │ confirm    │
-│ · │    4 │ Conversational Analytics agent grounding │ pending │ confirm    │
-│ · │    5 │ Gemini Enterprise publishing             │ pending │ confirm    │
-└───┴──────┴──────────────────────────────────────────┴─────────┴────────────┘
-→ Gate 2: Semantic modeling & dashboard generation
-    $ demo-create lookml model --looker-project retail_demo --dataset retail \
-        --connection acme_bigquery --gcp-project acme-analytics
-```
-
-| Command Group | Key Subcommands | Purpose |
-| :--- | :--- | :--- |
-| **`status`** | `demo-create status [--json]` | Reports completed gates, current gate, `requires_human_confirmation`, and `next_command`. |
-| **`pre-check`** | `demo-create pre-check [--fix] [--json]` | Audits GCP/Looker auth, prunes deprecated MCP servers/skills, and syncs skills into `~/.gemini/config/skills/` (`data-design/`, `lookml/`, `embed-portal/`). |
-| **`data`** | `generate`, `upload [--verify-only]`, `inspect` | Synthesizes local Parquet files, loads BigQuery datasets with Day Partitioning & Clustering, and inspects schemas. |
-| **`lookml`** | `model`, `clean-root`, `optimize`, `restore`, `deploy` | Generates LookML from BigQuery/Parquet, cleans root duplicates, applies performance optimizations (with `.backup_pre_opt` snapshots), validates queries, and deploys to production. |
-| **`agent`** | `create`, `golden-queries`, `publish` | Provisions Looker CA AI Agents, extracts & links 1:1 Golden Queries (`expanded_share_url`), and publishes to Gemini Enterprise. |
-| **`ge`** | `status`, `configure`, `publish` | Inspects Looker Gemini enablement, discovers GCP Discovery Engine apps, binds `roles/discoveryengine.admin` to the Looker SA, and publishes agents. |
-| **`embed`** | `scaffold` | Scaffolds a branded React/Vite `looker-embed-demo` portal pre-wired with Looker, dashboard, and CA agent IDs. |
-| **`env`** | `init`, `run-script`, `python` | Initializes a workspace `.venv` or executes ad-hoc Python scripts inside the CLI's bundled environment. |
-
-👉 **[Exhaustive Command & Flag Reference → `docs/COMMANDS.md`](docs/COMMANDS.md)**
-👉 **[Architecture, Gated State & Skill Layout → `docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)**

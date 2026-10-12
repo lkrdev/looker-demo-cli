@@ -1,0 +1,18 @@
+[Unit]
+Description=Looker Demo BigQuery Storage Write API & CDC Streamer ({{BQ_DATASET}})
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment=GCP_PROJECT={{GCP_PROJECT}}
+Environment=GCP_DATASET={{BQ_DATASET}}
+Environment=SECRET={{SERVICE_NAME}}-secret
+ExecStart=/usr/local/bin/{{SERVICE_NAME}} run --project={{GCP_PROJECT}} --dataset={{GCP_PROJECT}}.{{BQ_DATASET}} --table={{TARGET_TABLE}} --interval={{STREAM_INTERVAL}} --crud-mode={{CRUD_MODE}} --skip-backfill --log-name={{LOG_NAME}} --log-severity={{LOG_SEVERITY}} --state=/var/lib/streamer/state.gob --http=:8080
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

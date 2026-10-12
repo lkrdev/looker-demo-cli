@@ -140,6 +140,20 @@ class FlowState(BaseModel):
     ge_location: str | None = None
     ge_service_account_email: str | None = None
 
+    # Live BigQuery Streaming & CDC (Gate 14 / gate_7_stream)
+    stream_status: Literal["pending", "planned", "deployed", "skipped"] = "pending"
+    stream_planned: bool = False
+    stream_deployed: bool = False
+    stream_plan_path: Path | None = None
+    stream_dir: Path | None = None
+    stream_frequency: str = "1m"
+    stream_crud_mode: Literal["insert_only", "upsert_cdc", "full_crud"] = "upsert_cdc"
+    stream_backfill_mode: Literal["skip", "local", "vm", "sample_mirror"] = "skip"
+    stream_target_table: str | None = None
+    stream_log_name: str | None = None
+    stream_vm_name: str | None = None
+    stream_zone: str = "us-central1-a"
+
     # Outcome of the most recent command
     status: Literal["pending", "in_progress", "completed", "failed"] = "pending"
     error_message: str | None = None

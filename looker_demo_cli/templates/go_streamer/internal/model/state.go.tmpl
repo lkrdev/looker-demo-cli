@@ -1,0 +1,194 @@
+package model
+
+import (
+	"compress/gzip"
+	"encoding/gob"
+	"os"
+	"slices"
+	"time"
+)
+
+type ProductMeta struct {
+	ID          int64
+	Cost        float64
+	Category    string
+	Name        string
+	Brand       string
+	RetailPrice float64
+	Department  string
+	SKU         string
+	DCID        int64
+}
+
+type FunnelItem struct {
+	UserID        int64
+	ProductID     int64
+	SessionID     string
+	SeqNum        int64
+	AdEventID     *int64
+	OS            string
+	Browser       string
+	TrafficSource string
+	DueUnix       int64
+}
+
+type PendingOrder struct {
+	OrderItemID     int64
+	OrderID         int64
+	UserID          int64
+	InventoryItemID int64
+	SalePrice       float64
+	Status          string
+	CreatedAt       string
+	ShippedAt       *string
+	DeliveredAt     *string
+	ReturnedAt      *string
+	NextStatus      string
+	NextDueUnix     int64
+	OrderItems      []TxItem
+	IsPrimaryItem   bool
+	ChangeType      string
+}
+
+type TimeInterval struct {
+	StartMin int64 // unix timestamp divided by 60
+	EndMin   int64 // inclusive unix timestamp divided by 60
+}
+
+type State struct {
+	Bootstrapped    bool
+	CrudMode        string
+	TargetTable     string
+	NextUserID      int64
+	NextProductID   int64
+	NextInventoryID int64
+	NextOrderID     int64
+	NextOrderItemID int64
+	NextEventID     int64
+	NextCampaignID  int64
+	NextAdGroupID   int64
+	NextKeywordID   int64
+	NextAdEventID   int64
+
+	Users           []UserRow
+	PowerUserIDs    []int64
+	HeavyBrowserIDs []int64
+
+	Products        []ProductMeta
+	OnboardedBrands []string
+
+	AvailableInventory map[int64][]int64
+	InventoryCreated   map[int64]string
+
+	KeywordIDs     []int64
+	RecentAdClicks []int64
+
+	ViewedItems []FunnelItem
+	CartedItems []FunnelItem
+
+	PendingOrders []PendingOrder
+
+	Intervals []TimeInterval
+}
+
+func NewState() *State {
+	return &State{
+		CrudMode:           "{{CRUD_MODE}}",
+		TargetTable:        "{{TARGET_TABLE}}",
+		NextUserID:         1,
+		NextProductID:      1,
+		NextInventoryID:    1,
+		NextOrderID:        1,
+		NextOrderItemID:    1,
+		NextEventID:        1,
+		NextCampaignID:     1,
+		NextAdGroupID:      1,
+		NextKeywordID:      1,
+		NextAdEventID:      1,
+		AvailableInventory: make(map[int64][]int64),
+		InventoryCreated:   make(map[int64]string),
+	}
+}
+
+func LoadState(path string) (*State, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return NewState(), nil
+		}
+		return nil, err
+	}
+	defer f.Close()
+	gz, err := gzip.NewReader(f)
+	if err != nil {
+		return nil, err
+	}
+	defer gz.Close()
+	var st State
+	if err := gob.NewDecoder(gz).Decode(&st); err != nil {
+		return nil, err
+	}
+	if st.AvailableInventory == nil {
+		st.AvailableInventory = make(map[int64][]int64)
+	}
+	if st.InventoryCreated == nil {
+		st.InventoryCreated = make(map[int64]string)
+	}
+	return &st, nil
+}
+
+func (s *State) Save(path string) error {
+	tmp := path + ".tmp"
+	f, err := os.Create(tmp)
+	if err != nil {
+		return err
+	}
+	gz, err := gzip.NewWriterLevel(f, gzip.BestSpeed)
+	if err != nil {
+		f.Close()
+		return err
+	}
+	if err := gob.NewEncoder(gz).Encode(s); err != nil {
+		gz.Close()
+		f.Close()
+		return err
+	}
+	if err := gz.Close(); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
+func (s *State) RecordMinute(ts time.Time) {
+	m := ts.UTC().Unix() / 60
+	s.Intervals = append(s.Intervals, TimeInterval{StartMin: m, EndMin: m})
+	slices.SortFunc(s.Intervals, func(a, b TimeInterval) int {
+		if a.StartMin != b.StartMin {
+			return int(a.StartMin - b.StartMin)
+		}
+		return int(a.EndMin - b.EndMin)
+	})
+	merged := s.Intervals[:0]
+	for _, iv := range s.Intervals {
+		if len(merged) == 0 || iv.StartMin > merged[len(merged)-1].EndMin+1 {
+			merged = append(merged, iv)
+		} else if iv.EndMin > merged[len(merged)-1].EndMin {
+			merged[len(merged)-1].EndMin = iv.EndMin
+		}
+	}
+	s.Intervals = merged
+}
+
+func (s *State) IsMinuteCovered(ts time.Time) bool {
+	m := ts.UTC().Unix() / 60
+	for _, iv := range s.Intervals {
+		if m >= iv.StartMin && m <= iv.EndMin {
+			return true
+		}
+	}
+	return false
+}

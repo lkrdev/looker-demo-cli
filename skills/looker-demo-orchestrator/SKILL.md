@@ -8,14 +8,14 @@ description: Master orchestration skill for designing, generating, modeling, and
 This skill defines the mandatory operational procedure for an AI agent or engineer creating full-stack data demos on Google Cloud BigQuery and Looker.
 
 > [!CAUTION]
-> **CRITICAL RULE: THE 14 GATES (`0..13`) ARE MANDATORY AND MUST NOT BE BATCHED.**
-> There is deliberately no single command that builds a demo end to end -- the monolithic `demo-create run` was removed in 0.3.0 precisely because it bypassed iterative schema co-design and volume validation. The agent **MUST** orchestrate the 14 gated subcommands (`0..13`) interactively stage-by-stage as detailed below, pausing for human confirmation wherever `requires_human_confirmation` is `true` and recording explicit user decisions in `.demo-state.json`.
+> **CRITICAL RULE: THE 15 GATES (`0..14`) ARE MANDATORY AND MUST NOT BE BATCHED.**
+> There is deliberately no single command that builds a demo end to end -- the monolithic `demo-create run` was removed in 0.3.0 precisely because it bypassed iterative schema co-design and volume validation. The agent **MUST** orchestrate the 15 gated subcommands (`0..14`) interactively stage-by-stage as detailed below, pausing for human confirmation wherever `requires_human_confirmation` is `true` and recording explicit user decisions in `.demo-state.json`.
 
 ---
 
-## Core Execution Architecture: CLI-First with On-Demand Subagents (14-Stage State Machine)
+## Core Execution Architecture: CLI-First with On-Demand Subagents (15-Stage State Machine)
 
-To eliminate subagent initialization drag, serialization latency, and background file-write race conditions, the workflow follows a **CLI-First 14-Gate Architecture (`0..13`) with On-Demand Subagents**:
+To eliminate subagent initialization drag, serialization latency, and background file-write race conditions, the workflow follows a **CLI-First 15-Gate Architecture (`0..14`) with On-Demand Subagents**:
 
 ```mermaid
 graph TD
@@ -28,7 +28,8 @@ graph TD
     DataBranch -->|Adopt Existing BigQuery Dataset| AdoptData["Adopt Existing BigQuery Dataset<br/>(demo-create data adopt --dataset &lt;dataset-id&gt;)<br/>Satisfies Gates 2-4"]
     Gate4 --> Gate5{"Gate 5 (gate_1d_catalog): Knowledge Catalog Semantic Curation<br/>[requires_human_confirmation=true]<br/>(ask_question -> demo-create catalog seed / inspect / sync [--skip])"}
     AdoptData --> Gate5
-    Gate5 -->|Seed / Inspect / Sync / Skip| Gate6["Gate 6 (gate_2a_lookml_model): Semantic Modeling & Draft Dashboards<br/>(demo-create lookml model [--catalog &lt;snapshot&gt;] [--profile rich|hybrid|minimal])"]
+    Gate5 -->|mode = full| Gate6["Gate 6 (gate_2a_lookml_model): Semantic Modeling & Draft Dashboards<br/>(demo-create lookml model [--catalog &lt;snapshot&gt;] [--profile rich|hybrid|minimal])"]
+    Gate5 -->|mode = bq_only| Gate14{"Gate 14 (gate_7_stream): Live BigQuery Streaming & CDC?<br/>[requires_human_confirmation=true]<br/>(ask_question -> demo-create stream plan / deploy / delete [--skip])"}
     Gate6 --> SnowflakeBranch{"Is Schema 3NF Snowflake<br/>with Chasm Traps?"}
     SnowflakeBranch -->|Yes: Spawn Subagent| S_Snowflake["Subagent: lookml-snowflake-modeler<br/>(NDT Rollups & Chasm Trap Elimination)"]
     SnowflakeBranch -->|No: Standard Star Schema| Gate7{"Gate 7 (gate_2b_certify_polish): 3-Pass Dashboard Polish & Audit<br/>[requires_human_confirmation=true]<br/>(Apply looker-visualizations -> demo-create lookml certify-polish)"}
@@ -50,15 +51,18 @@ graph TD
     CA_CLI --> Gate12{"Gate 12 (gate_5_publish): Publish to Gemini Enterprise?<br/>[requires_human_confirmation=true]<br/>(ask_question -> demo-create agent publish [--skip])"}
     Gate12 -->|Yes or --skip| Gate13
     Gate13 -->|Yes: Scaffold Portal| EmbedCLI["Scaffold External Portal<br/>(demo-create embed scaffold + embed-portal-engineer)"]
-    Gate13 -->|No: --skip| DeliveryReport["Orchestrator: Final Delivery Report<br/>(DELIVERY_REPORT.md -> links to SPEC.md)"]
-    EmbedCLI --> DeliveryReport
+    Gate13 -->|No: --skip| Gate14
+    EmbedCLI --> Gate14
+    Gate14 -->|Yes: Plan & Deploy Streamer| StreamCLI["2-Phase Go CDC Streamer on Locked-Down GCE<br/>(stream plan -> stream deploy + 4 Subagents -> stream deploy --execute-infra)"]
+    Gate14 -->|No: --skip| DeliveryReport["Orchestrator: Final Delivery Report<br/>(DELIVERY_REPORT.md -> links to SPEC.md)"]
+    StreamCLI --> DeliveryReport
 ```
 
 | Component | Execution Mode | Responsibility & Scope |
 |---|---|---|
-| **Parent Orchestrator** | Direct Parent Turn | Interactive co-design gates (`ask_question`), state-tracked confirmation/certification CLI commands (`pre-check`, `confirm-targets`, `data propose-schema`, `data approve-schema`, `data generate`, `data adopt`, `catalog inspect`, `lookml model`, `lookml certify-polish`, `lookml optimize [--skip]`, `lookml deploy`, `lookml approve-critique`, `agent create [--skip]`, `agent publish [--skip]`, `embed scaffold [--skip]`), Modular DAG verification scorecard review, and final delivery report. |
+| **Parent Orchestrator** | Direct Parent Turn | Interactive co-design gates (`ask_question`), state-tracked confirmation/certification CLI commands (`pre-check`, `confirm-targets`, `data propose-schema`, `data approve-schema`, `data generate`, `data adopt`, `catalog inspect`, `lookml model`, `lookml certify-polish`, `lookml optimize [--skip]`, `lookml deploy`, `lookml approve-critique`, `agent create [--skip]`, `agent publish [--skip]`, `embed scaffold [--skip]`, `stream plan [--skip]`, `stream deploy [--execute-infra]`, `stream delete`), Modular DAG verification scorecard review, and final delivery report. |
 | [`synthetic-data-authoring`](../synthetic-data-authoring/SKILL.md) | **Companion Core Skill** | Guides realistic synthetic dataset design across 4 pillars: non-uniform distributions (Pareto/Log-Normal), cross-column tier coupling, temporal growth/seasonality curves, and Looker Explore optimization. |
-| [`demo-spec`](../demo-spec/SKILL.md) | **Companion Core Skill** | Asynchronously creates and maintains `SPEC.md` as the living technical architecture document across all 14 gates (`0..13`), updating quietly on disk without chat dumping. |
+| [`demo-spec`](../demo-spec/SKILL.md) | **Companion Core Skill** | Asynchronously creates and maintains `SPEC.md` as the living technical architecture document across all 15 gates (`0..14`), updating quietly on disk without chat dumping. |
 | [`bigquery-metadata`](../bigquery-metadata/SKILL.md) | **Companion Core Skill** | Extracts BigQuery schemas, PK/FK constraints, and partition info via native `bq` CLI into `SPEC.md` without custom Python scripts or MCP servers. |
 | [`knowledge-catalog-metadata`](../knowledge-catalog-metadata/SKILL.md) | **Companion Core Skill** | Extracts Dataplex Universal Catalog glossaries, custom aspects, data profiling stats, and quality scores via `demo-create catalog inspect` or `gcloud dataplex` CLI into `SPEC.md` and generates catalog snapshots for LookML modeling. |
 | [`lookml-filtered-measures`](../lookml-filtered-measures/SKILL.md) | **Companion Core Skill** | Enforces mandatory `SELECT DISTINCT` grounding before writing any `filters: [...]` in LookML measures, preventing `0`/`NULL` ratios (audited at Gate 7 by `lookml certify-polish`). |
@@ -67,13 +71,17 @@ graph TD
 | [`lookml-dashboard-designer`](subagents/lookml-dashboard-designer.md) | **Mandatory Gate 7 Subagent** | Executes the 3-Pass Executive Dashboard Polish protocol (theme-inheriting `type: text` headers, centered legends, independent dual-axis formatting, transparent grids, and screenshot critique) prior to running `demo-create lookml certify-polish`. |
 | [`lookml-qa-validator`](subagents/lookml-qa-validator.md) | **On-Demand Subagent** | Spawned ONLY at Gate 9 (`gate_3b_deploy`) when `demo-create lookml deploy` encounters validation errors or failing queries; runs up to 3 self-healing loops via `lookml-dashboard-to-query`. |
 | [`embed-portal-engineer`](subagents/embed-portal-engineer.md) | **On-Demand Subagent** | Spawned ONLY at Gate 13 (`gate_6_embed`) if external embed demo portal scaffolding is confirmed by the user. |
+| [`bq-profiling-researcher`](subagents/bq-profiling-researcher.md) | **Gate 14 Subagent (Agent 1)** | Profiles existing BigQuery tables in `<gcp_project>.<dataset>` via `bigquery-metadata` and `knowledge-catalog-metadata` (`bq` / `gcloud dataplex`), extracting schemas, PK/FKs, partition/clustering clauses, seasonality weights, and numeric moments into `streamer/seed_data.json` / `profile.json`. |
+| [`catalog-spec-architect`](subagents/catalog-spec-architect.md) | **Gate 14 Subagent (Agent 2)** | Aligns Dataplex Knowledge Catalog glossary terms, custom aspects, and cross-column synthetic business rules with `SPEC.md` (`## Section 4B: Real-Time Streaming & CDC Architecture`) and `.demo-stream-plan.json`, defining entity lifecycle state machines (`INSERT` $\to$ `UPSERT` $\to$ `DELETE`), anomaly bursts, and LookML `max_staleness` alignment. |
+| [`go-bq-cdc-engineer`](subagents/go-bq-cdc-engineer.md) | **Gate 14 Subagent (Agent 3)** | Owns `streamer/internal/bq/*`, `streamer/internal/model/rows.go`, and `streamer/internal/logging/cloudlog.go`; customizes Go protobuf descriptors (`storagepb.TableSchema`), dynamic protobuf serialization (`RowToProtoBytes`), `_CHANGE_TYPE` CDC mutations, BigQuery DDL (`PRIMARY KEY NOT ENFORCED` + `max_staleness = INTERVAL 0 SECOND`), `managedwriter` DefaultStream batching, and Cloud Logging v2 output. |
+| [`go-sim-cli-engineer`](subagents/go-sim-cli-engineer.md) | **Gate 14 Subagent (Agent 4)** | Owns `streamer/internal/sim/*`, `streamer/internal/model/state.go`, `streamer/internal/model/seed.go`, `streamer/main.go`, `streamer/cloud.go`, `streamer/deploy-bq.sh`, and `streamer/main_test.go`; customizes the simulation engine (`Bootstrap`, `Tick`, Pareto/Log-Normal sampling, CDC state transitions), atomic `state.gob` persistence, Kong CLI flags, locked-down GCE deployment (`--no-address` private IP only), and verifies `go test ./...` passes 100%. |
 
 > [!IMPORTANT]
 > ### Subagent Lifecycle Kill-Fence & Headless Rollback Protocol
 > 1. **Subagent Kill-Fence**: Before any file revert, rollback, or manual code restoration, the orchestrator **MUST kill all running subagents** via `manage_subagents(Action='kill_all')` (or `manage_subagents(Action='kill', ConversationIds=[...])`) to prevent background tasks from overwriting restored files.
 > 2. **Headless Directory Snapshots**: In headless environments without Git tracking, `demo-create lookml optimize` automatically snapshots pre-optimization files to `lookml/.backup_pre_opt`. If the user rejects optimization or requests a rollback, execute `demo-create lookml restore --lookml-dir <dir>` to cleanly restore files in 1 command.
 > 3. **Artifact Boundaries**: `ArtifactMetadata` in `write_to_file` is strictly for files inside `<appDataDir>/brain/<conversation-id>/`. For workspace files, never supply `ArtifactMetadata`.
-> 4. **Living `SPEC.md` Quiet Maintenance**: Throughout every conversation and across all 14 gates, the orchestrator quietly maintains `SPEC.md` in the workspace root following [`demo-spec`](../demo-spec/SKILL.md). Never dump `SPEC.md` into chat unless a significant structural change was made. `DELIVERY_REPORT.md` must always link to `SPEC.md`.
+> 4. **Living `SPEC.md` Quiet Maintenance**: Throughout every conversation and across all 15 gates, the orchestrator quietly maintains `SPEC.md` in the workspace root following [`demo-spec`](../demo-spec/SKILL.md). Never dump `SPEC.md` into chat unless a significant structural change was made. `DELIVERY_REPORT.md` must always link to `SPEC.md`.
 > 5. **Mandatory `.gitignore` Verification for `.env` Files**: Whenever creating or modifying a `.env` file (e.g., Looker API credentials, GCP settings, or Embed Portal environment), confirm that `.gitignore` exists in the working directory and includes `.env` (and `**/.env`) before writing credentials to disk.
 
 ---
@@ -92,12 +100,12 @@ The envelope reports:
 | Field | Use |
 | :--- | :--- |
 | `completed_gates` | Which stages are already done; never redo one. |
-| `current_gate` | Where the build actually is (`0..13`). |
+| `current_gate` | Where the build actually is (`0..14`). |
 | `next_command` | The literal command to run, with every known value substituted and `<placeholder>` where a value is still needed. |
 | `requires_human_confirmation` | **Branch on this.** When `true`, call `ask_question` with the gate's `human_checkpoint` *before* running `next_command` (or passing `--skip`). |
 | `is_complete` | When `true`, the build is finished and `next_actions` is empty. |
 
-### The 14-Stage Gate State Machine (`looker_demo_cli/gates.py`)
+### The 15-Stage Gate State Machine (`looker_demo_cli/gates.py`)
 
 | Gate `#` | Gate ID | Title | `requires_human_confirmation` | Canonical CLI Command Template |
 | ---: | :--- | :--- | :---: | :--- |
@@ -106,7 +114,7 @@ The envelope reports:
 | **2** | `gate_1a_propose_schema` | Schema blueprint authoring & 5-row micro-sample preview | `False` | `demo-create data propose-schema --schema-file <schema-file> --preview` |
 | **3** | `gate_1b_approve_schema` | Schema ERD & target row volume approval | **`True`** | `demo-create data approve-schema --row-count <row-count> --dataset <dataset-id>` |
 | **4** | `gate_1c_generate_data` | Modular DAG synthesis & BigQuery load | `False` | `demo-create data generate --schema-file <schema-file> --row-count <row-count> --gcp-project <gcp-project> --dataset <dataset-id> --upload --json-scorecard` |
-| **5** | `gate_1d_catalog` | Knowledge Catalog semantic curation & enrichment | **`True`** | `demo-create catalog seed --dataset <dataset-id> --gcp-project <gcp-project>` *(or `inspect` / `sync` / `--skip`; completes workflow when `--mode bq_only`)* |
+| **5** | `gate_1d_catalog` | Knowledge Catalog semantic curation & enrichment | **`True`** | `demo-create catalog seed --dataset <dataset-id> --gcp-project <gcp-project>` *(or `inspect` / `sync` / `--skip`; in `bq_only` mode, auto-completes Gates 6–13 and advances to Gate 14 `gate_7_stream`)* |
 | **6** | `gate_2a_lookml_model` | Semantic LookML modeling & draft dashboard scaffolding | `False` | `demo-create lookml model --looker-project <looker-project> --dataset <dataset-id> --connection <connection-name> --gcp-project <gcp-project>` |
 | **7** | `gate_2b_certify_polish` | 3-Pass Executive Dashboard Polish & filtered measure audit | **`True`** | `demo-create lookml certify-polish --lookml-dir <lookml-dir>` |
 | **8** | `gate_3a_optimize` | LookML Server Performance Optimizer gate | **`True`** | `demo-create lookml optimize --lookml-dir <lookml-dir>` *(or `--skip`)* |
@@ -115,6 +123,7 @@ The envelope reports:
 | **11** | `gate_4_agent` | Conversational Analytics agent provisioning & golden queries | **`True`** | `demo-create agent create --model <model-name> --explore <explore-name>` *(or `--skip`)* |
 | **12** | `gate_5_publish` | Gemini Enterprise publishing | **`True`** | `demo-create agent publish --agent-id <agent-id>` *(or `--skip`)* |
 | **13** | `gate_6_embed` | External Embedded Analytics portal scaffolding | **`True`** | `demo-create embed scaffold --looker-project <looker-project>` *(or `--skip`)* |
+| **14** | `gate_7_stream` | Optional live BigQuery streaming & CDC on locked-down GCE | **`True`** | `demo-create stream plan --gcp-project <gcp-project> --dataset <dataset-id>` *(or `stream deploy` / `stream delete` / `--skip`)* |
 
 The gate sections below explain *why* each gate exists and precisely what to
 confirm with the user. `demo-create status` tells you *where you are*. Prefer the
@@ -171,8 +180,8 @@ lkr auth list
 Before designing schemas, creating BigQuery datasets, or touching Looker, the agent **MUST explicitly prompt the user** via `ask_question` to confirm their **Deployment Mode** and environment targets:
 
 0. **Deployment Mode (`--mode full|bq_only`)**:
-   - **Full Looker Demo (`--mode full`, default)**: End-to-end BigQuery + Knowledge Catalog + LookML + Conversational Analytics Agent + Embed Portal (`Gates 0..13`). Requires all 4 targets below and strictly enforces Looker authentication at Gate 1 (re-probing `check_looker_auth()` if `looker_authenticated` was `False`).
-   - **BigQuery + Knowledge Catalog Only (`--mode bq_only`)**: BigQuery dataset synthesis/adoption + Dataplex Knowledge Catalog semantic curation/seeding (`Gates 0..5`). Completes the workflow immediately after Gate 5 (`gate_1d_catalog`) without requiring Looker credentials or a Looker connection (`--looker-account` and `--connection` are optional).
+   - **Full Looker Demo (`--mode full`, default)**: End-to-end BigQuery + Knowledge Catalog + LookML + Conversational Analytics Agent + Embed Portal + Optional Live BigQuery Streaming (`Gates 0..14`). Requires all 4 targets below and strictly enforces Looker authentication at Gate 1 (re-probing `check_looker_auth()` if `looker_authenticated` was `False`).
+   - **BigQuery + Knowledge Catalog Only (`--mode bq_only`)**: BigQuery dataset synthesis/adoption + Dataplex Knowledge Catalog semantic curation/seeding (`Gates 0..5`), followed by auto-completion of Looker Gates 6–13 and advancement to Gate 14 (`gate_7_stream`: Optional Live BigQuery Streaming & CDC) without requiring Looker credentials or a Looker connection (`--looker-account` and `--connection` are optional).
 1. **GCP User Account**: (e.g. `admin@example.com` vs `analyst@company.com`)
 2. **Target Google Cloud Project ID**: (e.g. `my-analytics-gcp-project`, `demo-data-warehouse`)
 3. **Target Looker Instance / OAuth Account** *(required when `--mode full`, optional when `--mode bq_only`)*: (e.g. `my-company.looker.com` vs `demo-instance` from `lkr auth list` or `available_oauth_instances`)
@@ -183,7 +192,7 @@ Before designing schemas, creating BigQuery datasets, or touching Looker, the ag
 Once the human confirms the mode and targets, **record them in `.demo-state.json`** using `demo-create confirm-targets`:
 
 ```bash
-# Full Looker Demo (Gates 0..13, default):
+# Full Looker Demo (Gates 0..14, default):
 demo-create confirm-targets \
   --mode full \
   --gcp-account <gcp-account> \
@@ -192,7 +201,7 @@ demo-create confirm-targets \
   --connection <connection-name> \
   [--dataset <dataset-id>]
 
-# BigQuery + Knowledge Catalog Only (Gates 0..5):
+# BigQuery + Knowledge Catalog Only (Gates 0..5 -> Gate 14):
 demo-create confirm-targets \
   --mode bq_only \
   --gcp-account <gcp-account> \
@@ -235,7 +244,8 @@ graph TD
     C --> Gate5{"Gate 5 (gate_1d_catalog): Knowledge Catalog Semantic Curation<br/>[requires_human_confirmation=true]<br/>(ask_question -> demo-create catalog seed / inspect / sync [--skip])"}
     D --> Gate5
     Gate5 -->|mode = full| F["Gate 6 (gate_2a_lookml_model): Semantic LookML Modeling<br/>demo-create lookml model [--catalog &lt;snapshot&gt;] [--profile rich|hybrid|minimal]"]
-    Gate5 -->|mode = bq_only| BQComplete["Workflow Complete (is_complete=true)<br/>Final Delivery Report (DELIVERY_REPORT.md -> SPEC.md)"]
+    Gate5 -->|mode = bq_only| G["Gate 14 (gate_7_stream): Optional Live BigQuery Streaming & CDC<br/>demo-create stream plan / deploy / delete [--skip]"]
+    G --> BQComplete["Workflow Complete (is_complete=true)<br/>Final Delivery Report (DELIVERY_REPORT.md -> SPEC.md)"]
 ```
 
 ### Path B: Adopting an Existing BigQuery Dataset (`demo-create data adopt`)
@@ -283,7 +293,7 @@ demo-create catalog seed --skip   # or catalog inspect --skip
 
 This generates a structured `CatalogSnapshot` JSON (`.demo-catalog-${DATASET}.json`), records `catalog_snapshot_path` in `.demo-state.json`, and sets `catalog_status = "seeded"` (or `"inspected"` / `"synced"` / `"skipped"`).
 - **When `--mode full` (default)**: Advances to Gate 6 (`gate_2a_lookml_model`), where `demo-create lookml model` automatically discovers and consumes this snapshot.
-- **When `--mode bq_only`**: Completing Gate 5 (`gate_1d_catalog`) dynamically satisfies Gates 6–13 (`is_complete: True`) and finishes the workflow. Proceed directly to generating `DELIVERY_REPORT.md` (linking to `SPEC.md`).
+- **When `--mode bq_only`**: Completing Gate 5 (`gate_1d_catalog`) automatically marks Looker Gates 6–13 as skipped/satisfied and advances directly to **Gate 14 (`gate_7_stream`: Optional Live BigQuery Streaming & CDC)**. Once Gate 14 is completed (via `stream deploy --execute-infra` or `stream plan --skip`), `is_complete` becomes `True` and the agent generates `DELIVERY_REPORT.md` (linking to `SPEC.md`).
 
 - **Available Mapping Profiles**:
   Run `demo-create catalog profiles` to inspect how catalog metadata maps to LookML:
@@ -578,12 +588,13 @@ demo-create lookml approve-critique --looker-project <looker-project>
 > At Gate 11 (`gate_4_agent`) and Gate 12 (`gate_5_publish`), the **Parent Orchestrator** prompts the user via `ask_question` and executes `demo-create agent create` (or `--skip`) and `demo-create agent publish` (or `--skip`) directly via the CLI fast-path.
 
 > [!CAUTION]
-> ### 🛑 Strict Sequential Gate Isolation: NEVER Bundle Post-Deploy Gates (`10..13`)
+> ### 🛑 Strict Sequential Gate Isolation: NEVER Bundle Post-Deploy Gates (`10..14`)
 > The orchestrator **MUST present each post-deployment gate sequentially in its own discrete turn**:
 > 1. **Gate 10 (`gate_3c_critique`): Post-Deploy Screenshot Critique** (`ask_question` $\to$ `demo-create lookml approve-critique`)
 > 2. **Gate 11 (`gate_4_agent`): CA Agent Confirmation Gate** (`ask_question` $\to$ `demo-create agent create [--skip]`)
 > 3. **Gate 12 (`gate_5_publish`): GE Verification & Publishing Gate** (`ask_question` $\to$ `demo-create agent publish [--skip]`, if CA Agent created)
 > 4. **Gate 13 (`gate_6_embed`): External Embed Portal Gate** (`ask_question` $\to$ `demo-create embed scaffold [--skip]`, ONLY after Gates 10–12 are complete)
+> 5. **Gate 14 (`gate_7_stream`): Optional Live BigQuery Streaming & CDC Gate** (`ask_question` $\to$ `demo-create stream plan [--skip]`, ONLY after Gate 13 in `full` mode or Gate 5 in `bq_only` mode)
 > Under NO circumstances may the agent bundle these questions into a single multi-question modal.
 
 ### A. Gate 11 (`gate_4_agent`) — Interactive CA Agent Confirmation Gate `[requires_human_confirmation=True]`
@@ -710,9 +721,121 @@ The subagent:
 
 ---
 
-## 7. Mandatory Final Delivery Report Protocol
+## 7. Gate 14 (`gate_7_stream`) — Optional Live BigQuery Streaming & CDC on Locked-Down GCE (`demo-create stream {plan,deploy,delete}`)
 
-Upon completing all 14 gates (`0..13`, where `demo-create status --json` reports `is_complete: true`), the Parent Orchestrator **MUST synthesize all outputs and emit a comprehensive Executive Delivery Report**.
+Gate 14 (`gate_7_stream`) is the final optional gate (`requires_human_confirmation=True`) at the conclusion of both `--mode full` (after Gate 13) and `--mode bq_only` (after Gate 5). It provisions a continuous Go real-time streaming and Change Data Capture (CDC) service using the BigQuery Storage Write API (`DefaultStream` with `_CHANGE_TYPE` mutations) running on a strictly locked-down Google Compute Engine `e2-micro` VM.
+
+> [!WARNING]
+> ### 💰 Mandatory BigQuery Storage/Write Cost Notice & `demo-create stream delete` Reminder
+> Before calling `ask_question` at Gate 14, the orchestrator **MUST print a visible cost and teardown notice in chat**:
+> - Continuous BigQuery Storage Write API streaming (`DefaultStream`), CDC background merges (`max_staleness = INTERVAL 0 SECOND`), Cloud NAT, and the GCE `e2-micro` VM incur ongoing Google Cloud compute, networking, and BigQuery storage/query costs while running.
+> - Remind the user that they can tear down all streaming infrastructure (GCE VM, Cloud NAT, Cloud Router, IAP firewall rule, and dedicated service account) at any time with a single command:
+>   ```bash
+>   demo-create stream delete --gcp-project <gcp-project> --dataset <dataset-id>
+>   ```
+
+> [!CAUTION]
+> ### 🔒 Strictly Locked-Down GCE VM Security Architecture (Zero Public IP)
+> The streaming VM is **strictly locked down by design**:
+> - **Private IP Only (`--no-address`)**: The GCE `e2-micro` instance is always created with `--no-address` (zero external/public IP). There is **no `--public-ip` flag** anywhere in the CLI or deployment scripts.
+> - **Private Google Access (`--enable-private-ip-google-access`)**: Enabled on the VPC subnet so BigQuery Storage Write API and Cloud Logging traffic stays on Google's private network backbone.
+> - **Cloud Router & Cloud NAT**: Provisioned automatically so the VM startup script can pull Go module dependencies outbound without an external IP.
+> - **IAP Tunneling (`--tunnel-through-iap`)**: SSH/SCP management and diagnostics use Identity-Aware Proxy TCP forwarding (`35.235.240.0/20` on TCP port `22`).
+
+### A. Step 1: Interactive Streaming Plan (`demo-create stream plan`) `[requires_human_confirmation=True]`
+Prompt the user via `ask_question` whether they want to configure and deploy live BigQuery streaming & CDC or skip Gate 14.
+
+- **If skipped**:
+  ```bash
+  demo-create stream plan --skip
+  ```
+  Sets `stream_status="skipped"` in `.demo-state.json` and completes Gate 14 (`is_complete=True`).
+
+- **If confirmed**: Confirm or collect the streaming parameters and execute `demo-create stream plan`:
+  ```bash
+  demo-create stream plan \
+    --gcp-project "${PROJECT_ID}" \
+    --dataset "${DATASET}" \
+    --target-table "${TARGET_TABLE:-all}" \
+    --frequency "${FREQUENCY:-15s}" \
+    --crud-mode "${CRUD_MODE:-upsert}" \
+    --backfill-mode "${BACKFILL_MODE:-fill_gap}" \
+    --log-name "${LOG_NAME:-demo-create-streamer}" \
+    --log-severity "${LOG_SEVERITY:-INFO}"
+  ```
+  - **Key `stream plan` Flags**:
+    - `--skip`: Skip live streaming and mark Gate 14 complete.
+    - `--frequency`: Tick interval (`5s`, `15s`, `60s`, `5m`; default `15s`).
+    - `--crud-mode`: Mutation mode (`insert_only` for append-only telemetry, `upsert` for `INSERT` + stateful `UPSERT` lifecycle updates, or `full_cdc` for `INSERT` + `UPSERT` + bounded `DELETE`; default `upsert`).
+    - `--backfill-mode`: Historical catch-up mode (`fill_gap` to synthesize rows from the table's max timestamp up to `NOW()` before starting real-time ticks, or `live_only`; default `fill_gap`).
+    - `--target-table`: Specific fact table name or `"all"` (default `"all"`).
+    - `--log-name`: Cloud Logging log stream name (default `demo-create-streamer`).
+    - `--log-severity`: Cloud Logging minimum severity (`INFO`, `DEBUG`, `WARNING`, `ERROR`; default `INFO`).
+  - Persists `.demo-stream-plan.json` and sets `stream_status="planned"`.
+
+### B. Step 2: 2-Phase `demo-create stream deploy` Workflow (4 Parallel Subagents $\to$ `--execute-infra`)
+
+`demo-create stream deploy` operates as a deterministic **2-Phase workflow**:
+
+```mermaid
+graph LR
+    Plan["1. demo-create stream plan<br/>(.demo-stream-plan.json)"] --> PhaseA["2. Phase A: demo-create stream deploy<br/>(Scaffolds ./streamer/ &amp; Emits 4 Subagent Specs)"]
+    PhaseA --> Wave["3. Parallel 4-Subagent Wave<br/>- bq-profiling-researcher<br/>- catalog-spec-architect<br/>- go-bq-cdc-engineer<br/>- go-sim-cli-engineer"]
+    Wave --> PhaseB["4. Phase B: demo-create stream deploy --execute-infra<br/>(go test ./... -> BQ PK/Staleness DDL -> Locked-Down GCE VM -> Cloud Logging &amp; SQL Verify)"]
+```
+
+1. **Phase A — Scaffold `./streamer/` & Dispatch the 4 Streaming Subagents in Parallel**:
+   Run `demo-create stream deploy` (without `--execute-infra`):
+   ```bash
+   demo-create stream deploy \
+     --gcp-project "${PROJECT_ID}" \
+     --dataset "${DATASET}" \
+     --output-dir ./streamer
+   ```
+   This scaffolds the Go streaming module inside `./streamer/` (`main.go`, `cloud.go`, `deploy-bq.sh`, `main_test.go`, `internal/bq/*`, `internal/sim/*`, `internal/model/*`, `internal/logging/*`), sets `stream_status="scaffolded"`, and returns the 4 subagent dispatch specifications (`data.subagents`).
+
+   Immediately invoke all **4 specialized subagents in parallel** (`invoke_subagent`) with non-overlapping file ownership:
+   - **Agent 1 — [`bq-profiling-researcher`](subagents/bq-profiling-researcher.md)**: Uses `bigquery-metadata` and `knowledge-catalog-metadata` (`bq` / `gcloud dataplex`) to inspect `<gcp_project>.<dataset>`, extract schemas, primary/foreign keys, partition/clustering clauses, hourly/daily seasonality weights, categorical frequencies, and numeric stats into `streamer/seed_data.json` / `profile.json`.
+   - **Agent 2 — [`catalog-spec-architect`](subagents/catalog-spec-architect.md)**: Uses `demo-spec`, `knowledge-catalog-metadata`, and `synthetic-data-authoring` to align Dataplex glossary terms and cross-column rules with **`SPEC.md` (`## Section 4B: Real-Time Streaming & CDC Architecture`)** and `.demo-stream-plan.json`, defining entity lifecycle state machines (`INSERT` $\to$ `UPSERT` $\to$ `DELETE`), anomaly bursts, and LookML `max_staleness` alignment.
+   - **Agent 3 — [`go-bq-cdc-engineer`](subagents/go-bq-cdc-engineer.md)**: Owns `streamer/internal/bq/*` (`schema.go`, `ddl.go`, `stream.go`, `batch.go`, `cli.go`), `streamer/internal/model/rows.go`, and `streamer/internal/logging/cloudlog.go`. Customizes `storagepb.TableSchema` descriptors, `RowToProtoBytes`, `_CHANGE_TYPE` (`INSERT`/`UPSERT`/`DELETE`), BigQuery DDL (`PRIMARY KEY (...) NOT ENFORCED` and `OPTIONS (max_staleness = INTERVAL 0 SECOND)`), `managedwriter` DefaultStream batching, and Cloud Logging v2 output.
+   - **Agent 4 — [`go-sim-cli-engineer`](subagents/go-sim-cli-engineer.md)**: Owns `streamer/internal/sim/*` (`engine.go`, `seasonality.go`), `streamer/internal/model/state.go`, `streamer/internal/model/seed.go`, `streamer/main.go`, `streamer/cloud.go`, `streamer/deploy-bq.sh`, and `streamer/main_test.go`. Customizes `Bootstrap`, `Tick`, Pareto/Log-Normal sampling, atomic `state.gob` checkpointing, Kong CLI flags, locked-down GCE deployment (`--no-address`), and verifies `go test ./...` passes 100%.
+
+2. **Phase B — Execute Infrastructure Deployment & Verification (`--execute-infra`)**:
+   Once all 4 subagents complete and `go test ./...` passes in `./streamer/`, run Phase B:
+   ```bash
+   demo-create stream deploy \
+     --gcp-project "${PROJECT_ID}" \
+     --dataset "${DATASET}" \
+     --output-dir ./streamer \
+     --execute-infra
+   ```
+   `--execute-infra` performs 5 automated steps:
+   1. **Unit Test Gate**: Runs `go test ./...` in `./streamer/` (blocks with `ValidationError` exit code `6` if any test fails).
+   2. **BigQuery CDC & Staleness DDL**: Applies `ALTER TABLE ... ADD PRIMARY KEY (...) NOT ENFORCED` and `ALTER TABLE ... SET OPTIONS (max_staleness = INTERVAL 0 SECOND)` on the target BigQuery table(s).
+   3. **Locked-Down GCE Provisioning**: Executes `deploy-bq.sh` to provision the dedicated least-privilege service account, Private Google Access, Cloud Router + Cloud NAT, IAP SSH firewall rule, and the private-IP-only `e2-micro` VM (`--no-address`).
+   4. **Cloud Logging Verification**: Queries `gcloud logging read 'logName:"demo-create-streamer"'` to confirm live structured tick emission.
+   5. **Sample Verification SQL**: Executes a BigQuery verification query inspecting the latest streamed rows and sets `stream_status="deployed"` (`is_complete=True`).
+
+### C. Teardown & Cleanup (`demo-create stream delete`)
+Whenever the user wants to stop streaming and clean up cloud resources:
+```bash
+# Default: Delete GCE VM, Cloud NAT, Cloud Router, IAP firewall rule, and dedicated SA, while keeping BigQuery data intact:
+demo-create stream delete \
+  --gcp-project "${PROJECT_ID}" \
+  --dataset "${DATASET}" \
+  --keep-bq
+
+# Optional flags:
+# --drop-bq-table <table-name> : Also drop a specific streamed BigQuery table
+# --drop-bq-dataset            : Also drop the entire BigQuery dataset
+# --dry-run                    : Preview gcloud / bq teardown commands without executing
+```
+
+---
+
+## 8. Mandatory Final Delivery Report Protocol
+
+Upon completing all 15 gates (`0..14`, where `demo-create status --json` reports `is_complete: true`), the Parent Orchestrator **MUST synthesize all outputs and emit a comprehensive Executive Delivery Report**.
 
 The report must be emitted directly in chat as the final deliverable and saved to the project directory as `DELIVERY_REPORT.md` (or artifact).
 
@@ -724,7 +847,7 @@ The report must be emitted directly in chat as the final deliverable and saved t
 Import and populate the canonical 7-section delivery report structure defined in **[`delivery-report-template.md`](../resources/delivery-report-template.md)**:
 1. **Header & Deployment Status Banner**: Looker instance URL, LookML project/model, BigQuery dataset, connection, and 100% query validation score.
 2. **Section 1 — Quick Access Links**: Direct clickable links to `[SPEC.md](SPEC.md)`, the Executive Dashboard (`{model}::{dashboard}`), the Conversational Analytics Agent (`{ca_agent_id}`), the Primary & Event Stream Explores, and the External Embed Portal.
-3. **Section 2 — BigQuery Data Warehouse Summary**: Table inventory, row counts, and Day Partitioning / Clustering summary.
+3. **Section 2 — BigQuery Data Warehouse Summary**: Table inventory, row counts, Day Partitioning / Clustering summary, and (if Gate 14 deployed) live BigQuery Storage Write API CDC streaming status & `demo-create stream delete` teardown command.
 4. **Section 3 — Relational Architecture & ERD**: Mermaid `erDiagram` and optional `Chasm Trap Mitigation Architecture` (when NDT rollups were generated).
 5. **Section 4 — LookML Dashboard Layout & Tabbed Architecture**: Summary of the 3 operational tabs, KPI scorecards, and chart tiles.
 6. **Section 5 — Pre-Deployment Validation Audit Record**: Dev push, `validate_project` (`0` errors), and per-tile `HTTP 200 OK` query execution record.
@@ -732,15 +855,15 @@ Import and populate the canonical 7-section delivery report structure defined in
 
 ---
 
-## 8. Modular CLI Execution & State Persistence
+## 9. Modular CLI Execution & State Persistence
 
-When performing isolated operations or advancing through the 14-stage state machine, use the modular CLI subcommands. Execution state is persisted across invocations in `.demo-state.json` (auto-loaded and updated with CLI option overrides):
+When performing isolated operations or advancing through the 15-stage state machine, use the modular CLI subcommands. Execution state is persisted across invocations in `.demo-state.json` (auto-loaded and updated with CLI option overrides):
 
 | Command Group | Subcommand | Gate | Purpose | Key Flags |
 |---|---|---|---|---|
-| **Root (`demo-create`)** | `status` | — | Reports `completed_gates`, `current_gate` (`0..13`), `next_command`, and `requires_human_confirmation` | `--json`, `--state-file` |
+| **Root (`demo-create`)** | `status` | — | Reports `completed_gates`, `current_gate` (`0..14`), `next_command`, and `requires_human_confirmation` | `--json`, `--state-file` |
 | | `pre-check` | **Gate 0** (`gate_0a_precheck`) | Audits GCP/ADC credentials, Looker auth, MCP configs, and global agent skills | `--fix`, `--gcp-project`, `--json` |
-| | `confirm-targets` | **Gate 1** (`gate_0b_confirm_targets`) | Records human-confirmed GCP account, GCP project, Looker account, and DB connection | `--gcp-account`, `--gcp-project`, `--looker-account`, `--connection`, `--json` |
+| | `confirm-targets` | **Gate 1** (`gate_0b_confirm_targets`) | Records human-confirmed GCP account, GCP project, Looker account, and DB connection | `--gcp-account`, `--gcp-project`, `--looker-account`, `--connection`, `--mode`, `--json` |
 | **`demo-create data`** | `propose-schema` | **Gate 2** (`gate_1a_propose_schema`) | Validates `DomainBlueprint` JSON, generates Mermaid ERD & 5-row in-memory micro-sample preview | `--schema-file`, `--domain`, `--preview`, `--preview-rows`, `--json` |
 | | `approve-schema` | **Gate 3** (`gate_1b_approve_schema`) | Records user approval of the proposed schema ERD and target fact row volume | `--row-count`, `--dataset`, `--schema-file`, `--json` |
 | | `generate` | **Gate 4** (`gate_1c_generate_data`) | Synthesizes Parquet dataset via Modular DAG and uploads to BigQuery via ADC | `--schema-file`, `--domain`, `--row-count`, `--output-dir`, `--gcp-project`, `--dataset`, `--upload`, `--json-scorecard` |
@@ -762,6 +885,9 @@ When performing isolated operations or advancing through the 14-stage state mach
 | | `golden-queries` | — | Extracts queries from dashboard files/IDs and links as Golden Queries | `--agent-id`, `--dashboard-id`, `--dashboards-dir`, `--json` |
 | | `publish` | **Gate 12** (`gate_5_publish`) | Verifies GE config and publishes CA Agent to Gemini Enterprise (or skips with `--skip`) | `--agent-id`, `--looker-account`, `--skip`, `--json` |
 | **`demo-create embed`** | `scaffold` | **Gate 13** (`gate_6_embed`) | Provisions Looker instance embed settings (group, folder, dashboard move, CA agent share, themes) and scaffolds React/Vite + FastAPI embed portal (or skips with `--skip`) | `--looker-project`, `--dashboard-id`, `--agent-id`, `--brand-name`, `--client-id`, `--client-secret`, `--looker-account`, `--target-dir`, `--skip`, `--json` |
+| **`demo-create stream`** | `plan` | **Gate 14** (`gate_7_stream`) | Persists `.demo-stream-plan.json` for live BigQuery streaming & CDC (or skips Gate 14 with `--skip`) | `--gcp-project`, `--dataset`, `--target-table`, `--frequency`, `--crud-mode`, `--backfill-mode`, `--log-name`, `--log-severity`, `--skip`, `--json` |
+| | `deploy` | **Gate 14** (`gate_7_stream`) | Phase A: scaffolds `./streamer/` & emits 4 subagent specs; Phase B (`--execute-infra`): runs `go test ./...`, applies BQ PK/staleness DDL, deploys locked-down `e2-micro` GCE VM (`--no-address`), and verifies Cloud Logging | `--gcp-project`, `--dataset`, `--output-dir`, `--region`, `--zone`, `--machine-type`, `--execute-infra`, `--dry-run`, `--json` |
+| | `delete` | **Gate 14** (`gate_7_stream`) | Tears down GCE streaming VM, Cloud NAT, Cloud Router, IAP firewall rule, and dedicated service account | `--gcp-project`, `--dataset`, `--region`, `--zone`, `--keep-bq`, `--drop-bq-table`, `--drop-bq-dataset`, `--dry-run`, `--json` |
 | **`demo-create ge`** | `status` | — | Displays current Looker Gemini enablement and GE config | `--looker-account`, `--json` |
 | | `configure` | — | Discovers GE apps on GCP, configures Looker GE settings, and grants IAM roles | `--app-id`, `--location`, `--gcp-project`, `--json` |
 | | `publish` | **Gate 12** (`gate_5_publish`) | Alias for `agent publish` (supports `--skip`) | `--agent-id`, `--looker-account`, `--skip`, `--json` |

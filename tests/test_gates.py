@@ -47,6 +47,7 @@ _COMPLETION_SIGNAL: dict[str, dict[str, object]] = {
     "gate_4_agent": {"ca_agent_id": "agent-42", "ca_agent_status": "created"},
     "gate_5_publish": {"published_to_ge": True, "ge_publish_status": "published"},
     "gate_6_embed": {"embed_workspace_dir": Path("/scratch/embed"), "embed_status": "scaffolded"},
+    "gate_7_stream": {"stream_status": "deployed", "stream_deployed": True},
 }
 
 
@@ -89,6 +90,8 @@ def _finished_state(**overrides: Any) -> FlowState:
         "catalog_status": "seeded",
         "embed_workspace_dir": Path("/scratch/embed_retail_demo"),
         "embed_status": "scaffolded",
+        "stream_status": "deployed",
+        "stream_deployed": True,
     }
     fields.update(overrides)
     return FlowState(**fields)
@@ -107,10 +110,10 @@ def _state_satisfying(*gate_ids: str) -> FlowState:
 
 
 def test_gate_structural_invariants() -> None:
-    """Gates are numbered 0..13 contiguously, uniquely named, with explicit human confirmation checkpoints."""
-    assert len(GATES) == 14
-    assert [g.number for g in GATES] == list(range(14))
-    assert len(set(_GATE_IDS)) == 14
+    """Gates are numbered 0..14 contiguously, uniquely named, with explicit human confirmation checkpoints."""
+    assert len(GATES) == 15
+    assert [g.number for g in GATES] == list(range(15))
+    assert len(set(_GATE_IDS)) == 15
     for gate in GATES:
         assert gate.id.startswith("gate_")
         assert gate.title.strip()
@@ -135,6 +138,7 @@ def test_gate_structural_invariants() -> None:
         "gate_4_agent",
         "gate_5_publish",
         "gate_6_embed",
+        "gate_7_stream",
     ]
     assert set(GATES[0].describe()) == {
         "number",
@@ -162,7 +166,8 @@ def test_gate_structural_invariants() -> None:
         (11, "gate_4_agent"),
         (12, "gate_5_publish"),
         (13, "gate_6_embed"),
-        (14, None),
+        (14, "gate_7_stream"),
+        (15, None),
     ],
 )
 def test_gate_progression_walk(satisfied_count: int, expected_current: str | None) -> None:
@@ -171,7 +176,7 @@ def test_gate_progression_walk(satisfied_count: int, expected_current: str | Non
     current = current_gate(state)
     assert (current.id if current else None) == expected_current
     assert [g.id for g in completed_gates(state)] == _GATE_IDS[:satisfied_count]
-    assert is_pipeline_complete(state) is (satisfied_count == 14)
+    assert is_pipeline_complete(state) is (satisfied_count == 15)
 
     statuses = evaluate_gates(state)
     assert [s.gate.id for s in statuses] == _GATE_IDS
@@ -197,7 +202,7 @@ def test_out_of_order_signals_keep_first_incomplete_as_current() -> None:
 
 
 def test_skip_terminal_states_satisfy_optional_gates() -> None:
-    """Skipping optional gates (1D, 3A, 4, 5, 6) marks them complete so pipeline reaches is_pipeline_complete=True."""
+    """Skipping optional gates (1D, 3A, 4, 5, 6, 7) marks them complete so pipeline reaches is_pipeline_complete=True."""
     skipped_state = _finished_state(
         catalog_status="skipped",
         optimizer_status="skipped",
@@ -207,13 +212,15 @@ def test_skip_terminal_states_satisfy_optional_gates() -> None:
         ge_publish_status="pending",  # ca_agent_status='skipped' also completes gate 5
         embed_workspace_dir=None,
         embed_status="skipped",
+        stream_status="skipped",
+        stream_deployed=False,
     )
     assert is_pipeline_complete(skipped_state) is True
     assert current_gate(skipped_state) is None
 
 
 def test_bq_only_mode_completes_at_gate_5_and_supports_upgrade(invoke, state_file) -> None:
-    """In `bq_only` mode, satisfying Gates 0-5 completes all 14 gates; upgrading to `full` resumes at Gate 6 (`gate_2a_lookml_model`)."""
+    """In `bq_only` mode, satisfying Gates 0-5 auto-completes Gates 6-13 and advances to Gate 14 (`gate_7_stream`); upgrading to `full` resumes at Gate 6 (`gate_2a_lookml_model`)."""
     from looker_demo_cli.gates import attach_next_gate_action
     from looker_demo_cli.output import CommandResult
 
@@ -228,20 +235,34 @@ def test_bq_only_mode_completes_at_gate_5_and_supports_upgrade(invoke, state_fil
         dataset_exists=True,
         catalog_status="seeded",
     )
+    # With stream_status="pending", Gates 0-13 are complete and Gate 14 (gate_7_stream) is current
+    statuses_pending_stream = evaluate_gates(state)
+    assert [s.gate.number for s in statuses_pending_stream if s.complete] == list(range(14))
+    curr_stream = current_gate(state)
+    assert curr_stream is not None
+    assert curr_stream.number == 14
+    assert curr_stream.id == "gate_7_stream"
+    next_after_catalog = attach_next_gate_action(CommandResult.success("catalog seed"), state).next_actions
+    assert len(next_after_catalog) == 1
+    assert next_after_catalog[0].gate == 14
+    assert next_after_catalog[0].command == "demo-create stream plan --gcp-project p --dataset ds"
+
+    # Once Gate 14 is skipped (or deployed), all 15 gates are complete
+    state.stream_status = "skipped"
     statuses = evaluate_gates(state)
     assert all(s.complete for s in statuses)
     assert not any(s.is_current for s in statuses)
     assert is_pipeline_complete(state) is True
     assert current_gate(state) is None
-    assert len(completed_gates(state)) == 14
-    assert attach_next_gate_action(CommandResult.success("catalog seed"), state).next_actions == []
+    assert len(completed_gates(state)) == 15
+    assert attach_next_gate_action(CommandResult.success("stream plan"), state).next_actions == []
 
     state_file(**state.model_dump())
     res_bq = envelope(invoke(["status", "--json"]))
     assert res_bq["data"]["is_complete"] is True
     assert res_bq["data"]["current_gate"] is None
     assert res_bq["next_actions"] == []
-    assert len(res_bq["data"]["completed_gates"]) == 14
+    assert len(res_bq["data"]["completed_gates"]) == 15
 
     # Upgrading the same state to "full" resumes at Gate 6 (gate_2a_lookml_model)
     state.deployment_mode = "full"
@@ -267,7 +288,7 @@ def test_bq_only_mode_completes_at_gate_5_and_supports_upgrade(invoke, state_fil
 
 
 def test_gate_command_branch_behaviors() -> None:
-    """Verify Gate 1C generate/upload switch, Gate 1D seed/inspect switch, Gate 3B account flag, Gate 4 fct_ explore preference, and blank handling."""
+    """Verify Gate 1C generate/upload switch, Gate 1D seed/inspect switch, Gate 3B account flag, Gate 4 fct_ explore preference, Gate 7 plan/deploy switch, and blank handling."""
     # Gate 1C (index 4) switches from generate to upload once Parquet exists
     assert GATES[4].command(_unstarted_state()).startswith("demo-create data generate ")
     with_parquet = _unstarted_state(generated_parquet_dir=Path("/scratch/retail"), bq_dataset_id="retail")
@@ -288,6 +309,10 @@ def test_gate_command_branch_behaviors() -> None:
     )
     assert _resolve_primary_explore(byo_state) == "fct_shipments"
     assert "--explore fct_shipments" in GATES[11].command(byo_state)
+
+    # Gate 7 (index 14) switches from stream plan to stream deploy once stream_status == "planned"
+    assert GATES[14].command(_unstarted_state(stream_status="pending")).startswith("demo-create stream plan ")
+    assert GATES[14].command(_unstarted_state(stream_status="planned")).startswith("demo-create stream deploy ")
 
     # Whitespace-only values render as placeholders
     assert "--gcp-project <gcp-project>" in GATES[0].command(_unstarted_state(gcp_project_id="   "))

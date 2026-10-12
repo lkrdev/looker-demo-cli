@@ -218,6 +218,44 @@ class DataplexCatalogClient:
             self.unavailable_reason = str(e)
             return default
 
+    def _patch_json(
+        self,
+        url: str,
+        json_data: dict[str, Any],
+        params: dict[str, Any] | None = None,
+        default: Any = None,
+    ) -> Any:
+        """Perform a PATCH request and parse JSON safely."""
+        try:
+            headers = self._get_headers()
+            response = self.session.patch(url, headers=headers, params=params, json=json_data, timeout=self.timeout)
+            return self._process_response(response, default)
+        except AuthError:
+            raise
+        except requests.RequestException as e:
+            logger.warning("Dataplex PATCH request error for %s: %s", url, e)
+            self.api_available = False
+            self.unavailable_reason = str(e)
+            return default
+
+    def _wait_operation(self, op_data: dict[str, Any], max_wait: float = 20.0) -> dict[str, Any]:
+        """Poll a Dataplex long-running operation until completion."""
+        import time
+
+        if not isinstance(op_data, dict):
+            return {}
+        op_name = op_data.get("name", "")
+        if not op_name or op_data.get("done") is True:
+            return op_data
+        url = f"https://dataplex.googleapis.com/v1/{op_name}"
+        deadline = time.monotonic() + max_wait
+        while time.monotonic() < deadline:
+            res = self._get_json(url, params=None, default={})
+            if isinstance(res, dict) and res.get("done") is True:
+                return res
+            time.sleep(1.0)
+        return op_data
+
     def lookup_entry(self, dataset_id: str, table_id: str, view: str = "ALL") -> dict[str, Any]:
         """Lookup Dataplex entry for a BigQuery table.
 
@@ -283,6 +321,175 @@ class DataplexCatalogClient:
             f"/glossaries/{glossary_id}/terms/{term_id}"
         )
         return self._get_json(url, params=None, default={})
+
+    def get_project_number(self) -> str:
+        """Resolve the numeric GCP project number for Dataplex aspect keys and entry link references."""
+        if self.project_id.isdigit():
+            return self.project_id
+        crm_url = f"https://cloudresourcemanager.googleapis.com/v1/projects/{self.project_id}"
+        data = self._get_json(crm_url, params=None, default={})
+        if isinstance(data, dict) and data.get("projectNumber"):
+            return str(data["projectNumber"])
+        return self.project_id
+
+    def ensure_aspect_type(self, aspect_type_id: str = "semantic-curation") -> dict[str, Any]:
+        """Ensure the semantic curation AspectType exists in Dataplex."""
+        get_url = (
+            f"https://dataplex.googleapis.com/v1/projects/{self.project_id}/locations/{self.location}"
+            f"/aspectTypes/{aspect_type_id}"
+        )
+        existing = self._get_json(get_url, params=None, default={})
+        if existing and "name" in existing:
+            return existing
+
+        post_url = (
+            f"https://dataplex.googleapis.com/v1/projects/{self.project_id}/locations/{self.location}"
+            f"/aspectTypes?aspectTypeId={aspect_type_id}"
+        )
+        payload = {
+            "displayName": "Semantic Curation",
+            "description": "Semantic curation metadata for LookML generation",
+            "metadataTemplate": {
+                "name": aspect_type_id,
+                "type": "record",
+                "recordFields": [
+                    {
+                        "index": 1,
+                        "name": "status",
+                        "type": "enum",
+                        "constraints": {"required": True},
+                        "enumValues": [
+                            {"index": 1, "name": "DRAFT"},
+                            {"index": 2, "name": "IN_REVIEW"},
+                            {"index": 3, "name": "CERTIFIED"},
+                            {"index": 4, "name": "DEPRECATED"},
+                        ],
+                    },
+                    {"index": 2, "name": "business_label", "type": "string"},
+                    {"index": 3, "name": "business_description", "type": "string"},
+                    {"index": 4, "name": "synonyms", "type": "array", "arrayItems": {"name": "item", "type": "string"}},
+                    {
+                        "index": 5,
+                        "name": "allowed_values",
+                        "type": "array",
+                        "arrayItems": {"name": "item", "type": "string"},
+                    },
+                    {"index": 6, "name": "format_pattern", "type": "string"},
+                    {
+                        "index": 7,
+                        "name": "governance_tags",
+                        "type": "array",
+                        "arrayItems": {"name": "item", "type": "string"},
+                    },
+                ],
+            },
+        }
+        op = self._post_json(post_url, json_data=payload, default={})
+        self._wait_operation(op)
+        return self._get_json(get_url, params=None, default={})
+
+    def ensure_glossary(self, glossary_id: str, display_name: str, description: str) -> dict[str, Any]:
+        """Ensure a Dataplex Business Glossary exists in the target project and location."""
+        get_url = (
+            f"https://dataplex.googleapis.com/v1/projects/{self.project_id}/locations/{self.location}"
+            f"/glossaries/{glossary_id}"
+        )
+        existing = self._get_json(get_url, params=None, default={})
+        if existing and "name" in existing:
+            return existing
+
+        post_url = (
+            f"https://dataplex.googleapis.com/v1/projects/{self.project_id}/locations/{self.location}"
+            f"/glossaries?glossaryId={glossary_id}"
+        )
+        payload = {
+            "displayName": display_name,
+            "description": description,
+        }
+        op = self._post_json(post_url, json_data=payload, default={})
+        self._wait_operation(op)
+        return self._get_json(get_url, params=None, default={})
+
+    def ensure_glossary_term(
+        self,
+        glossary_id: str,
+        term_id: str,
+        display_name: str,
+        description: str,
+    ) -> dict[str, Any]:
+        """Ensure a Business Glossary Term exists under a Dataplex Glossary."""
+        existing = self.get_glossary_term(glossary_id, term_id)
+        if existing and "name" in existing:
+            return existing
+
+        post_url = (
+            f"https://dataplex.googleapis.com/v1/projects/{self.project_id}/locations/{self.location}"
+            f"/glossaries/{glossary_id}/terms?termId={term_id}"
+        )
+        payload = {
+            "displayName": display_name,
+            "description": description,
+            "parent": f"projects/{self.project_id}/locations/{self.location}/glossaries/{glossary_id}",
+        }
+        op = self._post_json(post_url, json_data=payload, default={})
+        if isinstance(op, dict) and "done" in op and not op.get("done"):
+            self._wait_operation(op)
+        return self.get_glossary_term(glossary_id, term_id) or op
+
+    def patch_entry_aspects(
+        self,
+        dataset_id: str,
+        table_id: str,
+        aspects: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Attach or update table-level and column-level curation aspects on a BigQuery table entry."""
+        url = (
+            f"https://dataplex.googleapis.com/v1/projects/{self.project_id}/locations/{self.location}"
+            f"/entryGroups/@bigquery/entries/bigquery.googleapis.com/projects/{self.project_id}"
+            f"/datasets/{dataset_id}/tables/{table_id}"
+        )
+        return self._patch_json(
+            url,
+            json_data={"aspects": aspects},
+            params={"updateMask": "aspects"},
+            default={},
+        )
+
+    def create_entry_link(
+        self,
+        entry_link_id: str,
+        source_entry: str,
+        source_column: str,
+        target_term_entry: str,
+    ) -> dict[str, Any]:
+        """Create a Dataplex `definition` EntryLink connecting a table column to a glossary term."""
+        get_url = (
+            f"https://dataplex.googleapis.com/v1/projects/{self.project_id}/locations/{self.location}"
+            f"/entryGroups/@bigquery/entryLinks/{entry_link_id}"
+        )
+        existing = self._get_json(get_url, params=None, default={})
+        if existing and "name" in existing:
+            return existing
+
+        post_url = (
+            f"https://dataplex.googleapis.com/v1/projects/{self.project_id}/locations/{self.location}"
+            f"/entryGroups/@bigquery/entryLinks?entryLinkId={entry_link_id}"
+        )
+        payload = {
+            "entryLinkType": "projects/655216118709/locations/global/entryLinkTypes/definition",
+            "entryReferences": [
+                {
+                    "name": source_entry,
+                    "path": f"Schema.{source_column}",
+                    "type": "SOURCE",
+                },
+                {
+                    "name": target_term_entry,
+                    "type": "TARGET",
+                },
+            ],
+        }
+        return self._post_json(post_url, json_data=payload, default={})
 
     def lookup_context(self, resources: list[str], format: str = "JSON") -> dict[str, Any]:
         """Lookup rich context for resources.
