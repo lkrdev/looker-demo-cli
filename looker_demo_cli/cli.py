@@ -24,6 +24,7 @@ from looker_demo_cli.commands.embed import embed_app
 from looker_demo_cli.commands.env import env_app
 from looker_demo_cli.commands.ge import ge_app
 from looker_demo_cli.commands.lookml import lookml_app
+from looker_demo_cli.commands.stream import stream_app
 from looker_demo_cli.error_boundary import ErrorHandlingGroup
 from looker_demo_cli.utils.console import console
 
@@ -55,6 +56,9 @@ app.add_typer(catalog_app, name="catalog")
 app.add_typer(data_app, name="data")
 app.add_typer(lookml_app, name="lookml")
 app.add_typer(embed_app, name="embed")
+app.add_typer(
+    stream_app, name="stream", help="Plan, deploy, and tear down synthetic BigQuery streaming & CDC services."
+)
 
 
 def version_callback(value: bool):
