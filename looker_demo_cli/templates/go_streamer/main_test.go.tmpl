@@ -1,0 +1,902 @@
+package main
+
+import (
+	"bytes"
+	"encoding/json"
+	"math"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"slices"
+	"strconv"
+	"strings"
+	"testing"
+	"time"
+
+	"demo-streamer/internal/bq"
+	"demo-streamer/internal/logging"
+	"demo-streamer/internal/model"
+	"demo-streamer/internal/server"
+	"demo-streamer/internal/sim"
+
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/dynamicpb"
+)
+
+func TestReferentialIntegrityFunnelAndProtoCDC(t *testing.T) {
+	st := model.NewState()
+	st.CrudMode = "upsert_cdc"
+	eng, err := sim.NewEngine(st, defaultSeedJSON, "")
+	if err != nil {
+		t.Fatalf("NewEngine failed: %v", err)
+	}
+	descs, err := bq.GetTableDescriptors()
+	if err != nil {
+		t.Fatalf("GetTableDescriptors failed: %v", err)
+	}
+
+	dcs := make(map[int64]bool)
+	products := make(map[int64]bool)
+	users := make(map[int64]bool)
+	unsoldInv := make(map[int64]bool)
+	soldInv := make(map[int64]bool)
+	campaigns := make(map[int64]bool)
+	adGroups := make(map[int64]bool)
+	keywords := make(map[int64]bool)
+	adClicks := make(map[int64]bool)
+
+	userRegistered := make(map[int64]bool)
+	userViewedProduct := make(map[int64]bool)
+	userAddedToCart := make(map[int64]bool)
+	orderStatuses := make(map[int64][]string)
+	seenTables := make(map[string]int)
+
+	cdcTables := map[string]bool{
+		"inventory_items":    true,
+		"order_items":        true,
+		"transaction_detail": true,
+	}
+
+	emit := func(row any) {
+		tbl, pk, isCDC := model.RowTable(row)
+		if tbl == "" {
+			t.Fatalf("RowTable returned empty table for %T", row)
+		}
+		if isCDC != cdcTables[tbl] {
+			t.Fatalf("table %s isCDC=%v, want %v", tbl, isCDC, cdcTables[tbl])
+		}
+		if isCDC && pk <= 0 {
+			t.Fatalf("expected positive primary key for CDC table %s, got %d", tbl, pk)
+		}
+		seenTables[tbl]++
+
+		wire, err := bq.RowToProtoBytes(tbl, row, isCDC)
+		if err != nil {
+			t.Fatalf("RowToProtoBytes(%s) failed: %v", tbl, err)
+		}
+		if len(wire) == 0 {
+			t.Fatalf("RowToProtoBytes(%s) returned empty bytes", tbl)
+		}
+		td := descs[tbl]
+		msg := dynamicpb.NewMessage(td.MD)
+		if err := proto.Unmarshal(wire, msg); err != nil {
+			t.Fatalf("proto.Unmarshal(%s) failed: %v", tbl, err)
+		}
+		ctField := td.MD.Fields().ByName("_CHANGE_TYPE")
+		if isCDC {
+			if ctField == nil || msg.Get(ctField).String() != "UPSERT" {
+				t.Fatalf("expected _CHANGE_TYPE=UPSERT on %s proto message", tbl)
+			}
+		} else if ctField != nil {
+			t.Fatalf("unexpected _CHANGE_TYPE field on append-only table %s", tbl)
+		}
+
+		switch r := row.(type) {
+		case model.DistributionCenterRow:
+			dcs[r.ID] = true
+		case model.ProductRow:
+			dcID, _ := strconv.ParseInt(r.DistributionCenterID, 10, 64)
+			if !dcs[dcID] {
+				t.Fatalf("product %d references missing distribution_center_id %d", r.ID, dcID)
+			}
+			products[r.ID] = true
+		case model.UserRow:
+			users[r.ID] = true
+		case model.InventoryItemRow:
+			if !products[r.ProductID] {
+				t.Fatalf("inventory_item %d references missing product_id %d", r.ID, r.ProductID)
+			}
+			if !dcs[r.ProductDistributionCenterID] {
+				t.Fatalf("inventory_item %d references missing dc %d", r.ID, r.ProductDistributionCenterID)
+			}
+			if r.SoldAt == nil {
+				unsoldInv[r.ID] = true
+			} else {
+				if !unsoldInv[r.ID] {
+					t.Fatalf("inventory_item %d emitted as sold before being stocked as unsold", r.ID)
+				}
+				soldInv[r.ID] = true
+			}
+		case model.CampaignRow:
+			campaigns[r.ID] = true
+		case model.AdGroupRow:
+			if !campaigns[r.CampaignID] {
+				t.Fatalf("ad_group %d references missing campaign_id %d", r.AdID, r.CampaignID)
+			}
+			adGroups[r.AdID] = true
+		case model.KeywordRow:
+			if !adGroups[r.AdID] {
+				t.Fatalf("keyword %d references missing ad_id %d", r.KeywordID, r.AdID)
+			}
+			keywords[r.KeywordID] = true
+		case model.AdEventRow:
+			if !keywords[r.KeywordID] {
+				t.Fatalf("ad_event %d references missing keyword_id %d", r.ID, r.KeywordID)
+			}
+			if r.EventType == "click" {
+				adClicks[r.ID] = true
+			}
+		case model.EventRow:
+			if r.UserID != nil && !users[*r.UserID] {
+				t.Fatalf("event %d references missing user_id %d", r.ID, *r.UserID)
+			}
+			if r.AdEventID != nil && !adClicks[*r.AdEventID] {
+				t.Fatalf("event %d references missing ad_event_id %d", r.ID, *r.AdEventID)
+			}
+			if r.EventType == "Register" && r.UserID != nil {
+				userRegistered[*r.UserID] = true
+			}
+			if r.EventType == "Product" {
+				pidStr := strings.TrimPrefix(r.URI, "/product/")
+				pid, _ := strconv.ParseInt(pidStr, 10, 64)
+				if !products[pid] {
+					t.Fatalf("Product event %d references missing product URI %s", r.ID, r.URI)
+				}
+				if r.UserID != nil {
+					userViewedProduct[*r.UserID] = true
+				}
+			}
+			if r.EventType == "Cart" && r.UserID != nil {
+				if !userViewedProduct[*r.UserID] {
+					t.Fatalf("user %d emitted Cart event before viewing any Product page", *r.UserID)
+				}
+				userAddedToCart[*r.UserID] = true
+			}
+			if r.EventType == "Purchase" {
+				if r.UserID == nil {
+					t.Fatalf("Purchase event %d has nil user_id", r.ID)
+				}
+				if !userAddedToCart[*r.UserID] {
+					t.Fatalf("user %d emitted Purchase event before any Cart event", *r.UserID)
+				}
+			}
+		case model.OrderItemRow:
+			if !users[r.UserID] {
+				t.Fatalf("order_item %d references missing user_id %d", r.ID, r.UserID)
+			}
+			if !soldInv[r.InventoryItemID] {
+				t.Fatalf("order_item %d references inventory_item_id %d that was not marked sold", r.ID, r.InventoryItemID)
+			}
+			orderStatuses[r.ID] = append(orderStatuses[r.ID], r.Status)
+		case model.DiscountRow:
+			if !products[r.ProductID] || !unsoldInv[r.InventoryItemID] {
+				t.Fatalf("discount references missing product %d or inventory %d", r.ProductID, r.InventoryItemID)
+			}
+		case model.TransactionDetailRow:
+			if !users[r.User.UserID] {
+				t.Fatalf("transaction_detail %d references missing user_id %d", r.OrderID, r.User.UserID)
+			}
+		}
+	}
+
+	baseTime := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+	eng.Bootstrap(baseTime, 100, emit)
+	if len(users) != 0 {
+		t.Fatalf("expected 0 users created during Bootstrap, got %d", len(users))
+	}
+	for m := 0; m < 120; m++ {
+		eng.Tick(baseTime.Add(time.Duration(m)*time.Minute), 100, emit)
+	}
+	for d := 1; d <= 10; d++ {
+		eng.Tick(baseTime.Add(time.Duration(d)*24*time.Hour), 100, emit)
+	}
+	for uid := range users {
+		if !userRegistered[uid] {
+			t.Fatalf("user %d was created without a Register web event", uid)
+		}
+	}
+
+	for _, wantBrand := range []string{"Levi's", "Calvin Klein", "Allegra K", "Columbia"} {
+		if !slices.Contains(st.OnboardedBrands, wantBrand) {
+			t.Fatalf("expected %q in initial onboarded brands, got %v", wantBrand, st.OnboardedBrands[:10])
+		}
+	}
+
+	beforeProd := len(st.Products)
+	brand, addedProds := eng.OnboardNewBrand(baseTime, emit)
+	if brand == "" || len(addedProds) < 2 || len(addedProds) > 3 {
+		t.Fatalf("expected OnboardNewBrand to add 2-3 products, got %d for brand %q", len(addedProds), brand)
+	}
+	if len(st.Products)-beforeProd != len(addedProds) {
+		t.Fatalf("product count mismatch after OnboardNewBrand")
+	}
+
+	transitioned := 0
+	for _, history := range orderStatuses {
+		if history[0] != "Processing" {
+			t.Fatalf("expected order to start in Processing, got %v", history)
+		}
+		if len(history) > 1 {
+			transitioned++
+		}
+	}
+	if transitioned == 0 {
+		t.Fatalf("expected orders to transition from Processing -> Shipped/Complete/Cancelled")
+	}
+	if seenTables["discounts"] == 0 {
+		emit(model.DiscountRow{
+			ProductID:       1,
+			InventoryItemID: 1,
+			RetailPrice:     50.0,
+			DiscountPrice:   40.0,
+			DiscountAmount:  0.20,
+			Date:            model.FmtTS(baseTime),
+		})
+	}
+	for _, tbl := range bq.AllTables {
+		if tbl != "retail_calendar_454" && seenTables[tbl] == 0 {
+			t.Fatalf("expected table %s to be emitted and proto-serialized during test run", tbl)
+		}
+	}
+
+	// Verify insert_only, upsert_cdc, and full_crud (_CHANGE_TYPE = DELETE and UPSERT) serialization
+	sampleOI := model.OrderItemRow{
+		ID:              999,
+		OrderID:         500,
+		UserID:          1,
+		InventoryItemID: 1,
+		SalePrice:       79.99,
+		Status:          "Cancelled",
+		CreatedAt:       "2026-09-01T12:00:00Z",
+		ChangeType:      "DELETE",
+	}
+	// 1. insert_only mode leaves _CHANGE_TYPE unset
+	ctInsert := model.ResolveChangeType(sampleOI, true, "insert_only")
+	if ctInsert != "" {
+		t.Fatalf("expected empty change type for insert_only, got %q", ctInsert)
+	}
+	wireInsert, err := bq.RowToProtoBytesWithChangeType("order_items", sampleOI, ctInsert)
+	if err != nil {
+		t.Fatalf("RowToProtoBytesWithChangeType(insert_only) failed: %v", err)
+	}
+	msgInsert := dynamicpb.NewMessage(descs["order_items"].MD)
+	if err := proto.Unmarshal(wireInsert, msgInsert); err != nil {
+		t.Fatalf("proto.Unmarshal(insert_only) failed: %v", err)
+	}
+	ctFieldOI := descs["order_items"].MD.Fields().ByName("_CHANGE_TYPE")
+	if msgInsert.Has(ctFieldOI) {
+		t.Fatalf("expected _CHANGE_TYPE to be unset in insert_only mode, got %q", msgInsert.Get(ctFieldOI).String())
+	}
+
+	// 2. full_crud mode sets _CHANGE_TYPE = "DELETE" on cancelled/deleted rows
+	ctDelete := model.ResolveChangeType(sampleOI, true, "full_crud")
+	if ctDelete != "DELETE" {
+		t.Fatalf("expected DELETE change type for full_crud cancelled order, got %q", ctDelete)
+	}
+	wireDelete, err := bq.RowToProtoBytesWithChangeType("order_items", sampleOI, ctDelete)
+	if err != nil {
+		t.Fatalf("RowToProtoBytesWithChangeType(DELETE) failed: %v", err)
+	}
+	msgDelete := dynamicpb.NewMessage(descs["order_items"].MD)
+	if err := proto.Unmarshal(wireDelete, msgDelete); err != nil {
+		t.Fatalf("proto.Unmarshal(DELETE) failed: %v", err)
+	}
+	if msgDelete.Get(ctFieldOI).String() != "DELETE" {
+		t.Fatalf("expected _CHANGE_TYPE=DELETE, got %q", msgDelete.Get(ctFieldOI).String())
+	}
+
+	// Verify BatchLoadSink deduplicates CDC tables by primary key and removes DELETE rows in full_crud mode
+	batchSink, err := bq.NewBatchLoadSinkWithMode("proj", "ds", "full_crud")
+	if err != nil {
+		t.Fatalf("NewBatchLoadSinkWithMode failed: %v", err)
+	}
+	soldAt := "2026-09-01T12:05:00Z"
+	batchSink.Emit(model.InventoryItemRow{ID: 42, ProductID: 1, CreatedAt: "2026-09-01T12:00:00Z"})
+	batchSink.Emit(model.InventoryItemRow{ID: 42, ProductID: 1, CreatedAt: "2026-09-01T12:00:00Z", SoldAt: &soldAt})
+	if batchSink.CDCBufferLen("inventory_items") != 1 {
+		t.Fatalf("expected 1 deduplicated CDC row in inventory_items buffer, got %d", batchSink.CDCBufferLen("inventory_items"))
+	}
+	batchSink.Emit(model.InventoryItemRow{ID: 42, ProductID: 1, CreatedAt: "2026-09-01T12:00:00Z", ChangeType: "DELETE"})
+	if batchSink.CDCBufferLen("inventory_items") != 0 {
+		t.Fatalf("expected DELETE row to remove PK 42 from full_crud batch buffer, got %d", batchSink.CDCBufferLen("inventory_items"))
+	}
+
+	// Verify TableDDL includes all 14 tables and PRIMARY KEY (...) NOT ENFORCED + max_staleness = INTERVAL 0 SECOND on CDC tables
+	ddl := bq.TableDDL("looker-private-demo", "ecomm")
+	for _, tbl := range bq.AllTables {
+		if !strings.Contains(ddl, "`looker-private-demo.ecomm."+tbl+"`") {
+			t.Fatalf("TableDDL missing table %s", tbl)
+		}
+	}
+	if strings.Count(ddl, "PRIMARY KEY") != 3 || strings.Count(ddl, "NOT ENFORCED") != 3 || strings.Count(ddl, "max_staleness = INTERVAL 0 SECOND") != 3 {
+		t.Fatalf("expected 3 CDC tables with PRIMARY KEY (...) NOT ENFORCED and max_staleness = INTERVAL 0 SECOND in DDL:\n%s", ddl)
+	}
+
+	// Verify state save/load, command log, and authenticated HTTP status server
+	tmpDir := t.TempDir()
+	tmpState := filepath.Join(tmpDir, "state.gob")
+	if err := st.Save(tmpState); err != nil {
+		t.Fatalf("State.Save failed: %v", err)
+	}
+	server.RecordCommandRun(tmpState, "backfill", []string{"--days", "10"})
+	loaded, err := model.LoadState(tmpState)
+	if err != nil {
+		t.Fatalf("LoadState failed: %v", err)
+	}
+	gaps := server.FindGaps(loaded, baseTime.Add(10*24*time.Hour))
+	if len(gaps) != 10 {
+		t.Fatalf("expected 10 gaps between the daily jumps, got %d", len(gaps))
+	}
+
+	t.Setenv("SECRET", "s3cr3t")
+	mux := server.NewStatusMux(tmpState)
+
+	wRoot := httptest.NewRecorder()
+	mux.ServeHTTP(wRoot, httptest.NewRequest(http.MethodGet, "/", nil))
+	if wRoot.Code != http.StatusOK || !strings.Contains(wRoot.Body.String(), "key-input") {
+		t.Fatalf("expected / to serve key input HTML, got %d", wRoot.Code)
+	}
+
+	for _, u := range []string{"/api/status", "/api/status?key=wrong"} {
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, httptest.NewRequest(http.MethodGet, u, nil))
+		if w.Code != http.StatusUnauthorized {
+			t.Fatalf("expected 401 for %s, got %d", u, w.Code)
+		}
+	}
+
+	wOK := httptest.NewRecorder()
+	mux.ServeHTTP(wOK, httptest.NewRequest(http.MethodGet, "/api/status?key=s3cr3t", nil))
+	if wOK.Code != http.StatusOK || !strings.Contains(wOK.Body.String(), "backfill --from") || !strings.Contains(wOK.Body.String(), `"backfill"`) {
+		t.Fatalf("unexpected /api/status response (%d): %s", wOK.Code, wOK.Body.String())
+	}
+}
+
+func TestCloudDeployPrivateIPAndIAPHardening(t *testing.T) {
+	var executed []string
+	mockRun := func(name string, args ...string) (string, error) {
+		cmdStr := name + " " + strings.Join(args, " ")
+		executed = append(executed, cmdStr)
+		if strings.Contains(cmdStr, "format=value(projectNumber)") {
+			return "987654321", nil
+		}
+		return "", nil
+	}
+
+	d := &DeployCmd{
+		Cloud:        true,
+		Target:       "bq",
+		Project:      "test-gcp-proj",
+		Dataset:      "test_ds",
+		Table:        "order_items",
+		Interval:     "1m",
+		CrudMode:     "full_crud",
+		BackfillMode: "skip",
+		SkipBackfill: true,
+		LogName:      "demo-streamer",
+		LogSeverity:  "INFO",
+		Zone:         "us-central1-a",
+		Network:      "default",
+		VMName:       "demo-bq-streamer",
+		MachineType:  "e2-micro",
+		Secret:       "test-secret",
+	}
+	if err := d.runCloud(mockRun); err != nil {
+		t.Fatalf("runCloud failed: %v", err)
+	}
+
+	joined := strings.Join(executed, "\n")
+	for _, required := range []string{
+		"compute networks subnets update default --region=us-central1 --enable-private-ip-google-access --project=test-gcp-proj",
+		"compute instances create demo-bq-streamer",
+		"--no-address",
+		"--machine-type=e2-micro",
+		"--source-ranges=35.235.240.0/20",
+	} {
+		if !strings.Contains(joined, required) {
+			t.Fatalf("expected cloud deploy to execute %q, got:\n%s", required, joined)
+		}
+	}
+
+	// Verify SCP and SSH helpers strictly enforce --tunnel-through-iap
+	_, _ = scpViaIAP("test-gcp-proj", "us-central1-a", "/tmp/src", "demo-bq-streamer", "/tmp/dst", mockRun)
+	_, _ = sshViaIAP("test-gcp-proj", "us-central1-a", "demo-bq-streamer", "systemctl status streamer", mockRun)
+	joinedAfterIAP := strings.Join(executed, "\n")
+	if strings.Count(joinedAfterIAP, "--tunnel-through-iap") < 2 {
+		t.Fatalf("expected scpViaIAP and sshViaIAP to pass --tunnel-through-iap, got:\n%s", joinedAfterIAP)
+	}
+	if strings.Contains(joinedAfterIAP, "public-ip") || strings.Contains(joinedAfterIAP, "assign-inbound-public-ip") {
+		t.Fatalf("forbidden public IP flag found in cloud deployment commands:\n%s", joinedAfterIAP)
+	}
+}
+
+func TestStructuredCloudLogging(t *testing.T) {
+	var buf bytes.Buffer
+	logger := logging.NewLogger("my-gcp-project", "demo-streamer", "unit-test", "INFO", &buf)
+	logger.Debug("debug message should be filtered", map[string]any{"table": "events"})
+	if buf.Len() != 0 {
+		t.Fatalf("expected DEBUG message to be filtered at INFO severity, got %s", buf.String())
+	}
+
+	logger.Info("stream batch committed", map[string]any{
+		"table":     "order_items",
+		"crud_mode": "full_crud",
+		"rows":      25,
+	})
+	var entry logging.Entry
+	if err := json.Unmarshal(buf.Bytes(), &entry); err != nil {
+		t.Fatalf("failed to unmarshal structured log entry: %v", err)
+	}
+	if entry.Severity != "INFO" || entry.Component != "unit-test" || entry.LogName != "projects/my-gcp-project/logs/demo-streamer" {
+		t.Fatalf("unexpected log entry metadata: %+v", entry)
+	}
+	if entry.Table != "order_items" || entry.CrudMode != "full_crud" || entry.Message != "stream batch committed" {
+		t.Fatalf("unexpected log entry payload: %+v", entry)
+	}
+}
+
+func TestRetailCalendar454(t *testing.T) {
+	var rows []model.RetailCalendar454Row
+	sim.EmitRetailCalendar454(2020, 2034, func(r any) {
+		rows = append(rows, r.(model.RetailCalendar454Row))
+	})
+	if len(rows) != 5481 {
+		t.Fatalf("expected 5481 rows for FY2020..FY2034 matching BQ dataset, got %d", len(rows))
+	}
+	first := rows[0]
+	tbl, _, isCDC := model.RowTable(first)
+	if first.ReferenceDate != "2020-02-02" || first.FiscalYear != "FY2020" || first.FiscalWeekOfYear != "W01" || first.PrevCustomDate != 20190203 || first.Season != "Spring" || tbl != "retail_calendar_454" || isCDC {
+		t.Fatalf("unexpected first calendar row: %+v", first)
+	}
+	if _, err := bq.RowToProtoBytes(tbl, first, false); err != nil {
+		t.Fatalf("RowToProtoBytes(retail_calendar_454) failed: %v", err)
+	}
+	last := rows[len(rows)-1]
+	if last.ReferenceDate != "2035-02-03" || last.FiscalYear != "FY2034" || last.FiscalWeekOfYear != "W53" || last.FiscalPeriodOfYear != "P12" || last.Season != "Fall" {
+		t.Fatalf("unexpected last calendar row: %+v", last)
+	}
+}
+
+func TestRequireEnv(t *testing.T) {
+	t.Setenv("GCP_PROJECT", "")
+	t.Setenv("GCP_DATASET", "")
+	t.Setenv("SECRET", "")
+	if err := requireEnv(); err == nil {
+		t.Fatalf("expected error when env vars are unset")
+	}
+	t.Setenv("GCP_PROJECT", "looker-private-demo")
+	t.Setenv("GCP_DATASET", "ecomm")
+	if err := requireEnv(); err == nil {
+		t.Fatalf("expected error when SECRET is unset")
+	}
+	t.Setenv("SECRET", "my-secret")
+	if err := requireEnv(); err != nil {
+		t.Fatalf("expected nil error when all env vars are set, got %v", err)
+	}
+}
+
+func TestDestroyAndDropDDL(t *testing.T) {
+	drop := bq.DropTablesDDL("looker-private-demo", "ecomm")
+	for _, tbl := range bq.AllTables {
+		if !strings.Contains(drop, "DROP TABLE IF EXISTS `looker-private-demo.ecomm."+tbl+"`;") {
+			t.Fatalf("DropTablesDDL missing table %s", tbl)
+		}
+	}
+
+	tmpDir := t.TempDir()
+	tmpState := filepath.Join(tmpDir, "state.gob")
+	tmpProf := filepath.Join(tmpDir, "profile.json")
+	if err := model.NewState().Save(tmpState); err != nil {
+		t.Fatalf("Save failed: %v", err)
+	}
+	_ = os.WriteFile(tmpProf, []byte("{}"), 0644)
+
+	err := cmdDestroy([]string{"--project", "looker-private-demo", "--dataset", "ecomm", "--state", tmpState, "--profile", tmpProf}, strings.NewReader("wrong.dataset\n"))
+	if err == nil || !strings.Contains(err.Error(), "aborted") {
+		t.Fatalf("expected abort error on mismatched confirmation, got: %v", err)
+	}
+	if _, err := os.Stat(tmpState); err != nil {
+		t.Fatalf("expected state file to remain untouched when destroy aborts")
+	}
+
+	var executed []string
+	mockRun := func(name string, args ...string) (string, error) {
+		cmdStr := name + " " + strings.Join(args, " ")
+		executed = append(executed, cmdStr)
+		if strings.Contains(cmdStr, "format=value(projectNumber)") {
+			return "123456789", nil
+		}
+		return "", nil
+	}
+
+	server.RecordCommandRun(tmpState, "status", nil)
+	err = runDestroyArgs([]string{
+		"--project", "looker-private-demo",
+		"--dataset", "ecomm",
+		"--vm-name", "demo-bq-streamer",
+		"--looker-base-url", "https://looker.example.com",
+		"--state", tmpState,
+		"--profile", tmpProf,
+	}, strings.NewReader("looker-private-demo.ecomm\n"), mockRun)
+	if err != nil {
+		t.Fatalf("default full destroy failed: %v", err)
+	}
+
+	joined := strings.Join(executed, "\n")
+	for _, want := range []string{
+		"conn_name=thelook_bq",
+		"compute instances delete demo-bq-streamer",
+		"firewall-rules delete allow-streamer-iap",
+		"bq rm -r -f -d looker-private-demo:ecomm",
+		"secrets delete demo-streamer-dashboard-secret",
+		"remove-iam-policy-binding looker-private-demo --member=serviceAccount:123456789-compute@developer.gserviceaccount.com",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("expected default destroy to run %q, got:\n%s", want, joined)
+		}
+	}
+	for _, p := range []string{tmpState, server.CommandLogPath(tmpState), tmpProf} {
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Fatalf("expected %s to be removed by default destroy", p)
+		}
+	}
+}
+
+func TestCalendarSeasonalityAndHolidayVariability(t *testing.T) {
+	memMon := time.Date(2026, time.May, 25, 14, 0, 0, 0, time.UTC)
+	if !sim.IsMemorialDayWeekend(memMon) {
+		t.Fatalf("expected May 25, 2026 to be Memorial Day weekend")
+	}
+	trafficMult, discChance, isPromo := sim.CalendarSeason(memMon)
+	if trafficMult <= 1.3 || discChance < 0.30 || !isPromo {
+		t.Fatalf("Memorial Day season unexpected: traffic=%f disc=%f promo=%v", trafficMult, discChance, isPromo)
+	}
+
+	labMon := time.Date(2026, time.September, 7, 14, 0, 0, 0, time.UTC)
+	if !sim.IsLaborDayWeekend(labMon) {
+		t.Fatalf("expected Sept 7, 2026 to be Labor Day weekend")
+	}
+	trafficMult, discChance, isPromo = sim.CalendarSeason(labMon)
+	if trafficMult <= 1.3 || discChance < 0.30 || !isPromo {
+		t.Fatalf("Labor Day season unexpected: traffic=%f disc=%f promo=%v", trafficMult, discChance, isPromo)
+	}
+
+	july4 := time.Date(2026, time.July, 4, 14, 0, 0, 0, time.UTC)
+	if !sim.IsFourthOfJuly(july4) {
+		t.Fatalf("expected July 4 to be identified")
+	}
+	trafficMult, _, _ = sim.CalendarSeason(july4)
+	if trafficMult >= 0.75 {
+		t.Fatalf("expected 4th of July traffic dip, got: %f", trafficMult)
+	}
+
+	blackFriday := time.Date(2026, time.November, 27, 14, 0, 0, 0, time.UTC)
+	trafficMult, discChance, isPromo = sim.CalendarSeason(blackFriday)
+	if trafficMult < 2.0 || discChance < 0.25 || !isPromo {
+		t.Fatalf("expected Cyber Week surge, got: traffic=%f disc=%f promo=%v", trafficMult, discChance, isPromo)
+	}
+
+	postXmas := time.Date(2027, time.January, 5, 14, 0, 0, 0, time.UTC)
+	trafficMult, discChance, isPromo = sim.CalendarSeason(postXmas)
+	if trafficMult >= 0.80 || discChance < 0.20 || !isPromo {
+		t.Fatalf("expected post-Christmas valley, got: traffic=%f disc=%f promo=%v", trafficMult, discChance, isPromo)
+	}
+
+	sun := sim.DowMultiplier(time.Sunday)
+	fri := sim.DowMultiplier(time.Friday)
+	if sun <= fri {
+		t.Fatalf("expected Sunday multiplier (%f) > Friday multiplier (%f)", sun, fri)
+	}
+
+	if w := sim.CategorySeasonWeight("Swim", time.July); w < 2.0 {
+		t.Fatalf("expected Swim in July to be boosted, got %f", w)
+	}
+	if w := sim.CategorySeasonWeight("Outerwear & Coats", time.July); w > 0.5 {
+		t.Fatalf("expected Outerwear in July to be suppressed, got %f", w)
+	}
+	if w := sim.CategorySeasonWeight("Outerwear & Coats", time.December); w < 2.0 {
+		t.Fatalf("expected Outerwear in December to be boosted, got %f", w)
+	}
+	if w := sim.CategorySeasonWeight("Swim", time.December); w > 0.5 {
+		t.Fatalf("expected Swim in December to be suppressed, got %f", w)
+	}
+	if w := sim.CategorySeasonWeight("Underwear", time.July); w != 1.0 {
+		t.Fatalf("expected Underwear in July to have neutral weight 1.0, got %f", w)
+	}
+
+	if !sim.IsPeakLogistics(time.Date(2026, time.December, 10, 0, 0, 0, 0, time.UTC)) {
+		t.Fatalf("expected Dec 10 to be peak logistics")
+	}
+	if sim.IsPeakLogistics(time.Date(2026, time.July, 10, 0, 0, 0, 0, time.UTC)) {
+		t.Fatalf("expected July 10 not to be peak logistics")
+	}
+}
+
+func TestMonthlyGrowthMultiplier(t *testing.T) {
+	for year := 2016; year <= 2026; year++ {
+		var mults []float64
+		for m := 1; m <= 12; m++ {
+			ts := time.Date(year, time.Month(m), 15, 12, 0, 0, 0, time.UTC)
+			mults = append(mults, sim.MonthlyGrowthMultiplier(ts))
+		}
+
+		hyperCount := 0
+		var moms []float64
+		for m := 1; m < 12; m++ {
+			mom := (mults[m] - mults[m-1]) / mults[m-1]
+			moms = append(moms, mom)
+			if mom < -0.05001 {
+				t.Fatalf("year %d month %d -> %d dropped by %f, exceeds -5%% limit", year, m, m+1, mom)
+			}
+			if math.Abs(mom-0.20) < 0.0001 {
+				hyperCount++
+			}
+		}
+
+		if hyperCount != 1 {
+			t.Fatalf("year %d: expected exactly 1 hyper-growth month (+20%%), got %d", year, hyperCount)
+		}
+
+		sumMom := 0.0
+		for _, mom := range moms {
+			sumMom += mom
+		}
+		avgMom := sumMom / float64(len(moms))
+		if avgMom < 0.04 || avgMom > 0.18 {
+			t.Fatalf("year %d: expected average MoM growth ~10%% (within sample bounds), got %f", year, avgMom)
+		}
+	}
+
+	m2016 := sim.MonthlyGrowthMultiplier(time.Date(2016, time.June, 1, 0, 0, 0, 0, time.UTC))
+	m2020 := sim.MonthlyGrowthMultiplier(time.Date(2020, time.June, 1, 0, 0, 0, 0, time.UTC))
+	m2026 := sim.MonthlyGrowthMultiplier(time.Date(2026, time.June, 1, 0, 0, 0, 0, time.UTC))
+	if m2016 >= m2020 || m2020 >= m2026 {
+		t.Fatalf("expected growth over time across years: 2016=%f, 2020=%f, 2026=%f", m2016, m2020, m2026)
+	}
+}
+
+func TestPowerUsersTracking(t *testing.T) {
+	st := model.NewState()
+	eng, err := sim.NewEngine(st, defaultSeedJSON, "")
+	if err != nil {
+		t.Fatalf("NewEngine failed: %v", err)
+	}
+
+	baseTime := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	userEvents := make(map[int64]int)
+	maxSeq := int64(0)
+	emit := func(row any) {
+		switch r := row.(type) {
+		case model.EventRow:
+			if r.UserID != nil {
+				userEvents[*r.UserID]++
+			}
+			if r.SequenceNumber > maxSeq {
+				maxSeq = r.SequenceNumber
+			}
+		}
+	}
+
+	eng.Bootstrap(baseTime, 50, emit)
+	for m := 0; m < 2500; m++ {
+		eng.Tick(baseTime.Add(time.Duration(m)*time.Minute), 50, emit)
+	}
+
+	if len(st.Users) < 50 {
+		t.Fatalf("expected at least 50 users created, got %d", len(st.Users))
+	}
+	if len(st.PowerUserIDs) == 0 {
+		t.Fatalf("expected power users to be tracked in state, got 0")
+	}
+	if maxSeq <= 5 {
+		t.Fatalf("expected extended sequence numbers > 5 for heavy browser sessions, got %d", maxSeq)
+	}
+
+	powerSet := make(map[int64]bool)
+	for _, pid := range st.PowerUserIDs {
+		powerSet[pid] = true
+	}
+
+	totalEvents := 0
+	powerEvents := 0
+	for uid, count := range userEvents {
+		totalEvents += count
+		if powerSet[uid] {
+			powerEvents += count
+		}
+	}
+
+	if totalEvents > 0 {
+		powerUserRatio := float64(len(st.PowerUserIDs)) / float64(len(st.Users))
+		powerEventRatio := float64(powerEvents) / float64(totalEvents)
+		if powerUserRatio < 0.01 || powerUserRatio > 0.15 {
+			t.Fatalf("power user ratio %f outside expected range ~5%%", powerUserRatio)
+		}
+		if len(st.PowerUserIDs) > 0 && powerEventRatio <= powerUserRatio {
+			t.Fatalf("expected power event ratio (%f) > power user ratio (%f)", powerEventRatio, powerUserRatio)
+		}
+	}
+}
+
+func TestFraudAnomalyScheduleAndExecution(t *testing.T) {
+	for day := 1; day <= 365; day++ {
+		date := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC).AddDate(0, 0, day-1)
+		mins := sim.FraudAnomalyMinutes(date)
+		if len(mins) < 1 || len(mins) > 3 {
+			t.Fatalf("day %s: expected 1-3 fraud anomaly minutes, got %d", date.Format("2006-01-02"), len(mins))
+		}
+		seen := make(map[int]bool)
+		for _, m := range mins {
+			if m < 0 || m >= 1440 {
+				t.Fatalf("day %s: minute offset %d out of bounds [0, 1439]", date.Format("2006-01-02"), m)
+			}
+			if seen[m] {
+				t.Fatalf("day %s: duplicate minute %d in fraud schedule", date.Format("2006-01-02"), m)
+			}
+			seen[m] = true
+			minTime := date.Add(time.Duration(m) * time.Minute)
+			if !sim.IsFraudAnomalyMinute(minTime) {
+				t.Fatalf("expected IsFraudAnomalyMinute(%s) to be true", minTime)
+			}
+		}
+		for candidate := 0; candidate < 1440; candidate++ {
+			if !seen[candidate] {
+				nonFraudTime := date.Add(time.Duration(candidate) * time.Minute)
+				if sim.IsFraudAnomalyMinute(nonFraudTime) {
+					t.Fatalf("expected IsFraudAnomalyMinute(%s) to be false", nonFraudTime)
+				}
+				break
+			}
+		}
+	}
+
+	st := model.NewState()
+	eng, err := sim.NewEngine(st, defaultSeedJSON, "")
+	if err != nil {
+		t.Fatalf("NewEngine failed: %v", err)
+	}
+
+	var emittedRows []any
+	emit := func(row any) {
+		emittedRows = append(emittedRows, row)
+	}
+
+	baseTime := time.Date(2026, 6, 15, 14, 30, 0, 0, time.UTC)
+	eng.Bootstrap(baseTime, 100, emit)
+	emittedRows = emittedRows[:0]
+
+	eng.EmitFraudAnomaly(baseTime, emit)
+
+	var users []model.UserRow
+	var events []model.EventRow
+	var orderItems []model.OrderItemRow
+	var txDetails []model.TransactionDetailRow
+
+	for _, row := range emittedRows {
+		switch r := row.(type) {
+		case model.UserRow:
+			users = append(users, r)
+		case model.EventRow:
+			events = append(events, r)
+		case model.OrderItemRow:
+			orderItems = append(orderItems, r)
+		case model.TransactionDetailRow:
+			txDetails = append(txDetails, r)
+		}
+	}
+
+	if len(users) != 1 {
+		t.Fatalf("expected exactly 1 user registered for fraud anomaly, got %d", len(users))
+	}
+	fraudUser := users[0]
+
+	hasRegister := false
+	productViews := 0
+	cartEvents := 0
+	hasPurchase := false
+	for _, ev := range events {
+		if ev.UserID == nil || *ev.UserID != fraudUser.ID {
+			t.Fatalf("event %d has unexpected user ID", ev.ID)
+		}
+		switch ev.EventType {
+		case "Register":
+			hasRegister = true
+		case "Product":
+			productViews++
+		case "Cart":
+			cartEvents++
+		case "Purchase":
+			hasPurchase = true
+		}
+	}
+
+	if !hasRegister || !hasPurchase {
+		t.Fatalf("expected Register and Purchase events in fraud session")
+	}
+	if productViews < 6 || cartEvents < 6 {
+		t.Fatalf("expected at least 6 product views and carts, got %d views, %d carts", productViews, cartEvents)
+	}
+
+	if len(orderItems) < 6 || len(orderItems) > 12 {
+		t.Fatalf("expected 6-12 order items in fraudulent purchase, got %d", len(orderItems))
+	}
+
+	orderID := orderItems[0].OrderID
+	orderProductIDs := make(map[int64]bool)
+
+	for _, oi := range orderItems {
+		if oi.OrderID != orderID {
+			t.Fatalf("expected all order items to share order_id %d, got %d", orderID, oi.OrderID)
+		}
+		if oi.UserID != fraudUser.ID {
+			t.Fatalf("expected order item to belong to fraud user %d, got %d", fraudUser.ID, oi.UserID)
+		}
+		if oi.SalePrice < 50.0 {
+			t.Fatalf("expected high-value item with sale_price >= 50, got %f", oi.SalePrice)
+		}
+	}
+
+	if len(txDetails) != 1 {
+		t.Fatalf("expected 1 TransactionDetailRow emitted for the order, got %d", len(txDetails))
+	}
+	td := txDetails[0]
+	if td.OrderID != orderID {
+		t.Fatalf("expected transaction_detail order_id %d, got %d", orderID, td.OrderID)
+	}
+	if len(td.Items) != len(orderItems) {
+		t.Fatalf("expected transaction_detail.Items length %d, got %d", len(orderItems), len(td.Items))
+	}
+
+	emittedRows = emittedRows[:0]
+	eng.EmitFraudAnomaly(baseTime.Add(time.Hour), emit)
+
+	var secondOrderItems []model.OrderItemRow
+	for _, row := range emittedRows {
+		if oi, ok := row.(model.OrderItemRow); ok {
+			secondOrderItems = append(secondOrderItems, oi)
+		}
+	}
+	if len(secondOrderItems) < 6 {
+		t.Fatalf("expected at least 6 items in second fraud order, got %d", len(secondOrderItems))
+	}
+	for _, oi := range orderItems {
+		orderProductIDs[oi.InventoryItemID] = true
+	}
+	var overlapCount int
+	for _, oi := range secondOrderItems {
+		if orderProductIDs[oi.InventoryItemID] {
+			overlapCount++
+		}
+	}
+	if overlapCount == len(secondOrderItems) {
+		t.Fatalf("successive fraud orders should not have identical items; got complete overlap")
+	}
+
+	stDay := model.NewState()
+	engDay, _ := sim.NewEngine(stDay, defaultSeedJSON, "")
+	engDay.Bootstrap(baseTime, 100, func(any) {})
+	var fraudTxCount int
+	dayEmit := func(row any) {
+		if td, ok := row.(model.TransactionDetailRow); ok && len(td.Items) >= 6 && td.Status == "Processing" {
+			fraudTxCount++
+		}
+	}
+	dayStart := time.Date(2026, 8, 10, 0, 0, 0, 0, time.UTC)
+	for m := 0; m < 1440; m++ {
+		engDay.Tick(dayStart.Add(time.Duration(m)*time.Minute), 100, dayEmit)
+	}
+	if fraudTxCount < 1 || fraudTxCount > 3 {
+		t.Fatalf("expected 1-3 fraudulent multi-item transactions in 24 hours, got %d", fraudTxCount)
+	}
+}

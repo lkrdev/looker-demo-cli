@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# Idempotent BigQuery streamer deployment script.
+# Enforces private-only GCE VM provisioning (--no-address), Private Google Access
+# (--enable-private-ip-google-access), and IAP tunneling (--tunnel-through-iap).
+set -euo pipefail
+cd "$(dirname "${BASH_SOURCE[0]}")"
+
+PROJECT="${GCP_PROJECT:-{{GCP_PROJECT}}}"
+DATASET="${GCP_DATASET:-{{BQ_DATASET}}}"
+TABLE="${TARGET_TABLE:-{{TARGET_TABLE}}}"
+INTERVAL="${STREAM_INTERVAL:-{{STREAM_INTERVAL}}}"
+CRUD_MODE="${CRUD_MODE:-{{CRUD_MODE}}}"
+BACKFILL_MODE="${BACKFILL_MODE:-{{BACKFILL_MODE}}}"
+LOG_NAME="${LOG_NAME:-{{LOG_NAME}}}"
+LOG_SEVERITY="${LOG_SEVERITY:-{{LOG_SEVERITY}}}"
+VM_NAME="${VM_NAME:-{{VM_NAME}}}"
+ZONE="${GCP_ZONE:-{{GCP_ZONE}}}"
+SKIP_BACKFILL="false"
+
+if [[ "${BACKFILL_MODE}" == "skip" ]]; then
+  SKIP_BACKFILL="true"
+fi
+
+if [[ " $* " == *" --destroy "* ]]; then
+  exec go run . destroy --target bq \
+    --project "${PROJECT}" \
+    --dataset "${DATASET}" \
+    --vm-name "${VM_NAME}" \
+    --zone "${ZONE}" \
+    "${@/--destroy/}"
+fi
+
+EXTRA_ARGS=()
+if [[ "${SKIP_BACKFILL}" == "true" ]]; then
+  EXTRA_ARGS+=("--skip-backfill")
+fi
+
+# Note: cloud.go provisions the GCE e2-micro instance strictly with --no-address,
+# enables Private Google Access (--enable-private-ip-google-access) on the subnet,
+# and uses --tunnel-through-iap for all SSH/SCP operations.
+exec go run . deploy --cloud --target bq \
+  --project "${PROJECT}" \
+  --dataset "${DATASET}" \
+  --table "${TABLE}" \
+  --interval "${INTERVAL}" \
+  --crud-mode "${CRUD_MODE}" \
+  --log-name "${LOG_NAME}" \
+  --log-severity "${LOG_SEVERITY}" \
+  --vm-name "${VM_NAME}" \
+  --zone "${ZONE}" \
+  "${EXTRA_ARGS[@]}" \
+  "$@"

@@ -1,0 +1,567 @@
+package main
+
+import (
+	"bufio"
+	"encoding/base64"
+	"fmt"
+	"io"
+	"math/rand/v2"
+	"os"
+	"os/exec"
+	"strconv"
+	"strings"
+	"time"
+
+	"demo-streamer/internal/bq"
+	"demo-streamer/internal/logging"
+	"demo-streamer/internal/server"
+)
+
+type cmdRunner func(name string, args ...string) (string, error)
+
+func defaultRunner(name string, args ...string) (string, error) {
+	cmd := exec.Command(name, args...)
+	out, err := cmd.Output()
+	return strings.TrimSpace(string(out)), err
+}
+
+func resolveProject(project string, run cmdRunner) string {
+	if project != "" {
+		return project
+	}
+	if p := os.Getenv("GCP_PROJECT"); p != "" {
+		return p
+	}
+	out, _ := run("gcloud", "config", "get-value", "project")
+	return strings.TrimSpace(out)
+}
+
+func regionFromZone(zone, fallbackRegion string) string {
+	if idx := strings.LastIndex(zone, "-"); idx > 0 {
+		return zone[:idx]
+	}
+	if fallbackRegion != "" {
+		return fallbackRegion
+	}
+	return "us-central1"
+}
+
+func saveSecret(project, name, val string, run cmdRunner) {
+	if val == "" || project == "" {
+		return
+	}
+	if _, err := run("gcloud", "secrets", "describe", name, "--project="+project); err != nil {
+		_, _ = run("gcloud", "secrets", "create", name, "--replication-policy=automatic", "--project="+project, "--quiet")
+	}
+	cmd := exec.Command("gcloud", "secrets", "versions", "add", name, "--data-file=-", "--project="+project, "--quiet")
+	cmd.Stdin = strings.NewReader(val)
+	_ = cmd.Run()
+}
+
+func readSecret(project, name string, run cmdRunner) string {
+	if project == "" {
+		return ""
+	}
+	out, _ := run("gcloud", "secrets", "versions", "access", "latest", "--secret="+name, "--project="+project)
+	return out
+}
+
+func promptIfEmpty(val, label string, secret bool) string {
+	if val != "" {
+		return val
+	}
+	fmt.Fprintf(os.Stderr, "%s: ", label)
+	line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+	if secret {
+		fmt.Fprintln(os.Stderr)
+	}
+	return strings.TrimSpace(line)
+}
+
+func (d *DeployCmd) runCloud(run cmdRunner) error {
+	d.Project = resolveProject(d.Project, run)
+	if d.Project == "" {
+		return fmt.Errorf("no active GCP project; set --project or GCP_PROJECT")
+	}
+	if d.Zone == "" {
+		d.Zone = "us-central1-a"
+	}
+	d.Region = regionFromZone(d.Zone, d.Region)
+
+	if d.SkipBackfill || strings.EqualFold(d.BackfillMode, "skip") {
+		d.SkipBackfill = true
+		d.Days = 0
+	} else if d.Days == 0 {
+		switch strings.ToLower(d.Mode) {
+		case "prod", "production", "full":
+			d.Days = 3650
+		default:
+			d.Days = 7
+		}
+	}
+	if d.Secret == "" {
+		d.Secret = readSecret(d.Project, "demo-streamer-dashboard-secret", run)
+		if d.Secret == "" {
+			d.Secret = fmt.Sprintf("streamer-%d", 100000+rand.IntN(900000))
+		}
+	}
+	if d.UseBinary {
+		d.Image = ""
+	}
+	if d.LookerConn != "" || d.LookerBaseURL != "" || d.SAKey != "" {
+		d.Looker = true
+	}
+	if d.Looker {
+		d.LookerBaseURL = promptIfEmpty(d.LookerBaseURL, "Looker Base URL (e.g. https://instance.cloud.looker.com)", false)
+		d.LookerClientID = promptIfEmpty(d.LookerClientID, "Looker Client ID", false)
+		d.LookerSecret = promptIfEmpty(d.LookerSecret, "Looker Client Secret", true)
+	}
+
+	apis := []string{
+		"compute.googleapis.com",
+		"iap.googleapis.com",
+		"logging.googleapis.com",
+		"secretmanager.googleapis.com",
+		"bigquery.googleapis.com",
+		"bigquerystorage.googleapis.com",
+	}
+	_, _ = run("gcloud", append([]string{"services", "enable", "--project=" + d.Project}, apis...)...)
+	saveSecret(d.Project, "demo-streamer-dashboard-secret", d.Secret, run)
+	if d.Looker {
+		saveSecret(d.Project, "lookersdk-base-url", d.LookerBaseURL, run)
+		saveSecret(d.Project, "lookersdk-client-id", d.LookerClientID, run)
+		saveSecret(d.Project, "lookersdk-client-secret", d.LookerSecret, run)
+	}
+
+	return d.deployBQ(run)
+}
+
+func bindComputeSARoles(project string, roles []string, run cmdRunner) {
+	projNum, _ := run("gcloud", "projects", "describe", project, "--format=value(projectNumber)")
+	if projNum == "" {
+		return
+	}
+	sa := projNum + "-compute@developer.gserviceaccount.com"
+	fmt.Fprintf(os.Stderr, "==> Ensuring %s has required IAM roles...\n", sa)
+	for _, role := range roles {
+		_, _ = run("gcloud", "projects", "add-iam-policy-binding", project,
+			"--member=serviceAccount:"+sa, "--role="+role, "--condition=None", "--quiet")
+	}
+}
+
+// enablePrivateGoogleAccess configures the VPC subnet so private GCE VMs (--no-address)
+// reach BigQuery Storage Write API and Cloud Logging v2 strictly over Google's internal network.
+func enablePrivateGoogleAccess(project, network, region string, run cmdRunner) error {
+	if network == "" {
+		network = "default"
+	}
+	if region == "" {
+		region = "us-central1"
+	}
+	_, err := run("gcloud", "compute", "networks", "subnets", "update", network,
+		"--region="+region,
+		"--enable-private-ip-google-access",
+		"--project="+project)
+	return err
+}
+
+// scpViaIAP copies files to a private GCE VM strictly over Identity-Aware Proxy (--tunnel-through-iap).
+func scpViaIAP(project, zone, srcPath, vmName, dstPath string, run cmdRunner) (string, error) {
+	return run("gcloud", "compute", "scp",
+		"--tunnel-through-iap",
+		"--zone="+zone,
+		"--project="+project,
+		srcPath,
+		fmt.Sprintf("%s:%s", vmName, dstPath))
+}
+
+// sshViaIAP executes a command on a private GCE VM strictly over Identity-Aware Proxy (--tunnel-through-iap).
+func sshViaIAP(project, zone, vmName, remoteCmd string, run cmdRunner) (string, error) {
+	return run("gcloud", "compute", "ssh", vmName,
+		"--tunnel-through-iap",
+		"--zone="+zone,
+		"--project="+project,
+		"--command="+remoteCmd)
+}
+
+func (d *DeployCmd) deployBQ(run cmdRunner) error {
+	if d.Dataset == "" {
+		d.Dataset = "{{BQ_DATASET}}"
+	}
+	if d.VMName == "" {
+		d.VMName = "{{VM_NAME}}"
+	}
+	if d.Table == "" {
+		d.Table = "{{TARGET_TABLE}}"
+	}
+	if d.Interval == "" {
+		d.Interval = "{{STREAM_INTERVAL}}"
+	}
+	if d.CrudMode == "" {
+		d.CrudMode = "{{CRUD_MODE}}"
+	}
+	if d.LogName == "" {
+		d.LogName = "{{LOG_NAME}}"
+	}
+	if d.LogSeverity == "" {
+		d.LogSeverity = "{{LOG_SEVERITY}}"
+	}
+	if d.LookerConn == "" {
+		d.LookerConn = d.Dataset + "_bq"
+	}
+
+	logger := logging.NewLogger(d.Project, d.LogName, "cloud-deployer", d.LogSeverity, os.Stderr)
+	logger.Info("deploying BigQuery streamer", map[string]any{
+		"project":       d.Project,
+		"dataset":       d.Dataset,
+		"table":         d.Table,
+		"crud_mode":     d.CrudMode,
+		"interval":      d.Interval,
+		"skip_backfill": d.SkipBackfill,
+		"vm_name":       d.VMName,
+		"zone":          d.Zone,
+	})
+
+	bindComputeSARoles(d.Project, []string{
+		"roles/logging.logWriter",
+		"roles/bigquery.dataEditor",
+		"roles/bigquery.jobUser",
+		"roles/secretmanager.secretAccessor",
+	}, run)
+
+	if _, err := run("gcloud", "alpha", "bq", "datasets", "create", d.Dataset, "--project="+d.Project); err != nil {
+		_, _ = run("bq", "--location="+d.Location, "mk", "-d", d.Project+":"+d.Dataset)
+	}
+
+	if d.Looker {
+		certB64 := ""
+		if d.SAKey != "" {
+			if raw, err := os.ReadFile(d.SAKey); err == nil {
+				certB64 = base64.StdEncoding.EncodeToString(raw)
+			}
+		}
+		fmt.Fprintf(os.Stderr, "==> Registering Looker BigQuery connection '%s' -> %s.%s...\n", d.LookerConn, d.Project, d.Dataset)
+		code := `
+body = {"name": conn_name, "dialect_name": "bigquery_standard_sql", "host": project_id, "database": dataset}
+if cert_b64:
+    body["certificate"] = cert_b64
+    body["file_type"] = ".json"
+existing = [c["name"] for c in all_connections() if c.get("name") == conn_name]
+return update_connection(conn_name, body=body) if existing else create_connection(body=body)
+`
+		_, _ = run("uvx", "--from", "lkr-dev-cli[code-mode]", "lkr-dev-cli",
+			"--base-url", d.LookerBaseURL, "--client-id", d.LookerClientID, "--client-secret", d.LookerSecret,
+			"code-mode", "sandbox", "-v", "conn_name="+d.LookerConn, "-v", "project_id="+d.Project, "-v", "dataset="+d.Dataset, "-v", "cert_b64="+certB64,
+			"--code", strings.TrimSpace(code))
+	}
+
+	if d.Local {
+		_ = os.Setenv("GCP_PROJECT", d.Project)
+		_ = os.Setenv("GCP_DATASET", d.Dataset)
+		_ = os.Setenv("SECRET", d.Secret)
+		if err := d.deploySchemaOnly(); err != nil {
+			return err
+		}
+		if !d.SkipBackfill && d.Days > 0 {
+			bf := &BackfillCmd{
+				Days:            d.Days,
+				Table:           d.Table,
+				CrudMode:        d.CrudMode,
+				LogName:         d.LogName,
+				LogSeverity:     d.LogSeverity,
+				State:           d.State,
+				Profile:         "profile.json",
+				InitialProducts: 14560,
+				HTTP:            d.HTTP,
+			}
+			if err := bf.Run(); err != nil {
+				return err
+			}
+		}
+		iv, err := time.ParseDuration(d.Interval)
+		if err != nil || iv <= 0 {
+			iv = time.Minute
+		}
+		rc := &RunCmd{
+			State:           d.State,
+			Profile:         "profile.json",
+			Table:           d.Table,
+			Interval:        iv,
+			CrudMode:        d.CrudMode,
+			SkipBackfill:    d.SkipBackfill,
+			LogName:         d.LogName,
+			LogSeverity:     d.LogSeverity,
+			Dataset:         d.Project + "." + d.Dataset,
+			InitialProducts: 14560,
+			HTTP:            ":" + d.Port,
+		}
+		return rc.Run()
+	}
+
+	// Enable Private Google Access on the subnet so the private VM (--no-address) reaches BigQuery & Cloud Logging APIs.
+	_ = enablePrivateGoogleAccess(d.Project, d.Network, d.Region, run)
+
+	// Allow IAP TCP forwarding (35.235.240.0/20) to reach SSH (22) and status UI (8080) without any public IP.
+	_, _ = run("gcloud", "compute", "firewall-rules", "create", "allow-streamer-iap",
+		"--network="+d.Network,
+		"--allow=tcp:22,tcp:8080",
+		"--source-ranges=35.235.240.0/20",
+		"--target-tags=demo-streamer",
+		"--project="+d.Project)
+
+	envBlock := fmt.Sprintf("export GCP_PROJECT=%q GCP_DATASET=%q SECRET=%q", d.Project, d.Dataset, d.Secret)
+	deployCmd := fmt.Sprintf("/usr/local/bin/streamer deploy --project %q --dataset %q --crud-mode %q", d.Project, d.Dataset, d.CrudMode)
+	unitEnv := fmt.Sprintf("Environment=GCP_PROJECT=%s\nEnvironment=GCP_DATASET=%s\nEnvironment=SECRET=%s", d.Project, d.Dataset, d.Secret)
+	startup := buildVMStartupScript(envBlock, deployCmd, unitEnv, d.UseBinary, d.Image, d.Days, d.SkipBackfill, d.Table, d.Interval, d.CrudMode, d.LogName, d.LogSeverity)
+	if err := provisionGeneratorVM(d.Project, d.Zone, d.VMName, d.MachineType, d.Network, startup, run); err != nil {
+		return err
+	}
+
+	fmt.Fprintf(os.Stderr, "\n=================================================================\n")
+	fmt.Fprintf(os.Stderr, "  BigQuery Streamer running on private VM: %s (%s, --no-address)\n", d.VMName, d.Zone)
+	fmt.Fprintf(os.Stderr, "  Target Dataset:     %s.%s (Table: %s, CRUD: %s)\n", d.Project, d.Dataset, d.Table, d.CrudMode)
+	if d.Looker {
+		fmt.Fprintf(os.Stderr, "  Looker Connection:  %s\n", d.LookerConn)
+	}
+	fmt.Fprintf(os.Stderr, "  Web UI IAP Tunnel:  gcloud compute ssh %s --zone=%s --tunnel-through-iap -- -L 8080:localhost:8080\n", d.VMName, d.Zone)
+	fmt.Fprintf(os.Stderr, "  Live Logs (IAP):    gcloud compute ssh %s --zone=%s --tunnel-through-iap -- sudo journalctl -u streamer -f\n", d.VMName, d.Zone)
+	fmt.Fprintf(os.Stderr, "=================================================================\n")
+	return nil
+}
+
+func buildVMStartupScript(envBlock, deployCmd, unitEnv string, useBinary bool, image string, backfillDays int, skipBackfill bool, table, interval, crudMode, logName, logSeverity string) string {
+	effDays := backfillDays
+	if skipBackfill {
+		effDays = 0
+	}
+	return fmt.Sprintf(`#!/usr/bin/env bash
+set -euo pipefail
+exec > /var/log/streamer-startup.log 2>&1
+
+if [ ! -f /swapfile ]; then
+  fallocate -l 2G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile
+  echo '/swapfile none swap sw 0 0' >> /etc/fstab
+fi
+
+mkdir -p /var/lib/streamer
+%s
+
+USE_BINARY=%q
+IMAGE=%q
+
+if [ "${USE_BINARY}" != "true" ] && [ -n "${IMAGE}" ]; then
+  if command -v docker &>/dev/null; then
+    REGISTRY_HOST="$(echo "${IMAGE}" | cut -d/ -f1)"
+    gcloud auth configure-docker "${REGISTRY_HOST}" --quiet || true
+    if docker pull "${IMAGE}"; then
+      CID=$(docker create "${IMAGE}")
+      docker cp "${CID}:/usr/local/bin/streamer" /usr/local/bin/streamer || docker cp "${CID}:/usr/local/bin/thelook" /usr/local/bin/streamer
+      docker rm "${CID}"
+      chmod +x /usr/local/bin/streamer
+    fi
+  fi
+fi
+
+if [ -f /opt/streamer/main.go ] && [ ! -f /usr/local/bin/streamer ]; then
+  cd /opt/streamer
+  GOTOOLCHAIN=auto /usr/local/bin/go build -ldflags="-s -w" -o /usr/local/bin/streamer .
+fi
+
+%s
+if [ %d -gt 0 ]; then
+  /usr/local/bin/streamer backfill --days %d --table %q --crud-mode %q --log-name %q --log-severity %q --state /var/lib/streamer/state.gob
+fi
+
+cat <<UNIT > /etc/systemd/system/{{SERVICE_FILE}}
+[Unit]
+Description=Looker Demo BigQuery Data Streamer ({{BQ_DATASET}})
+After=network-online.target
+
+[Service]
+Type=simple
+%s
+ExecStart=/usr/local/bin/streamer run --state /var/lib/streamer/state.gob --table %s --interval %s --crud-mode %s --log-name %s --log-severity %s --http :8080
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+systemctl daemon-reload && systemctl enable --now {{SERVICE_FILE}}
+`, envBlock, strconv.FormatBool(useBinary), image, deployCmd, effDays, effDays, table, crudMode, logName, logSeverity, unitEnv, table, interval, crudMode, logName, logSeverity)
+}
+
+// provisionGeneratorVM creates a hardened GCE e2-micro VM strictly with --no-address (private IP only).
+func provisionGeneratorVM(project, zone, vmName, machineType, network, startup string, run cmdRunner) error {
+	f, err := os.CreateTemp("", "streamer-startup-*.sh")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(f.Name())
+	if _, err := f.WriteString(startup); err != nil {
+		f.Close()
+		return err
+	}
+	f.Close()
+
+	if _, err := run("gcloud", "compute", "instances", "create", vmName,
+		"--zone="+zone,
+		"--machine-type="+machineType,
+		"--network="+network,
+		"--no-address",
+		"--tags=demo-streamer",
+		"--scopes=cloud-platform",
+		"--shielded-secure-boot",
+		"--metadata-from-file=startup-script="+f.Name(),
+		"--project="+project); err != nil {
+		_, err = run("gcloud", "compute", "instances", "add-metadata", vmName,
+			"--zone="+zone,
+			"--metadata-from-file=startup-script="+f.Name(),
+			"--project="+project)
+		return err
+	}
+	return nil
+}
+
+func (d *DestroyCmd) execute(in io.Reader, run cmdRunner) error {
+	if d.Zone == "" {
+		d.Zone = "us-central1-a"
+	}
+	d.Region = regionFromZone(d.Zone, d.Region)
+
+	if d.DeleteTables {
+		d.VM = false
+		d.Looker = false
+		d.Secrets = false
+		d.ServiceAccount = false
+		d.Database = true
+	}
+
+	hasCloudWork := d.VM || d.Database || d.Looker || d.Secrets || d.ServiceAccount
+	if hasCloudWork {
+		d.Project = resolveProject(d.Project, run)
+	}
+
+	if hasCloudWork && !d.Yes && !d.DryRun {
+		confirmTarget := d.Project
+		if d.Project != "" && d.Dataset != "" {
+			confirmTarget = d.Project + "." + d.Dataset
+			fmt.Fprintf(os.Stderr, "Confirm deleting all %d tables in %s by typing %q: ", len(bq.AllTables), confirmTarget, confirmTarget)
+		} else if confirmTarget != "" {
+			fmt.Fprintf(os.Stderr, "Confirm tearing down streamer cloud resources in %s by typing %q: ", confirmTarget, confirmTarget)
+		}
+		if confirmTarget != "" {
+			line, err := bufio.NewReader(in).ReadString('\n')
+			if err != nil && err != io.EOF {
+				return fmt.Errorf("reading confirmation: %w", err)
+			}
+			if got := strings.TrimSpace(line); got != confirmTarget {
+				return fmt.Errorf("aborted: confirmation %q did not match %q", got, confirmTarget)
+			}
+		}
+	}
+
+	doBQ := d.Target == "bq" || d.Target == "all"
+
+	execStep := func(name string, args ...string) (string, error) {
+		if d.DryRun {
+			fmt.Fprintf(os.Stderr, "[dry-run] %s %s\n", name, strings.Join(args, " "))
+			return "", nil
+		}
+		return run(name, args...)
+	}
+
+	// 1. Looker connections
+	if d.Looker && !d.DeleteTables {
+		if d.LookerBaseURL == "" && d.Project != "" && !d.DryRun {
+			d.LookerBaseURL = readSecret(d.Project, "lookersdk-base-url", run)
+			d.LookerClientID = readSecret(d.Project, "lookersdk-client-id", run)
+			d.LookerSecret = readSecret(d.Project, "lookersdk-client-secret", run)
+		}
+		var conns []string
+		if d.LookerConn != "" {
+			conns = []string{d.LookerConn}
+		} else if doBQ {
+			conns = append(conns, "thelook_bq")
+		}
+		if d.LookerBaseURL != "" || d.DryRun {
+			code := `
+existing = [c["name"] for c in all_connections() if c.get("name") == conn_name]
+if existing:
+    delete_connection(conn_name)
+`
+			for _, conn := range conns {
+				fmt.Fprintf(os.Stderr, "==> Removing Looker connection '%s'...\n", conn)
+				_, _ = execStep("uvx", "--from", "lkr-dev-cli[code-mode]", "lkr-dev-cli",
+					"--base-url", d.LookerBaseURL, "--client-id", d.LookerClientID, "--client-secret", d.LookerSecret,
+					"code-mode", "sandbox", "-v", "conn_name="+conn, "--code", strings.TrimSpace(code))
+			}
+		}
+	}
+
+	// 2. Compute Engine generator VM & IAP firewall rule
+	if d.VM && d.Project != "" {
+		vm := d.VMName
+		if vm == "" {
+			vm = "demo-bq-streamer"
+		}
+		fmt.Fprintf(os.Stderr, "==> Deleting Compute Engine VM '%s' (%s)...\n", vm, d.Zone)
+		_, _ = execStep("gcloud", "compute", "instances", "delete", vm, "--zone="+d.Zone, "--project="+d.Project, "--quiet")
+		_, _ = execStep("gcloud", "compute", "firewall-rules", "delete", "allow-streamer-iap", "--project="+d.Project, "--quiet")
+	}
+
+	// 3. Database tables and BigQuery dataset
+	if d.Database && doBQ && d.Project != "" && d.Dataset != "" {
+		if d.DeleteTables && !d.DryRun {
+			ddl := bq.DropTablesDDL(d.Project, d.Dataset)
+			fmt.Fprintf(os.Stderr, "Dropping %d tables in %s.%s...\n", len(bq.AllTables), d.Project, d.Dataset)
+			if _, err := bq.RunQuery(d.Project, ddl, false, 0); err != nil {
+				return fmt.Errorf("failed to drop tables: %w", err)
+			}
+		} else {
+			fmt.Fprintf(os.Stderr, "==> Removing BigQuery dataset '%s:%s'...\n", d.Project, d.Dataset)
+			_, _ = execStep("bq", "rm", "-r", "-f", "-d", d.Project+":"+d.Dataset)
+		}
+	}
+
+	// 4. Secret Manager secrets
+	if d.Secrets && d.Project != "" {
+		secrets := []string{"demo-streamer-dashboard-secret", "lookersdk-base-url", "lookersdk-client-id", "lookersdk-client-secret"}
+		fmt.Fprintf(os.Stderr, "==> Deleting secrets from Secret Manager...\n")
+		for _, sec := range secrets {
+			_, _ = execStep("gcloud", "secrets", "delete", sec, "--project="+d.Project, "--quiet")
+		}
+	}
+
+	// 5. Compute Engine Service Account IAM bindings
+	if d.ServiceAccount && d.Project != "" {
+		projNum := "000000"
+		if !d.DryRun {
+			projNum, _ = run("gcloud", "projects", "describe", d.Project, "--format=value(projectNumber)")
+		}
+		if projNum != "" {
+			sa := projNum + "-compute@developer.gserviceaccount.com"
+			roles := []string{
+				"roles/logging.logWriter",
+				"roles/secretmanager.secretAccessor",
+				"roles/bigquery.dataEditor",
+				"roles/bigquery.jobUser",
+			}
+			fmt.Fprintf(os.Stderr, "==> Revoking IAM role bindings from %s...\n", sa)
+			for _, role := range roles {
+				_, _ = execStep("gcloud", "projects", "remove-iam-policy-binding", d.Project,
+					"--member=serviceAccount:"+sa, "--role="+role, "--quiet")
+			}
+		}
+	}
+
+	// 6. Local state files
+	if d.LocalState && !d.DryRun {
+		for _, p := range []string{d.State, d.State + ".tmp", server.CommandLogPath(d.State), d.Profile} {
+			if err := os.Remove(p); err == nil {
+				fmt.Fprintf(os.Stderr, "Removed %s\n", p)
+			}
+		}
+	}
+	return nil
+}

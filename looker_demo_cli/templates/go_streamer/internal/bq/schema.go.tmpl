@@ -1,0 +1,263 @@
+package bq
+
+import (
+	"encoding/json"
+	"fmt"
+	"strings"
+	"sync"
+	"time"
+
+	"demo-streamer/internal/model"
+
+	"cloud.google.com/go/bigquery/storage/apiv1/storagepb"
+	"cloud.google.com/go/bigquery/storage/managedwriter/adapt"
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/types/descriptorpb"
+	"google.golang.org/protobuf/types/dynamicpb"
+)
+
+var AllTables = []string{
+	"distribution_centers",
+	"products",
+	"users",
+	"inventory_items",
+	"order_items",
+	"events",
+	"campaigns",
+	"ad_groups",
+	"keywords",
+	"ad_events",
+	"discounts",
+	"transaction_detail",
+	"combined_orders_users",
+	"retail_calendar_454",
+}
+
+func sf(name string, typ storagepb.TableFieldSchema_Type) *storagepb.TableFieldSchema {
+	return &storagepb.TableFieldSchema{Name: name, Type: typ, Mode: storagepb.TableFieldSchema_NULLABLE}
+}
+
+func sfStruct(name string, mode storagepb.TableFieldSchema_Mode, fields ...*storagepb.TableFieldSchema) *storagepb.TableFieldSchema {
+	return &storagepb.TableFieldSchema{Name: name, Type: storagepb.TableFieldSchema_STRUCT, Mode: mode, Fields: fields}
+}
+
+const (
+	i64 = storagepb.TableFieldSchema_INT64
+	dbl = storagepb.TableFieldSchema_DOUBLE
+	str = storagepb.TableFieldSchema_STRING
+	ts  = storagepb.TableFieldSchema_TIMESTAMP
+)
+
+var tableSchemas = map[string]*storagepb.TableSchema{
+	"distribution_centers": {
+		Fields: []*storagepb.TableFieldSchema{
+			sf("id", i64), sf("name", str), sf("latitude", dbl), sf("longitude", dbl),
+		},
+	},
+	"products": {
+		Fields: []*storagepb.TableFieldSchema{
+			sf("id", i64), sf("cost", dbl), sf("category", str), sf("name", str), sf("brand", str),
+			sf("retail_price", dbl), sf("department", str), sf("sku", str), sf("distribution_center_id", str),
+		},
+	},
+	"users": {
+		Fields: []*storagepb.TableFieldSchema{
+			sf("id", i64), sf("first_name", str), sf("last_name", str), sf("email", str), sf("age", i64),
+			sf("city", str), sf("state", str), sf("country", str), sf("zip", str),
+			sf("latitude", dbl), sf("longitude", dbl), sf("gender", str),
+			sf("created_at", ts), sf("traffic_source", str),
+		},
+	},
+	"inventory_items": {
+		Fields: []*storagepb.TableFieldSchema{
+			sf("id", i64), sf("product_id", i64), sf("created_at", str), sf("sold_at", ts), sf("cost", dbl),
+			sf("product_category", str), sf("product_name", str), sf("product_brand", str),
+			sf("product_retail_price", dbl), sf("product_department", str), sf("product_sku", str),
+			sf("product_distribution_center_id", i64), sf("_CHANGE_TYPE", str),
+		},
+	},
+	"order_items": {
+		Fields: []*storagepb.TableFieldSchema{
+			sf("id", i64), sf("order_id", i64), sf("user_id", i64), sf("inventory_item_id", i64),
+			sf("sale_price", dbl), sf("status", str), sf("created_at", ts), sf("returned_at", ts),
+			sf("shipped_at", str), sf("delivered_at", str), sf("_CHANGE_TYPE", str),
+		},
+	},
+	"events": {
+		Fields: []*storagepb.TableFieldSchema{
+			sf("id", i64), sf("sequence_number", i64), sf("session_id", str), sf("created_at", ts),
+			sf("ip_address", str), sf("city", str), sf("state", str), sf("country", str), sf("zip", str),
+			sf("latitude", dbl), sf("longitude", dbl), sf("os", str), sf("browser", str),
+			sf("traffic_source", str), sf("user_id", i64), sf("uri", str),
+			sf("event_type", str), sf("ad_event_id", i64), sf("referrer_code", str),
+		},
+	},
+	"campaigns": {
+		Fields: []*storagepb.TableFieldSchema{
+			sf("id", i64), sf("advertising_channel", str), sf("amount", dbl), sf("bid_type", str),
+			sf("campaign_name", str), sf("period", str), sf("created_at", str),
+		},
+	},
+	"ad_groups": {
+		Fields: []*storagepb.TableFieldSchema{
+			sf("ad_id", i64), sf("campaign_id", i64), sf("created_at", str), sf("name", str),
+			sf("period", i64), sf("ad_type", str), sf("headline", str),
+		},
+	},
+	"keywords": {
+		Fields: []*storagepb.TableFieldSchema{
+			sf("keyword_id", i64), sf("ad_id", i64), sf("created_at", str), sf("criterion_name", str),
+			sf("cpc_bid_amount", dbl), sf("period_id", i64), sf("system_serving_status", str),
+			sf("bidding_strategy_type", str), sf("quality_score", i64), sf("keyword_match_type", str),
+		},
+	},
+	"ad_events": {
+		Fields: []*storagepb.TableFieldSchema{
+			sf("id", i64), sf("keyword_id", i64), sf("amount", dbl), sf("device_type", str),
+			sf("event_type", str), sf("created_at", str),
+		},
+	},
+	"discounts": {
+		Fields: []*storagepb.TableFieldSchema{
+			sf("product_id", i64), sf("inventory_item_id", i64), sf("retail_price", dbl),
+			sf("discount_price", dbl), sf("discount_amount", dbl), sf("date", ts),
+		},
+	},
+	"transaction_detail": {
+		Fields: []*storagepb.TableFieldSchema{
+			sf("order_id", i64), sf("status", str), sf("created_at", ts), sf("shipped_at", str), sf("delivered_at", str),
+			sfStruct("items", storagepb.TableFieldSchema_REPEATED,
+				sf("inventory_item_id", i64), sf("returned_at", ts), sf("sale_price", dbl),
+			),
+			sfStruct("user", storagepb.TableFieldSchema_NULLABLE,
+				sf("user_id", i64), sf("name", str), sf("email", str), sf("age", i64),
+				sf("city", str), sf("state", str), sf("country", str), sf("zip", str),
+				sf("location", str), sf("gender", str), sf("user_created_at", ts), sf("traffic_source", str),
+			),
+			sf("_CHANGE_TYPE", str),
+		},
+	},
+	"combined_orders_users": {
+		Fields: []*storagepb.TableFieldSchema{
+			sf("user_id", i64),
+		},
+	},
+	"retail_calendar_454": {
+		Fields: []*storagepb.TableFieldSchema{
+			sf("reference_date", str), sf("fiscal_year", str), sf("fiscal_year_num", i64),
+			sf("fiscal_quarter_of_year", str), sf("fiscal_quarter_of_year_num", i64),
+			sf("fiscal_week_of_year", str), sf("fiscal_week_of_year_num", i64),
+			sf("fiscal_period_of_year", str), sf("fiscal_period_of_year_num", i64),
+			sf("season", str), sf("season_num", i64), sf("prev_custom_date", i64), sf("prev_custom_week", i64),
+		},
+	},
+}
+
+func ProtoSchemaForTable(table string) *storagepb.TableSchema {
+	return tableSchemas[table]
+}
+
+type TableDescriptor struct {
+	MD protoreflect.MessageDescriptor
+	DP *descriptorpb.DescriptorProto
+}
+
+var GetTableDescriptors = sync.OnceValues(func() (map[string]TableDescriptor, error) {
+	m := make(map[string]TableDescriptor, len(AllTables))
+	for _, tbl := range AllTables {
+		ts := ProtoSchemaForTable(tbl)
+		if ts == nil {
+			return nil, fmt.Errorf("missing proto schema for table %s", tbl)
+		}
+		desc, err := adapt.StorageSchemaToProto2Descriptor(ts, "root")
+		if err != nil {
+			return nil, fmt.Errorf("StorageSchemaToProto2Descriptor(%s): %w", tbl, err)
+		}
+		md, ok := desc.(protoreflect.MessageDescriptor)
+		if !ok {
+			return nil, fmt.Errorf("unexpected descriptor type for %s", tbl)
+		}
+		dp, err := adapt.NormalizeDescriptor(md)
+		if err != nil {
+			return nil, fmt.Errorf("NormalizeDescriptor(%s): %w", tbl, err)
+		}
+		m[tbl] = TableDescriptor{MD: md, DP: dp}
+	}
+	return m, nil
+})
+
+func ConvertTimestampsToMicros(v any) any {
+	switch val := v.(type) {
+	case map[string]any:
+		for k, child := range val {
+			val[k] = ConvertTimestampsToMicros(child)
+		}
+		return val
+	case []any:
+		for i, child := range val {
+			val[i] = ConvertTimestampsToMicros(child)
+		}
+		return val
+	case string:
+		if len(val) == 20 && val[10] == 'T' && val[19] == 'Z' {
+			if t, err := time.Parse(time.RFC3339, val); err == nil {
+				return t.UnixMicro()
+			}
+		}
+		return val
+	default:
+		return v
+	}
+}
+
+// RowToProtoBytes serializes a row into BigQuery Storage Write API protobuf wire format.
+// When isCDC is true, it defaults _CHANGE_TYPE to "UPSERT" unless the row specifies an explicit ChangeType ("DELETE" or "UPSERT").
+func RowToProtoBytes(table string, row any, isCDC bool) ([]byte, error) {
+	ct := ""
+	if isCDC {
+		ct = model.ExplicitChangeType(row)
+		if ct == "" {
+			ct = "UPSERT"
+		}
+	}
+	return RowToProtoBytesWithChangeType(table, row, ct)
+}
+
+// RowToProtoBytesWithChangeType serializes a row into BigQuery Storage Write API protobuf wire format
+// with an explicit _CHANGE_TYPE ("UPSERT", "DELETE", or "" / "INSERT" for append-only).
+func RowToProtoBytesWithChangeType(table string, row any, changeType string) ([]byte, error) {
+	descs, err := GetTableDescriptors()
+	if err != nil {
+		return nil, err
+	}
+	td, ok := descs[table]
+	if !ok {
+		return nil, fmt.Errorf("unknown table %q", table)
+	}
+	raw, err := json.Marshal(row)
+	if err != nil {
+		return nil, err
+	}
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return nil, err
+	}
+	ConvertTimestampsToMicros(m)
+	normJSON, err := json.Marshal(m)
+	if err != nil {
+		return nil, err
+	}
+	msg := dynamicpb.NewMessage(td.MD)
+	if err := protojson.Unmarshal(normJSON, msg); err != nil {
+		return nil, fmt.Errorf("protojson unmarshal (%s): %w", table, err)
+	}
+	ct := strings.ToUpper(strings.TrimSpace(changeType))
+	if ct != "" && ct != "INSERT" {
+		if f := td.MD.Fields().ByName("_CHANGE_TYPE"); f != nil {
+			msg.Set(f, protoreflect.ValueOfString(ct))
+		}
+	}
+	return proto.Marshal(msg)
+}
