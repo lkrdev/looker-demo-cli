@@ -8,6 +8,7 @@ import (
 	"math/rand/v2"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -317,6 +318,57 @@ return update_connection(conn_name, body=body) if existing else create_connectio
 		return err
 	}
 
+	// Cross-compile the customized local Go streamer binary for Linux amd64 and upload
+	// both the binary and systemd service unit over IAP so the VM runs the tailored code.
+	tmpDir, err := os.MkdirTemp("", "streamer-build-*")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(tmpDir)
+
+	binPath := filepath.Join(tmpDir, "streamer")
+	if _, err := run("env", "CGO_ENABLED=0", "GOOS=linux", "GOARCH=amd64", "go", "build", "-ldflags=-s -w", "-o", binPath, "."); err != nil {
+		return fmt.Errorf("cross-compiling linux streamer binary: %w", err)
+	}
+
+	unitContent := fmt.Sprintf(`[Unit]
+Description=Looker Demo BigQuery Data Streamer ({{BQ_DATASET}})
+After=network-online.target
+
+[Service]
+Type=simple
+%s
+ExecStart=/usr/local/bin/streamer run --state /var/lib/streamer/state.gob --table %s --interval %s --crud-mode %s --log-name %s --log-severity %s --http :8080
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+`, unitEnv, d.Table, d.Interval, d.CrudMode, d.LogName, d.LogSeverity)
+
+	unitPath := filepath.Join(tmpDir, "{{SERVICE_FILE}}")
+	if err := os.WriteFile(unitPath, []byte(unitContent), 0644); err != nil {
+		return fmt.Errorf("writing systemd unit file: %w", err)
+	}
+
+	if _, err := scpViaIAP(d.Project, d.Zone, binPath, d.VMName, "/tmp/streamer", run); err != nil {
+		return fmt.Errorf("uploading streamer binary via IAP: %w", err)
+	}
+	if _, err := scpViaIAP(d.Project, d.Zone, unitPath, d.VMName, "/tmp/{{SERVICE_FILE}}", run); err != nil {
+		return fmt.Errorf("uploading systemd service unit via IAP: %w", err)
+	}
+
+	remoteInstallCmd := fmt.Sprintf(
+		"sudo mkdir -p /var/lib/streamer && "+
+			"sudo install -m 0755 /tmp/streamer /usr/local/bin/streamer && "+
+			"sudo mv /tmp/{{SERVICE_FILE}} /etc/systemd/system/{{SERVICE_FILE}} && "+
+			"%s && %s && "+
+			"sudo systemctl daemon-reload && sudo systemctl enable --now {{SERVICE_FILE}}",
+		envBlock, deployCmd,
+	)
+	if _, err := sshViaIAP(d.Project, d.Zone, d.VMName, remoteInstallCmd, run); err != nil {
+		return fmt.Errorf("installing and starting streamer service via IAP: %w", err)
+	}
+
 	fmt.Fprintf(os.Stderr, "\n=================================================================\n")
 	fmt.Fprintf(os.Stderr, "  BigQuery Streamer running on private VM: %s (%s, --no-address)\n", d.VMName, d.Zone)
 	fmt.Fprintf(os.Stderr, "  Target Dataset:     %s.%s (Table: %s, CRUD: %s)\n", d.Project, d.Dataset, d.Table, d.CrudMode)
@@ -324,7 +376,7 @@ return update_connection(conn_name, body=body) if existing else create_connectio
 		fmt.Fprintf(os.Stderr, "  Looker Connection:  %s\n", d.LookerConn)
 	}
 	fmt.Fprintf(os.Stderr, "  Web UI IAP Tunnel:  gcloud compute ssh %s --zone=%s --tunnel-through-iap -- -L 8080:localhost:8080\n", d.VMName, d.Zone)
-	fmt.Fprintf(os.Stderr, "  Live Logs (IAP):    gcloud compute ssh %s --zone=%s --tunnel-through-iap -- sudo journalctl -u streamer -f\n", d.VMName, d.Zone)
+	fmt.Fprintf(os.Stderr, "  Live Logs (IAP):    gcloud compute ssh %s --zone=%s --tunnel-through-iap -- sudo journalctl -u {{SERVICE_FILE}} -f\n", d.VMName, d.Zone)
 	fmt.Fprintf(os.Stderr, "=================================================================\n")
 	return nil
 }

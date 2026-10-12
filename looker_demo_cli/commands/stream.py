@@ -1407,27 +1407,62 @@ def stream_delete(
     else:
         bq_action = "kept"
 
-    teardown_commands: list[str] = [
-        (
-            f"gcloud compute ssh {vname} --zone={resolved_zone} --tunnel-through-iap "
-            f"--project={project} -- sudo systemctl disable --now {service_file} || true"
-        ),
-        f"gcloud compute instances delete {vname} --zone={resolved_zone} --project={project} --quiet",
-        f"gcloud secrets delete {ds}-streamer-secret --project={project} --quiet",
+    teardown_argvs: list[list[str]] = [
+        [
+            "gcloud",
+            "compute",
+            "ssh",
+            vname,
+            f"--zone={resolved_zone}",
+            "--tunnel-through-iap",
+            f"--project={project}",
+            "--",
+            "sudo",
+            "systemctl",
+            "disable",
+            "--now",
+            service_file,
+        ],
+        [
+            "gcloud",
+            "compute",
+            "instances",
+            "delete",
+            vname,
+            f"--zone={resolved_zone}",
+            f"--project={project}",
+            "--quiet",
+        ],
+        [
+            "gcloud",
+            "secrets",
+            "delete",
+            f"{ds}-streamer-secret",
+            f"--project={project}",
+            "--quiet",
+        ],
     ]
     if drop_bq_table:
-        teardown_commands.append(
-            f'bq query --use_legacy_sql=false --project_id={project} "DROP TABLE IF EXISTS `{project}.{ds}.{tbl}`;"'
+        teardown_argvs.append(
+            [
+                "bq",
+                "query",
+                "--use_legacy_sql=false",
+                f"--project_id={project}",
+                f"DROP TABLE IF EXISTS `{project}.{ds}.{tbl}`;",
+            ]
         )
     elif drop_bq_dataset:
-        teardown_commands.append(f"bq rm -r -f -d {project}:{ds}")
+        teardown_argvs.append(["bq", "rm", "-r", "-f", "-d", f"{project}:{ds}"])
+
+    teardown_commands: list[str] = [" ".join(cmd) for cmd in teardown_argvs]
 
     if not dry_run:
         is_mocked_shell = getattr(subprocess.run, "__module__", "") != "subprocess"
         in_isolated_pytest = os.environ.get("NO_GCE_CHECK") == "true" and not is_mocked_shell
         if not in_isolated_pytest:
-            for cmd in teardown_commands:
-                subprocess.run(cmd, shell=True, capture_output=True, text=True, check=False)
+            for cmd_argv in teardown_argvs:
+                subprocess.run(cmd_argv, capture_output=True, text=True, check=False)
 
     state.stream_deployed = False
     state.stream_status = "skipped"
