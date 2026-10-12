@@ -16,7 +16,11 @@ from looker_demo_cli.error_boundary import ErrorHandlingGroup
 from looker_demo_cli.errors import ConfigError, missing_option
 from looker_demo_cli.gates import attach_next_gate_action
 from looker_demo_cli.output import CommandResult, emit
-from looker_demo_cli.services.catalog_service import build_catalog_snapshot
+from looker_demo_cli.services.catalog_service import (
+    build_catalog_seed_plan,
+    build_catalog_snapshot,
+    execute_catalog_seed_plan,
+)
 from looker_demo_cli.services.catalog_sync_service import sync_catalog_to_lookml
 from looker_demo_cli.utils.console import console, print_info, print_success
 
@@ -286,8 +290,19 @@ def catalog_seed(
         str, typer.Option("--aspect-type-name", help="Name for the semantic curation Aspect Type")
     ] = "semantic-curation",
     glossary_name: Annotated[
-        str, typer.Option("--glossary-name", help="Name for the Dataplex Business Glossary")
-    ] = "fintech-glossary",
+        str | None,
+        typer.Option(
+            "--glossary-name", help="Name for the Dataplex Business Glossary (defaults to <dataset>-glossary)"
+        ),
+    ] = None,
+    curation_file: Annotated[
+        Path | None,
+        typer.Option("--curation-file", help="Optional path to declarative catalog curation JSON file"),
+    ] = None,
+    schema_file: Annotated[
+        Path | None,
+        typer.Option("--schema-file", help="Optional path to DomainBlueprint schema JSON file"),
+    ] = None,
     mode: Annotated[str, typer.Option("--mode", help="Execution mode: 'plan' or 'execute'")] = "execute",
     skip: Annotated[
         bool,
@@ -339,12 +354,25 @@ def catalog_seed(
             details={"dataset": ds_id, "project": proj_id},
         )
 
+    resolved_schema_file = schema_file or (Path(state.schema_file_path) if state.schema_file_path else None)
+    plan = build_catalog_seed_plan(
+        bq_client=bq_client,
+        dataset_id=ds_id,
+        location=location.lower(),
+        aspect_type_name=aspect_type_name,
+        glossary_name=glossary_name,
+        curation_file=curation_file,
+        schema_file=resolved_schema_file,
+    )
+
     seed_summary = {
         "project_id": proj_id,
         "dataset_id": ds_id,
         "location": location,
-        "aspect_type": f"projects/{proj_id}/locations/{location}/aspectTypes/{aspect_type_name}",
-        "glossary": f"projects/{proj_id}/locations/{location}/glossaries/{glossary_name}",
+        "aspect_type": f"projects/{proj_id}/locations/{location}/aspectTypes/{plan.aspect_type_id}",
+        "glossary": f"projects/{proj_id}/locations/{location}/glossaries/{plan.glossary_id}",
+        "glossary_display_name": plan.glossary_display_name,
+        "planned_terms": len(plan.terms),
         "tables_seeded": len(tables),
         "mode": mode,
         "status": "SUCCESS" if mode == "execute" else "PLANNED",
@@ -353,6 +381,12 @@ def catalog_seed(
     if mode == "execute":
         state.catalog_status = "seeded"
         cat_client = app_ctx.catalog(project_id=proj_id, location=location.lower())
+        exec_stats = execute_catalog_seed_plan(
+            bq_client=bq_client,
+            catalog_client=cat_client,
+            plan=plan,
+        )
+        seed_summary.update(exec_stats)
         snapshot = build_catalog_snapshot(bq_client, cat_client, ds_id, location=location.lower())
         snapshot_path = Path.cwd() / f".demo-catalog-{ds_id}.json"
         snapshot.save(snapshot_path)
@@ -360,6 +394,8 @@ def catalog_seed(
         if snapshot.coverage:
             state.catalog_coverage_pct = snapshot.coverage.coverage_percentage
             state.catalog_profile = snapshot.coverage.recommended_profile
+            seed_summary["coverage_percentage"] = snapshot.coverage.coverage_percentage
+            seed_summary["recommended_profile"] = snapshot.coverage.recommended_profile
         app_ctx.save_state()
 
     result = attach_next_gate_action(CommandResult.success("catalog seed", data=seed_summary), state)
@@ -368,12 +404,16 @@ def catalog_seed(
         if mode == "plan":
             console.print(f"\n[bold yellow]Metadata Seeding Plan for {proj_id}.{ds_id}[/bold yellow]")
             console.print(f"Target Aspect Type: [cyan]{seed_summary['aspect_type']}[/cyan]")
-            console.print(f"Target Glossary: [cyan]{seed_summary['glossary']}[/cyan]")
+            console.print(f"Target Glossary: [cyan]{seed_summary['glossary']}[/cyan] ({plan.glossary_display_name})")
+            console.print(f"Glossary Terms Planned: [cyan]{len(plan.terms)}[/cyan]")
             console.print(f"Tables to Seed ({len(tables)}): {', '.join(tables)}")
             print_info("Re-run with `--mode execute` to apply metadata changes.")
         else:
             print_success(f"Knowledge Catalog metadata verified/seeded for `{proj_id}.{ds_id}`.")
-            print_info(f"Seeded {len(tables)} tables with curation aspects and glossary links.")
+            print_info(
+                f"Seeded {len(tables)} tables, {seed_summary.get('terms_seeded', len(plan.terms))} glossary terms, "
+                f"and {seed_summary.get('entry_links_created', 0)} entry links."
+            )
             if state.deployment_mode == "bq_only":
                 print_success("BigQuery + Knowledge Catalog workflow complete (mode=bq_only).")
             else:

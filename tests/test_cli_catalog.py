@@ -186,7 +186,7 @@ def test_catalog_profiles_json_and_human(invoke) -> None:
 # ===========================================================================
 
 
-def test_catalog_seed_plan_and_execute(invoke, fake_bigquery) -> None:
+def test_catalog_seed_plan_and_execute(invoke, fake_bigquery, fake_catalog) -> None:
     """`catalog seed` handles both --mode plan and --mode execute."""
     fake_bigquery.datasets = {"seed_ds": ["dim_accounts", "fct_orders"]}
     fake_bigquery.tables = {

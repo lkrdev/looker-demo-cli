@@ -400,7 +400,9 @@ demo-create catalog seed [OPTIONS]
 | `--gcp-project` | Target GCP Project ID. Defaults to confirmed target project. |  |
 | `--location` | Dataset location | `us` |
 | `--aspect-type-name` | Name for the semantic curation Aspect Type | `semantic-curation` |
-| `--glossary-name` | Name for the Dataplex Business Glossary | `fintech-glossary` |
+| `--glossary-name` | Name for the Dataplex Business Glossary (defaults to <dataset>-glossary) |  |
+| `--curation-file` | Optional path to declarative catalog curation JSON file |  |
+| `--schema-file` | Optional path to DomainBlueprint schema JSON file |  |
 | `--mode` | Execution mode: 'plan' or 'execute' | `execute` |
 | `--skip` | Skip Knowledge Catalog metadata seeding and advance to LookML modeling |  |
 | `--json` | Emit result envelope as JSON on stdout |  |
