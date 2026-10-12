@@ -710,6 +710,17 @@ def build_catalog_seed_plan(
     raw_tables: dict[str, Any] = {}
     dim_pk_lookup: dict[str, str] = {}
 
+    def _coerce_str_list(val: Any) -> list[str]:
+        if val is None:
+            return []
+        if isinstance(val, str):
+            s = val.strip()
+            return [s] if s else []
+        if isinstance(val, list | tuple | set):
+            return [str(v).strip() for v in val if v is not None and str(v).strip()]
+        s = str(val).strip()
+        return [s] if s else []
+
     # Pass 1: Read BigQuery table schemas & detect dimension primary keys
     for tbl_id in table_names:
         try:
@@ -719,7 +730,7 @@ def build_catalog_seed_plan(
         raw_tables[tbl_id] = tbl
         t_over = tables_override.get(tbl_id, {}) if isinstance(tables_override.get(tbl_id), dict) else {}
 
-        pk_cols: list[str] = list(t_over.get("primary_key") or [])
+        pk_cols: list[str] = _coerce_str_list(t_over.get("primary_key"))
         if not pk_cols:
             constraints = getattr(tbl, "table_constraints", None)
             if constraints:
@@ -760,7 +771,7 @@ def build_catalog_seed_plan(
         role = "fact" if is_fact else "dimension"
 
         # Primary keys
-        pk_cols = list(t_over.get("primary_key") or [])
+        pk_cols = _coerce_str_list(t_over.get("primary_key"))
         if not pk_cols and tbl is not None:
             constraints = getattr(tbl, "table_constraints", None)
             if constraints:
@@ -828,7 +839,7 @@ def build_catalog_seed_plan(
             or (getattr(tbl, "description", None) if tbl is not None else None)
             or f"Curated {tbl_label} {role} table in `{dataset_id}`."
         )
-        tbl_tags = list(t_over.get("governance_tags") or [role, dataset_id])
+        tbl_tags = _coerce_str_list(t_over.get("governance_tags")) or [role, dataset_id]
 
         col_specs: dict[str, ColumnSeedSpec] = {}
         schema_fields = list(getattr(tbl, "schema", [])) if tbl is not None else []
@@ -844,7 +855,7 @@ def build_catalog_seed_plan(
             c_label = str(c_over.get("business_label") or _humanize_identifier(col_name))
 
             # Allowed values
-            allowed_vals = [str(v) for v in (c_over.get("allowed_values") or []) if v is not None]
+            allowed_vals = _coerce_str_list(c_over.get("allowed_values"))
             if (
                 not allowed_vals
                 and norm_type == "STRING"
@@ -879,7 +890,7 @@ def build_catalog_seed_plan(
                 c_desc = f"Curated {c_label} ({norm_type}) attribute in `{tbl_id}`."
 
             # Governance tags
-            c_tags: list[str] = list(c_over.get("governance_tags") or [])
+            c_tags: list[str] = _coerce_str_list(c_over.get("governance_tags"))
             if not c_tags:
                 if is_pk:
                     c_tags.append("primary_key")
@@ -929,7 +940,7 @@ def build_catalog_seed_plan(
                 name=col_name,
                 business_label=c_label,
                 description=c_desc,
-                synonyms=[str(s) for s in (c_over.get("synonyms") or [])],
+                synonyms=_coerce_str_list(c_over.get("synonyms")),
                 allowed_values=allowed_vals,
                 format_pattern=fmt_pattern,
                 governance_tags=c_tags,
@@ -1077,9 +1088,9 @@ def execute_catalog_seed_plan(
             has_fks = bool(existing_constraints and getattr(existing_constraints, "foreign_keys", None))
             if tbl_spec.primary_key and not has_pk and hasattr(raw_bq, "query"):
                 try:
-                    pk_cols_sql = ", ".join(tbl_spec.primary_key)
+                    pk_cols_sql = ", ".join(f"`{col}`" for col in tbl_spec.primary_key)
                     raw_bq.query(
-                        f"ALTER TABLE `{project_id}.{dataset_id}.{tbl_id}` ADD PRIMARY KEY ({pk_cols_sql}) NOT ENFORCED"
+                        f"ALTER TABLE `{project_id}`.`{dataset_id}`.`{tbl_id}` ADD PRIMARY KEY ({pk_cols_sql}) NOT ENFORCED"
                     ).result()
                 except Exception:
                     pass
@@ -1090,9 +1101,9 @@ def execute_catalog_seed_plan(
                     ref_tbl, ref_col = ref_target.split(".", 1)
                     try:
                         raw_bq.query(
-                            f"ALTER TABLE `{project_id}.{dataset_id}.{tbl_id}` "
-                            f"ADD CONSTRAINT fk_{tbl_id}_{fk_col} FOREIGN KEY ({fk_col}) "
-                            f"REFERENCES `{project_id}.{dataset_id}.{ref_tbl}`({ref_col}) NOT ENFORCED"
+                            f"ALTER TABLE `{project_id}`.`{dataset_id}`.`{tbl_id}` "
+                            f"ADD CONSTRAINT `fk_{tbl_id}_{fk_col}` FOREIGN KEY (`{fk_col}`) "
+                            f"REFERENCES `{project_id}`.`{dataset_id}`.`{ref_tbl}`(`{ref_col}`) NOT ENFORCED"
                         ).result()
                     except Exception:
                         pass

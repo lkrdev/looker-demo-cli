@@ -589,3 +589,120 @@ def test_catalog_skip_branches(invoke, isolated_cwd: Path) -> None:
     assert payload_sync["data"]["status"] == "skipped"
     state = read_state(isolated_cwd)
     assert state["catalog_status"] == "skipped"
+
+
+def test_catalog_seed_string_coercion_backticks_and_entry_link_lro(
+    fake_bigquery,
+    fake_catalog,
+    tmp_path: Path,
+) -> None:
+    """Verify single-string curation list coercion, backtick-quoted PK/FK DDL, and create_entry_link LRO wait."""
+    from unittest.mock import MagicMock
+
+    from looker_demo_cli.services.catalog_service import build_catalog_seed_plan, execute_catalog_seed_plan
+    from looker_demo_cli.utils.catalog_client import DataplexCatalogClient
+
+    fake_bigquery.project_id = "test-p"
+    fake_bigquery.datasets = {"seed_ds": ["dim_users", "fct_orders"]}
+    fake_bigquery.tables = {
+        "dim_users": FakeTable(
+            "dim_users",
+            [
+                FakeTableSchemaField("user_id", "STRING", "REQUIRED"),
+                FakeTableSchemaField("status", "STRING", "NULLABLE"),
+            ],
+        ),
+        "fct_orders": FakeTable(
+            "fct_orders",
+            [
+                FakeTableSchemaField("order_id", "STRING", "REQUIRED"),
+                FakeTableSchemaField("user_id", "STRING", "REQUIRED"),
+            ],
+        ),
+    }
+
+    curation_spec = {
+        "tables": {
+            "dim_users": {
+                "primary_key": "user_id",
+                "governance_tags": "customer_domain",
+                "columns": {
+                    "status": {
+                        "synonyms": "account_state",
+                        "allowed_values": "ACTIVE",
+                        "governance_tags": "lifecycle",
+                    }
+                },
+            }
+        }
+    }
+    curation_path = tmp_path / "curation.json"
+    curation_path.write_text(json.dumps(curation_spec), encoding="utf-8")
+
+    bq_instance = fake_bigquery("test-p")
+    cat_instance = fake_catalog("test-p", "us")
+
+    plan = build_catalog_seed_plan(
+        bq_client=bq_instance,
+        dataset_id="seed_ds",
+        curation_file=curation_path,
+    )
+    dim_tbl = plan.tables["dim_users"]
+    assert dim_tbl.primary_key == ["user_id"]
+    assert dim_tbl.governance_tags == ["customer_domain"]
+    status_col = dim_tbl.columns["status"]
+    assert status_col.synonyms == ["account_state"]
+    assert status_col.allowed_values == ["ACTIVE"]
+    assert status_col.governance_tags == ["lifecycle"]
+
+    # Verify backtick quoting in execute_catalog_seed_plan DDL
+    executed_queries: list[str] = []
+    mock_raw_bq = MagicMock()
+
+    def _record_query(sql: str):
+        executed_queries.append(sql)
+        res = MagicMock()
+        res.result.return_value = None
+        return res
+
+    mock_raw_bq.query.side_effect = _record_query
+    bq_instance.client = mock_raw_bq
+
+    cat_instance.ensure_aspect_type = lambda *args, **kwargs: {
+        "name": "projects/12345/locations/us/aspectTypes/semantic-curation"
+    }
+    cat_instance.get_project_number = lambda *args, **kwargs: "12345"
+    cat_instance.ensure_glossary = lambda *args, **kwargs: {"name": "glossary"}
+    cat_instance.ensure_glossary_term = lambda *args, **kwargs: {"name": "term"}
+    cat_instance.patch_entry_aspects = lambda *args, **kwargs: {"name": "entry"}
+    cat_instance.create_entry_link = lambda *args, **kwargs: {"name": "link"}
+
+    execute_catalog_seed_plan(bq_instance, cat_instance, plan)
+    joined_sql = "\n".join(executed_queries)
+    assert "ALTER TABLE `test-p`.`seed_ds`.`dim_users` ADD PRIMARY KEY (`user_id`) NOT ENFORCED" in joined_sql
+    assert (
+        "ALTER TABLE `test-p`.`seed_ds`.`fct_orders` "
+        "ADD CONSTRAINT `fk_fct_orders_user_id` FOREIGN KEY (`user_id`) "
+        "REFERENCES `test-p`.`seed_ds`.`dim_users`(`user_id`) NOT ENFORCED"
+    ) in joined_sql
+
+    # Verify DataplexCatalogClient.create_entry_link waits on unfinished LRO
+    client = DataplexCatalogClient(project_id="test-p", location="us")
+    client._get_json = MagicMock(return_value={})  # type: ignore[method-assign]
+    client._post_json = MagicMock(  # type: ignore[method-assign]
+        return_value={"name": "projects/test-p/locations/us/operations/op-123", "done": False}
+    )
+    client._wait_operation = MagicMock(  # type: ignore[method-assign]
+        return_value={"name": "projects/test-p/locations/us/operations/op-123", "done": True}
+    )
+
+    res_link = client.create_entry_link(
+        entry_link_id="link-1",
+        source_entry="projects/12345/locations/us/entryGroups/@bigquery/entries/e1",
+        source_column="status",
+        target_term_entry="projects/12345/locations/us/entryGroups/@dataplex/entries/t1",
+    )
+    client._wait_operation.assert_called_once_with(
+        {"name": "projects/test-p/locations/us/operations/op-123", "done": False}
+    )
+    assert res_link == {"name": "projects/test-p/locations/us/operations/op-123", "done": True}

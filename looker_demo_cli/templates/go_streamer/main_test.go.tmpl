@@ -403,6 +403,9 @@ func TestCloudDeployPrivateIPAndIAPHardening(t *testing.T) {
 		"--no-address",
 		"--machine-type=e2-micro",
 		"--source-ranges=35.235.240.0/20",
+		"go build -ldflags=-s -w",
+		"compute scp --tunnel-through-iap",
+		"compute ssh demo-bq-streamer --tunnel-through-iap",
 	} {
 		if !strings.Contains(joined, required) {
 			t.Fatalf("expected cloud deploy to execute %q, got:\n%s", required, joined)
