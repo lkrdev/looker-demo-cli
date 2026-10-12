@@ -326,8 +326,17 @@ return update_connection(conn_name, body=body) if existing else create_connectio
 	}
 	defer os.RemoveAll(tmpDir)
 
+	_ = os.Setenv("CGO_ENABLED", "0")
+	_ = os.Setenv("GOOS", "linux")
+	_ = os.Setenv("GOARCH", "amd64")
+	defer func() {
+		_ = os.Unsetenv("CGO_ENABLED")
+		_ = os.Unsetenv("GOOS")
+		_ = os.Unsetenv("GOARCH")
+	}()
+
 	binPath := filepath.Join(tmpDir, "streamer")
-	if _, err := run("env", "CGO_ENABLED=0", "GOOS=linux", "GOARCH=amd64", "go", "build", "-ldflags=-s -w", "-o", binPath, "."); err != nil {
+	if _, err := run("go", "build", "-ldflags=-s -w", "-o", binPath, "."); err != nil {
 		return fmt.Errorf("cross-compiling linux streamer binary: %w", err)
 	}
 

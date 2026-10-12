@@ -491,7 +491,7 @@ class DataplexCatalogClient:
         }
         op = self._post_json(post_url, json_data=payload, default={})
         if isinstance(op, dict) and "done" in op and not op.get("done"):
-            self._wait_operation(op)
+            op = self._wait_operation(op)
         return op
 
     def lookup_context(self, resources: list[str], format: str = "JSON") -> dict[str, Any]:

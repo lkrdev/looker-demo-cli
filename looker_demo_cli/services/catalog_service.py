@@ -1033,10 +1033,7 @@ def execute_catalog_seed_plan(
         key=lambda t: (1 if t.role == "fact" else 0, len(t.foreign_keys)),
     )
 
-    for tbl_spec in sorted(
-        sorted_tables,
-        key=lambda t: (1 if t.role == "fact" else 0, len(t.foreign_keys)),
-    ):
+    for tbl_spec in sorted_tables:
         tbl_id = tbl_spec.name
         try:
             tbl = bq_client.get_table_metadata(dataset_id, tbl_id)

@@ -403,7 +403,7 @@ func TestCloudDeployPrivateIPAndIAPHardening(t *testing.T) {
 		"--no-address",
 		"--machine-type=e2-micro",
 		"--source-ranges=35.235.240.0/20",
-		"GOOS=linux GOARCH=amd64 go build",
+		"go build -ldflags=-s -w",
 		"compute scp --tunnel-through-iap",
 		"compute ssh demo-bq-streamer --tunnel-through-iap",
 	} {

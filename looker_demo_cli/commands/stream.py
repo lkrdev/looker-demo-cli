@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import subprocess
 from pathlib import Path
 from typing import Annotated, Any, Final, Literal, cast
@@ -1455,7 +1456,7 @@ def stream_delete(
     elif drop_bq_dataset:
         teardown_argvs.append(["bq", "rm", "-r", "-f", "-d", f"{project}:{ds}"])
 
-    teardown_commands: list[str] = [" ".join(cmd) for cmd in teardown_argvs]
+    teardown_commands: list[str] = [shlex.join(cmd) for cmd in teardown_argvs]
 
     if not dry_run:
         is_mocked_shell = getattr(subprocess.run, "__module__", "") != "subprocess"

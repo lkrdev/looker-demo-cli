@@ -692,7 +692,9 @@ def test_catalog_seed_string_coercion_backticks_and_entry_link_lro(
     client._post_json = MagicMock(  # type: ignore[method-assign]
         return_value={"name": "projects/test-p/locations/us/operations/op-123", "done": False}
     )
-    client._wait_operation = MagicMock(return_value={"done": True})  # type: ignore[method-assign]
+    client._wait_operation = MagicMock(  # type: ignore[method-assign]
+        return_value={"name": "projects/test-p/locations/us/operations/op-123", "done": True}
+    )
 
     res_link = client.create_entry_link(
         entry_link_id="link-1",
@@ -703,4 +705,4 @@ def test_catalog_seed_string_coercion_backticks_and_entry_link_lro(
     client._wait_operation.assert_called_once_with(
         {"name": "projects/test-p/locations/us/operations/op-123", "done": False}
     )
-    assert res_link["name"] == "projects/test-p/locations/us/operations/op-123"
+    assert res_link == {"name": "projects/test-p/locations/us/operations/op-123", "done": True}
