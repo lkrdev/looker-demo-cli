@@ -21,7 +21,7 @@ gate. It reports:
 | Field | What to do with it |
 | :--- | :--- |
 | `completed_gates` | Already done. Never redo one. |
-| `current_gate` | Where the build actually is (`0..13`, from `gate_0a_precheck` through `gate_6_embed`). |
+| `current_gate` | Where the build actually is (`0..14`, from `gate_0a_precheck` through `gate_7_stream`). |
 | `next_command` | **The literal command to run.** Values already known are substituted; anything still needed appears as `<placeholder>`. |
 | `requires_human_confirmation` | **Branch on this.** When `true`, pause and confirm with the user via `ask_question` before running `next_command` (or passing `--skip` on optional gates). **MANDATORY FOR GATE 3 (`gate_1b_approve_schema`)**: You MUST write out the full proposed schema (dimension/fact tables, columns, datatypes, primary/foreign keys), the Mermaid ERD diagram (`data.mermaid_erd`), and the 5-row micro-sample preview (`data.samples` from Gate 2 `data propose-schema`) directly into visible chat text in the SAME turn BEFORE calling `ask_question` and running `demo-create data approve-schema`. Never ask the user to approve an unseen schema. |
 | `is_complete` | When `true`, the build is finished and `next_actions` is empty. |
@@ -29,12 +29,12 @@ gate. It reports:
 Prefer this over recalling the workflow from memory. It is derived from the
 persisted state, so it cannot drift from what has actually happened.
 
-### The 14 Granular Gates (`0..13`)
+### The 15 Granular Gates (`0..14`)
 
 | Gate | ID | Human Pause? | Canonical CLI Command |
 | ---: | :--- | :---: | :--- |
 | **0** | `gate_0a_precheck` | `false` | `demo-create pre-check --fix --gcp-project <gcp-project>` |
-| **1** | `gate_0b_confirm_targets` | **`true`** | `demo-create confirm-targets --gcp-account <gcp-account> --gcp-project <gcp-project> --looker-account <looker-account> --connection <connection-name> [--mode full\|bq_only]` *(in `bq_only` mode, the build completes after Gate 5 `gate_1d_catalog` and `--looker-account` / `--connection` are optional)* |
+| **1** | `gate_0b_confirm_targets` | **`true`** | `demo-create confirm-targets --gcp-account <gcp-account> --gcp-project <gcp-project> --looker-account <looker-account> --connection <connection-name> [--mode full\|bq_only]` *(in `bq_only` mode, Gates 6–13 auto-complete after Gate 5 `gate_1d_catalog` and advance to Gate 14 `gate_7_stream`; `--looker-account` / `--connection` are optional)* |
 | **2** | `gate_1a_propose_schema` | `false` | `demo-create data propose-schema --schema-file <schema-file> --preview` |
 | **3** | `gate_1b_approve_schema` | **`true`** | `demo-create data approve-schema --row-count <row-count> --dataset <dataset-id>` |
 | **4** | `gate_1c_generate_data` | `false` | `demo-create data generate --schema-file <schema-file> --row-count <row-count> --gcp-project <gcp-project> --dataset <dataset-id> --upload --json-scorecard` |
@@ -47,6 +47,7 @@ persisted state, so it cannot drift from what has actually happened.
 | **11** | `gate_4_agent` | **`true`** | `demo-create agent create --model <model-name> --explore <explore-name>` *(or `--skip`)* |
 | **12** | `gate_5_publish` | **`true`** | `demo-create agent publish --agent-id <agent-id>` *(or `--skip`)* |
 | **13** | `gate_6_embed` | **`true`** | `demo-create embed scaffold --looker-project <looker-project>` *(or `--skip`)* |
+| **14** | `gate_7_stream` | **`true`** | `demo-create stream plan --gcp-project <gcp-project> --dataset <dataset-id>` *(or `stream deploy` / `stream delete` / `--skip`)* |
 
 ---
 
@@ -54,7 +55,7 @@ persisted state, so it cannot drift from what has actually happened.
 
 | Document | Job |
 | :--- | :--- |
-| [`skills/looker-demo-orchestrator/SKILL.md`](skills/looker-demo-orchestrator/SKILL.md) | **The single source of truth for the workflow.** Every gate (`0..13`), what to confirm with the human at each one, when to delegate to a subagent, and the mandatory final delivery report. |
+| [`skills/looker-demo-orchestrator/SKILL.md`](skills/looker-demo-orchestrator/SKILL.md) | **The single source of truth for the workflow.** Every gate (`0..14`), what to confirm with the human at each one, when to delegate to a subagent, and the mandatory final delivery report. |
 | [`skills/demo-spec/SKILL.md`](skills/demo-spec/SKILL.md) | **The living technical specification standard.** Protocol for maintaining `SPEC.md` asynchronously across every turn and conversation without chat clutter. |
 | [`docs/COMMANDS.md`](docs/COMMANDS.md) | **Every command, flag, and default** — generated from the implementation by `scripts/gen_docs.py` and enforced by a CI drift test. |
 
@@ -67,14 +68,14 @@ invoke it*. Read `SKILL.md` before orchestrating a build.
 ## 3. Non-negotiable rules
 
 > [!CAUTION]
-> **The 14 gates (`0..13`) are mandatory and must not be batched.** There is deliberately no
+> **The 15 gates (`0..14`) are mandatory and must not be batched.** There is deliberately no
 > single command that builds a demo end to end. The monolithic `demo-create run`
 > was **removed in 0.3.0** precisely because it bypassed iterative schema
 > co-design and volume confirmation. Orchestrate the gated subcommands one at a
 > time, pausing wherever `requires_human_confirmation` is `true` and recording
 > explicit user decisions via `confirm-targets`, `data approve-schema`,
 > `catalog seed / inspect / sync [--skip]`, `lookml certify-polish`, `lookml optimize [--skip]`,
-> `lookml approve-critique`, `agent create [--skip]`, `agent publish [--skip]`, and `embed scaffold [--skip]`.
+> `lookml approve-critique`, `agent create [--skip]`, `agent publish [--skip]`, `embed scaffold [--skip]`, and `stream plan / deploy / delete [--skip]`.
 
 > [!CAUTION]
 > **Never call `ask_question` for schema approval without printing the schema, ERD, and 5-row preview in chat first.**

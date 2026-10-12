@@ -24,8 +24,8 @@ This skill defines the mandatory protocol for asynchronously authoring, continuo
 > Do not alert the user to minor field additions or routine metadata updates. **ONLY** notify the user or display diffs/excerpts in visible chat when a **significant structural change** has occurred (e.g., pivoting the business domain, major schema redesign with new entities, switching join topologies or NDT aggregation strategies, or when explicitly requested by the user).
 
 > [!TIP]
-> **Rule 3: Incremental Hydration Across Every Gate (`0..13`) & Conversation**
-> `SPEC.md` is never created in one giant batch at the end. It is initialized at Gate 0/1 (`gate_0a_precheck` / `gate_0b_confirm_targets`) and progressively hydrated and updated across all 14 granular gates (`0..13`) and each subsequent user conversation. Every modification is recorded in the Revision History table.
+> **Rule 3: Incremental Hydration Across Every Gate (`0..14`) & Conversation**
+> `SPEC.md` is never created in one giant batch at the end. It is initialized at Gate 0/1 (`gate_0a_precheck` / `gate_0b_confirm_targets`) and progressively hydrated and updated across all 15 granular gates (`0..14`) and each subsequent user conversation. Every modification is recorded in the Revision History table.
 
 > [!IMPORTANT]
 > **Rule 4: `DELIVERY_REPORT.md` Must Always Link to `SPEC.md`**
@@ -33,9 +33,9 @@ This skill defines the mandatory protocol for asynchronously authoring, continuo
 
 ---
 
-## 2. 14-Gate Hydration Lifecycle (`0..13`)
+## 2. 15-Gate Hydration Lifecycle (`0..14`)
 
-The agent maintains `SPEC.md` along the 14-stage `demo-create` state machine:
+The agent maintains `SPEC.md` along the 15-stage `demo-create` state machine:
 
 ```mermaid
 graph TD
@@ -47,7 +47,8 @@ graph TD
     DataChoice -->|Adopt Existing Dataset| AdoptData["Adopt Existing BigQuery Dataset<br/>(demo-create data adopt --dataset &lt;dataset-id&gt;)<br/>Hydrate Sections 3 & 4 (Satisfies Gates 2-4)"]
     Gate4 --> Gate5{"Gate 5 (gate_1d_catalog): Knowledge Catalog Semantic Curation<br/>(ask_question + demo-create catalog seed / inspect / sync [--skip])<br/>Hydrate Section 3 Data Dictionary & Semantic Context"}
     AdoptData --> Gate5
-    Gate5 --> Gate6["Gate 6 (gate_2a_lookml_model): Semantic LookML Modeling<br/>(demo-create lookml model [--catalog &lt;path&gt;] [--profile rich|hybrid|minimal])<br/>Hydrate SPEC.md Section 5"]
+    Gate5 -->|mode = full| Gate6["Gate 6 (gate_2a_lookml_model): Semantic LookML Modeling<br/>(demo-create lookml model [--catalog &lt;path&gt;] [--profile rich|hybrid|minimal])<br/>Hydrate SPEC.md Section 5"]
+    Gate5 -->|mode = bq_only| Gate14["Gate 14 (gate_7_stream): Live BigQuery Streaming & CDC<br/>(ask_question + demo-create stream plan / deploy / delete [--skip])<br/>Hydrate SPEC.md Section 4B"]
     Gate6 --> Gate7["Gate 7 (gate_2b_certify_polish): 3-Pass Polish & Filtered Measure Audit<br/>(demo-create lookml certify-polish --lookml-dir &lt;lookml-dir&gt;)<br/>Hydrate SPEC.md Section 6"]
     Gate7 --> Gate8["Gate 8 (gate_3a_optimize): Performance Optimizer Gate<br/>(ask_question + demo-create lookml optimize [--skip])<br/>Update Section 5 Caching & Pruning"]
     Gate8 --> Gate9["Gate 9 (gate_3b_deploy): LookML Validation & Production Deploy<br/>(demo-create lookml deploy)<br/>Update Section 5 Deployment & Validation Audit"]
@@ -55,7 +56,8 @@ graph TD
     Gate10 --> Gate11["Gate 11 (gate_4_agent): CA Agent & Golden Queries<br/>(ask_question + demo-create agent create [--skip])<br/>Hydrate SPEC.md Section 7"]
     Gate11 --> Gate12["Gate 12 (gate_5_publish): Gemini Enterprise Publishing<br/>(ask_question + demo-create agent publish [--skip])<br/>Update Section 7 GE Status"]
     Gate12 --> Gate13["Gate 13 (gate_6_embed): External Embed Portal Scaffolding<br/>(ask_question + demo-create embed scaffold [--skip])<br/>Hydrate SPEC.md Section 8"]
-    Gate13 --> Report["Final Delivery: DELIVERY_REPORT.md<br/>(Links directly to SPEC.md)"]
+    Gate13 --> Gate14
+    Gate14 --> Report["Final Delivery: DELIVERY_REPORT.md<br/>(Links directly to SPEC.md)"]
     Report --> Iterations["Post-Delivery Iterations<br/>(Every user turn updates SPEC.md quietly)"]
 ```
 
@@ -64,14 +66,15 @@ graph TD
 | **Gate 0 (`gate_0a_precheck`) & Gate 1 (`gate_0b_confirm_targets`)** | `demo-create pre-check --fix --gcp-project <gcp-project>`<br/>`demo-create confirm-targets --gcp-account <gcp-account> --gcp-project <gcp-project> --looker-account <looker-account> --connection <connection-name> [--mode full\|bq_only] [--dataset <dataset-id>]` | Initialize `SPEC.md` with: Header, Section 1 (Demo Metadata, Environment Targets table including `Deployment Mode` (`full` vs `bq_only`), GCP Account, GCP Project, Looker Instance/Account, Looker Connection, Target Personas, Objectives), Section 2 (Business Scenario, Analytical Questions), and initial entry in Section 9 (Revision History). | **Silent.** Confirm deployment mode & targets with user via `ask_question` and run `confirm-targets`. Do NOT dump `SPEC.md`. |
 | **Gate 2 (`gate_1a_propose_schema`) & Gate 3 (`gate_1b_approve_schema`)** | `demo-create data propose-schema --schema-file <schema-file> --preview`<br/>`demo-create data approve-schema --row-count <row-count> --dataset <dataset-id>`<br/>*(Or for existing datasets: `demo-create data adopt --dataset <dataset-id>`)* | Hydrate Section 3 (Relational Schema: tables, grain, columns, data types, PK/FK relationships, Mermaid ERD) and Section 4 (Approved target row volume, statistical distributions, generation DAG, or adopted dataset inventory). | **Mandatory Visible Chat Output First:** Render proposed schema, `data.mermaid_erd`, and 5-row `data.samples` in chat BEFORE calling `ask_question` and running `data approve-schema` (or render discovered tables on `data adopt`). Quietly update `SPEC.md`. |
 | **Gate 4 (`gate_1c_generate_data`)** | `demo-create data generate --schema-file <schema-file> --row-count <row-count> --gcp-project <gcp-project> --dataset <dataset-id> --upload --json-scorecard` | Update Section 4 with actual synthesized row counts, `TableValidator` scorecard (`pk_uniqueness`, `orphan_fks`, `records_per_second`), and BigQuery Day Partitioning / Clustering metadata. *(Skipped if dataset was adopted via `data adopt`)*. | Render verification scorecard and 5-row sample preview in chat. Quietly update `SPEC.md`. |
-| **Gate 5 (`gate_1d_catalog`)** | `demo-create catalog seed --dataset <dataset-id> --gcp-project <gcp-project>`<br/>*(Or `catalog inspect` / `catalog sync` / `--skip`)* | Hydrate Section 3 (`## Data Dictionary & Semantic Context` via Dataplex catalog snapshot, glossaries, custom aspects, and quality scans). *(If `Deployment Mode` is `bq_only`, the workflow completes here and proceeds directly to `DELIVERY_REPORT.md`.)* | Prompt user via `ask_question` first, then run `catalog seed` / `inspect` / `sync` (or `--skip`). Quietly update `SPEC.md`. |
+| **Gate 5 (`gate_1d_catalog`)** | `demo-create catalog seed --dataset <dataset-id> --gcp-project <gcp-project>`<br/>*(Or `catalog inspect` / `catalog sync` / `--skip`)* | Hydrate Section 3 (`## Data Dictionary & Semantic Context` via Dataplex catalog snapshot, glossaries, custom aspects, and quality scans). *(If `Deployment Mode` is `bq_only`, Gates 6–13 auto-complete here and the workflow advances directly to Gate 14 `gate_7_stream`.)* | Prompt user via `ask_question` first, then run `catalog seed` / `inspect` / `sync` (or `--skip`). Quietly update `SPEC.md`. |
 | **Gate 6 (`gate_2a_lookml_model`)** | `demo-create lookml model --looker-project <looker-project> --dataset <dataset-id> --connection <connection-name> --gcp-project <gcp-project> [--catalog <snapshot>] [--profile rich\|hybrid\|minimal]` | Hydrate Section 3 (`## Data Dictionary & Semantic Context` via `bigquery-metadata` and optional `demo-create catalog inspect`) and Section 5 (LookML Architecture: explores, join trees, chasm/fan-trap mitigation, NDT rollups, measures, dimensions). | **Silent.** Inform user LookML model & draft dashboard files are generated. |
 | **Gate 7 (`gate_2b_certify_polish`)** | `demo-create lookml certify-polish --lookml-dir <lookml-dir>` | Hydrate Section 6 (Dashboard Specification: 3-tab layout, KPI scorecards, Highcharts `advanced_vis_config` geometry tokens, donut palettes, `table_theme: transparent`, and `SELECT DISTINCT`-grounded filtered measures). | **Silent.** Inform user 3-Pass Executive Dashboard Polish is certified. |
 | **Gate 8 (`gate_3a_optimize`)** | `demo-create lookml optimize --lookml-dir <lookml-dir>` *(or `--skip`)* | Update Section 5 with LookML Server Performance Optimizer status (`applied` or `skipped`: datagroup caching, partition pruning filters, static suggestions, foreign key hiding). | Prompt user via `ask_question` first, then run `lookml optimize` (or `--skip`). Quietly update `SPEC.md`. |
 | **Gate 9 (`gate_3b_deploy`) & Gate 10 (`gate_3c_critique`)** | `demo-create lookml deploy --looker-project <looker-project> --lookml-dir <lookml-dir>`<br/>`demo-create lookml approve-critique --looker-project <looker-project>` | Update Section 5 & Section 6 with deployment confirmation: Looker instance URL, deployed dashboard URL, `validate_project` (`0` errors), per-tile `HTTP 200 OK` audit scores, and Pass 3 screenshot critique sign-off (`critique_approved: true`). | Present `deployed_dashboard_url` in chat, invite user via `ask_question` for Pass 3 screenshot critique or approval, and run `lookml approve-critique`. Quietly update `SPEC.md`. |
 | **Gate 11 (`gate_4_agent`) & Gate 12 (`gate_5_publish`)** | `demo-create agent create --model <model-name> --explore <explore-name>` *(or `--skip`)*<br/>`demo-create agent publish --agent-id <agent-id>` *(or `--skip`)* | Hydrate Section 7 (CA Agent ID, name, persona instructions, pre-seeded golden queries, and Gemini Enterprise publication status `published` or `skipped`). | **Silent** after each sequential `ask_question` confirmation. |
 | **Gate 13 (`gate_6_embed`)** | `demo-create embed scaffold --looker-project <looker-project>` *(or `--skip`)* | Hydrate Section 8 (Scaffolded directory, React/Vite framework, routes, Looker Embed SDK/components, CSS design tokens, branding, or `skipped` status). | **Silent** after `ask_question` confirmation. |
-| **Post-Delivery Iterations** | Any modular `demo-create` subcommand | Whenever the user requests additions or adjustments (new explore, modified KPI, additional table, updated portal styling), update the relevant section in `SPEC.md` and append a row to Section 9 (Revision History). | **Silent unless significant.** Acknowledge the user's specific request directly; only highlight `SPEC.md` if a major architectural pivot occurred. |
+| **Gate 14 (`gate_7_stream`)** | `demo-create stream plan --gcp-project <gcp-project> --dataset <dataset-id> [--skip]`<br/>`demo-create stream deploy [--execute-infra]`<br/>`demo-create stream delete` | Hydrate **`## Section 4B: Real-Time Streaming & CDC Architecture`** (target tables, CRUD mode `insert_only\|upsert\|full_cdc`, tick frequency, backfill mode, entity lifecycle state machine, BigQuery `PRIMARY KEY NOT ENFORCED` + `max_staleness = INTERVAL 0 SECOND`, locked-down GCE `e2-micro` VM with `--no-address` private IP + Cloud NAT + IAP, Cloud Logging stream `demo-create-streamer`, and `demo-create stream delete` teardown governance, or `skipped` status). | Present cost notice & prompt user via `ask_question` first, then run `stream plan` / `stream deploy` (or `--skip`). Quietly update `SPEC.md`. |
+| **Post-Delivery Iterations** | Any modular `demo-create` subcommand | Whenever the user requests additions or adjustments (new explore, modified KPI, additional table, updated portal styling, streaming teardown), update the relevant section in `SPEC.md` and append a row to Section 9 (Revision History). | **Silent unless significant.** Acknowledge the user's specific request directly; only highlight `SPEC.md` if a major architectural pivot occurred. |
 
 ---
 
@@ -83,7 +86,7 @@ When initializing or updating `./SPEC.md` or `./DELIVERY_REPORT.md`, import and 
   - **Section 1**: Demo Metadata, Environment Targets Table (including `Deployment Mode`: `full` vs `bq_only`), & Persona Alignment
   - **Section 2**: Business Scenario & Analytical Questions
   - **Section 3**: Relational Schema, Mermaid ERD, & `## Data Dictionary & Semantic Context` (populated by `bigquery-metadata` and `knowledge-catalog-metadata`)
-  - **Section 4**: Synthetic Data Generation Plan (volumes, distributions, DAG order)
+  - **Section 4**: Synthetic Data Generation Plan (volumes, distributions, DAG order) & **`## Section 4B: Real-Time Streaming & CDC Architecture`** (populated at Gate 14 `gate_7_stream`)
   - **Section 5**: Semantic Layer (LookML) Architecture (explores, joins, NDT chasm-trap rollups)
   - **Section 6**: Executive Dashboard & Visualization Layout (3-tab architecture & filters)
   - **Section 7**: Conversational Analytics (CA) AI Agent Specification & Golden Queries
@@ -98,8 +101,12 @@ When initializing or updating `./SPEC.md` or `./DELIVERY_REPORT.md`, import and 
 
 When specialized subagents are invoked:
 1. **`data-engineer`** (Gate 4 `gate_1c_generate_data`): Reads Sections 3 & 4 of `SPEC.md` for approved schemas and volume constraints. Updates Section 4 with actual row counts, `TableValidator` metrics, and BigQuery partitioning/clustering details.
-2. **`lookml-snowflake-modeler`** (Gate 5 `gate_2a_lookml_model`): Reads Sections 3 & 5. Formulates NDT rollups and records the Chasm Trap Mitigation Architecture into Section 5.
-3. **`lookml-dashboard-designer`** (Gate 6 `gate_2b_certify_polish` & Gate 9 `gate_3c_critique`): Reads Sections 5 & 6. Translates the KPI cards and chart specifications into polished LookML dashboard tiles and updates Section 6 prior to `demo-create lookml certify-polish`.
-4. **`embed-portal-engineer`** (Gate 12 `gate_6_embed`): Reads Section 8 to construct the external portal with the correct routes, embedded dashboard IDs, and theme tokens.
+2. **`lookml-snowflake-modeler`** (Gate 6 `gate_2a_lookml_model`): Reads Sections 3 & 5. Formulates NDT rollups and records the Chasm Trap Mitigation Architecture into Section 5.
+3. **`lookml-dashboard-designer`** (Gate 7 `gate_2b_certify_polish` & Gate 10 `gate_3c_critique`): Reads Sections 5 & 6. Translates the KPI cards and chart specifications into polished LookML dashboard tiles and updates Section 6 prior to `demo-create lookml certify-polish`.
+4. **`embed-portal-engineer`** (Gate 13 `gate_6_embed`): Reads Section 8 to construct the external portal with the correct routes, embedded dashboard IDs, and theme tokens.
+5. **Gate 14 Streaming Subagent Wave (`bq-profiling-researcher`, `catalog-spec-architect`, `go-bq-cdc-engineer`, `go-sim-cli-engineer`)** (Gate 14 `gate_7_stream`):
+   - **`bq-profiling-researcher`**: Reads Section 3 of `SPEC.md`, profiles live BigQuery tables and Dataplex stats, and writes `streamer/seed_data.json` / `profile.json`.
+   - **`catalog-spec-architect`**: Aligns Dataplex glossary terms and cross-column synthetic rules, and hydrates **`## Section 4B: Real-Time Streaming & CDC Architecture`** in `SPEC.md` and `.demo-stream-plan.json`.
+   - **`go-bq-cdc-engineer`** & **`go-sim-cli-engineer`**: Read Section 3 and Section 4B of `SPEC.md` alongside `.demo-stream-plan.json` to implement the Go Storage Write API CDC layer, domain simulation engine, and locked-down GCE deployment (`--no-address`).
 
 All subagents update `SPEC.md` directly and quietly on disk, appending an entry to Section 9 (Revision History).
