@@ -388,6 +388,24 @@ class Gate:
         Returns:
             True when the state carries this gate's completion signal.
         """
+        rec = state.gates.get(self.id)
+        if rec is not None and rec.explicit:
+            state.sync_gates()
+            rec = state.gates[self.id]
+            if rec.is_satisfied:
+                return True
+            if self.id in {
+                "gate_2a_lookml_model",
+                "gate_2b_certify_polish",
+                "gate_3a_optimize",
+                "gate_3b_deploy",
+                "gate_3c_critique",
+                "gate_4_agent",
+                "gate_5_publish",
+                "gate_6_embed",
+            } and _is_bq_only_complete(state):
+                return True
+            return False
         return self._is_complete(state)
 
     def command(self, state: FlowState) -> str:

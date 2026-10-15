@@ -14,10 +14,11 @@ from rich.syntax import Syntax
 from rich.table import Table
 
 from looker_demo_cli.commands.env import render_env_tables
-from looker_demo_cli.commands.options import StateFileOption
+from looker_demo_cli.commands.options import JsonOption, StateFileOption
+from looker_demo_cli.commands.runner import init_command_context
 from looker_demo_cli.config import DEFAULT_GCP_PROJECT, GEMINI_SKILLS_DIR
-from looker_demo_cli.context import AppContext, get_context
-from looker_demo_cli.errors import AuthError, ConfigError, StateError, missing_option
+from looker_demo_cli.context import AppContext
+from looker_demo_cli.errors import AuthError, ConfigError, StateError
 from looker_demo_cli.gates import attach_next_gate_action
 from looker_demo_cli.output import CommandResult, ErrorDetail, emit
 from looker_demo_cli.precheck.env_checker import (
@@ -40,7 +41,7 @@ from looker_demo_cli.precheck.looker_auth import (
 )
 from looker_demo_cli.precheck.mcp_checker import MCPStatus, check_mcp_servers, patch_mcp_config
 from looker_demo_cli.precheck.skills_organizer import SkillInstallStatus, audit_and_organize_skills
-from looker_demo_cli.state import FlowState
+from looker_demo_cli.state import FlowState, GateLifecycle
 from looker_demo_cli.utils.console import (
     console,
     print_banner,
@@ -647,7 +648,11 @@ def _render_blocked_guidance(findings: _AuditFindings) -> None:
     )
 
 
-def _persist_gate_zero_verdict(app_ctx: AppContext, findings: _AuditFindings) -> None:
+def _persist_gate_zero_verdict(
+    app_ctx: AppContext,
+    findings: _AuditFindings,
+    gcp_project: str | None = None,
+) -> None:
     """Record the gate 0 verdict so ``demo-create status`` can read it.
 
     Written on *both* outcomes, not just success: an environment that passed
@@ -662,12 +667,19 @@ def _persist_gate_zero_verdict(app_ctx: AppContext, findings: _AuditFindings) ->
     Args:
         app_ctx: The resolved application context owning the state file.
         findings: The completed gate 0 audit.
+        gcp_project: Optional fallback resolved GCP project ID.
     """
     state = app_ctx.state
     state.precheck_passed = not findings.is_blocked
+    state.mark_gate(
+        "gate_0a_precheck",
+        GateLifecycle.COMPLETED if state.precheck_passed else GateLifecycle.PENDING,
+    )
     state.looker_authenticated = findings.looker_status.is_authenticated
     if findings.effective_project:
         state.gcp_project_id = findings.effective_project
+    elif gcp_project:
+        state.gcp_project_id = gcp_project
     if findings.gcp_context.active_account:
         state.gcp_account = findings.gcp_context.active_account
     app_ctx.save_state()
@@ -683,10 +695,8 @@ def pre_check(
     fix: Annotated[
         bool, typer.Option("--fix", help="Automatically install missing MCP configs and organize global skills")
     ] = False,
-    output_json: Annotated[bool, typer.Option("--json", help="Emit the result envelope as JSON on stdout")] = False,
-    gcp_project: Annotated[
-        str, typer.Option("--gcp-project", help="Target Google Cloud Project ID")
-    ] = DEFAULT_GCP_PROJECT,
+    output_json: JsonOption = False,
+    gcp_project: Annotated[str | None, typer.Option("--gcp-project", help="Target Google Cloud Project ID")] = None,
     require_looker: Annotated[
         bool,
         typer.Option(
@@ -720,20 +730,16 @@ def pre_check(
         typer.Exit: With :attr:`AuthError.exit_code` when the environment is
             blocked, in both output modes.
     """
-    app_ctx = get_context(ctx)
-    app_ctx.use_state_file(state_file)
-    # Must be set even though the success path passes json_output to emit()
-    # explicitly: it is what tells the top-level error boundary which format to
-    # render in if anything beneath this command raises.
-    app_ctx.set_json_mode(output_json)
+    app_ctx, state = init_command_context(ctx, state_file=state_file, output_json=output_json)
+    resolved_gcp_project = state.resolve(gcp_project, "gcp_project_id", default=DEFAULT_GCP_PROJECT) or ""
     if not output_json:
-        print_banner("PRE-CHECK: ENVIRONMENT, MCP & SKILL AUDIT", f"Target GCP Project: {gcp_project}")
+        print_banner("PRE-CHECK: ENVIRONMENT, MCP & SKILL AUDIT", f"Target GCP Project: {resolved_gcp_project}")
 
-    findings = _collect_findings(fix=fix, gcp_project=gcp_project, require_looker=require_looker)
-    _persist_gate_zero_verdict(app_ctx, findings)
+    findings = _collect_findings(fix=fix, gcp_project=resolved_gcp_project, require_looker=require_looker)
+    _persist_gate_zero_verdict(app_ctx, findings, gcp_project=resolved_gcp_project)
 
     if output_json:
-        return emit(_build_json_result(findings, app_ctx.state), json_output=True)
+        return emit(_build_json_result(findings, state), json_output=True)
 
     _render_human_report(findings, fix=fix)
 
@@ -767,7 +773,7 @@ def confirm_targets(
         str | None, typer.Option("--looker-project", help="Optional Looker project/model name")
     ] = None,
     instance_url: Annotated[str | None, typer.Option("--instance", help="Optional Looker instance URL")] = None,
-    output_json: Annotated[bool, typer.Option("--json", help="Emit the result envelope as JSON on stdout")] = False,
+    output_json: JsonOption = False,
     state_file: StateFileOption = None,
 ):
     """Record the human-confirmed environment targets and deployment mode, and initialize SPEC.md (Gate 0B).
@@ -785,10 +791,7 @@ def confirm_targets(
         output_json: Emit the JSON envelope on stdout.
         state_file: Optional explicit path to ``.demo-state.json``.
     """
-    app_ctx = get_context(ctx)
-    app_ctx.use_state_file(state_file)
-    app_ctx.set_json_mode(output_json)
-    state = app_ctx.state
+    app_ctx, state = init_command_context(ctx, state_file=state_file, output_json=output_json)
 
     if not state.precheck_passed:
         raise StateError(
@@ -803,15 +806,19 @@ def confirm_targets(
             details={"mode": mode},
         )
 
-    resolved_project = gcp_project or state.gcp_project_id
-    resolved_conn = connection or state.looker_connection_name
-    resolved_gcp_acct = gcp_account or state.gcp_account
-    resolved_looker_acct = looker_account or state.looker_account
+    is_bq_only = mode == "bq_only"
+    resolved_project = state.require(
+        gcp_project,
+        "gcp_project_id",
+        option="--gcp-project",
+        purpose="the confirmed Google Cloud project ID",
+        write_to="gcp_project_id",
+    )
+    resolved_gcp_acct = state.resolve(gcp_account, "gcp_account")
+    resolved_looker_acct = state.resolve(looker_account, "looker_account")
+    resolved_conn = state.resolve(connection, "looker_connection_name")
 
-    if not resolved_project:
-        raise missing_option("--gcp-project", purpose="the confirmed Google Cloud project ID")
-
-    if mode == "full":
+    if not is_bq_only:
         if state.looker_authenticated is False:
             looker_status = check_looker_auth()
             if not looker_status.is_authenticated:
@@ -820,8 +827,13 @@ def confirm_targets(
                     remediation="Run `lkr auth login` (or pass `--mode bq_only` to deploy BigQuery & Knowledge Catalog only).",
                 )
             state.looker_authenticated = True
-        if not resolved_conn:
-            raise missing_option("--connection", purpose="the confirmed Looker database connection name")
+        resolved_conn = state.require(
+            connection,
+            "looker_connection_name",
+            option="--connection",
+            purpose="the confirmed Looker database connection name",
+            write_to="looker_connection_name",
+        )
 
     state.deployment_mode = mode  # type: ignore[assignment]
     state.gcp_project_id = resolved_project
@@ -831,12 +843,16 @@ def confirm_targets(
     if resolved_looker_acct:
         state.looker_account = resolved_looker_acct
     state.targets_confirmed = True
+    state.mark_gate("gate_0b_confirm_targets", GateLifecycle.COMPLETED)
     if dataset:
         bq = app_ctx.bigquery(project_id=resolved_project)
         if bq.dataset_exists(dataset):
             state.bq_dataset_id = dataset
             state.dataset_exists = True
             state.data_source_mode = "existing"
+            state.mark_gate("gate_1a_propose_schema", GateLifecycle.COMPLETED)
+            state.mark_gate("gate_1b_approve_schema", GateLifecycle.COMPLETED)
+            state.mark_gate("gate_1c_generate_data", GateLifecycle.COMPLETED)
             try:
                 state.gcp_location = bq.get_dataset_location(dataset)
             except Exception:

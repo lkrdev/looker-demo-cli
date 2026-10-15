@@ -9,11 +9,17 @@ from typing import Annotated, Any
 import typer
 from rich.table import Table
 
-from looker_demo_cli.commands.options import StateFileOption
+from looker_demo_cli.commands.options import DatasetOption, GcpProjectOption, JsonOption, StateFileOption
+from looker_demo_cli.commands.runner import (
+    GateOutcome,
+    check_required_gates,
+    gated_command,
+    init_command_context,
+)
 from looker_demo_cli.config import DEFAULT_GCP_PROJECT
 from looker_demo_cli.context import get_context
-from looker_demo_cli.error_boundary import ErrorHandlingGroup
-from looker_demo_cli.errors import ConfigError, RemoteApiError, StateError, missing_option
+from looker_demo_cli.error_boundary import make_typer
+from looker_demo_cli.errors import ConfigError, RemoteApiError, StateError
 from looker_demo_cli.gates import attach_next_gate_action
 from looker_demo_cli.generators.schema_generator import (
     DomainBlueprint,
@@ -21,13 +27,12 @@ from looker_demo_cli.generators.schema_generator import (
     generate_domain_dataset,
 )
 from looker_demo_cli.output import CommandResult, ErrorDetail, emit
+from looker_demo_cli.state import GateLifecycle
 from looker_demo_cli.utils.console import console, print_error, print_info, print_success, print_warning
 
-data_app = typer.Typer(
+data_app = make_typer(
     name="data",
     help="Design, synthesize, inspect, and upload BigQuery demo datasets.",
-    no_args_is_help=True,
-    cls=ErrorHandlingGroup,
 )
 
 
@@ -114,22 +119,20 @@ def data_propose_schema(
         int,
         typer.Option("--preview-rows", "-n", help="Number of sample rows to include per table"),
     ] = 5,
-    output_json: Annotated[bool, typer.Option("--json", help="Emit the result envelope as JSON on stdout")] = False,
+    output_json: JsonOption = False,
     state_file: StateFileOption = None,
 ):
     """Validate a schema blueprint and synthesize a 5-row micro-sample preview & Mermaid ERD (Gate 1A)."""
-    app_ctx = get_context(ctx)
-    app_ctx.use_state_file(state_file)
-    app_ctx.set_json_mode(output_json)
-    state = app_ctx.state
+    app_ctx, state = init_command_context(ctx, state_file=state_file, output_json=output_json)
 
     if state.precheck_passed and not state.targets_confirmed:
         raise StateError(
             "Environment targets have not been confirmed yet (Gate 0B).",
             remediation="Confirm the 4 targets with the user and run `demo-create confirm-targets` first.",
         )
+    check_required_gates(state, ("gate_0b_confirm_targets",))
 
-    resolved_domain = domain or state.domain_name or "logistics_analytics"
+    resolved_domain = state.resolve(domain, "domain_name", default="logistics_analytics")
     if schema_file:
         if not schema_file.exists():
             raise ConfigError(
@@ -179,6 +182,11 @@ def data_propose_schema(
     state.schema_file_path = resolved_schema_path
     state.schema_proposed = True
     state.schema_approved = False
+    state.mark_gate(
+        "gate_1a_propose_schema",
+        GateLifecycle.COMPLETED,
+        invalidate_downstream=("gate_1b_approve_schema",),
+    )
     saved_path = app_ctx.save_state()
 
     spec_path = Path.cwd() / "SPEC.md"
@@ -224,22 +232,24 @@ def data_propose_schema(
     return emit(result, json_output=output_json, human_renderer=render)
 
 
-@data_app.command(name="approve-schema")
+@gated_command(
+    data_app,
+    "approve-schema",
+    command_label="data approve-schema",
+    gate_id="gate_1b_approve_schema",
+)
 def data_approve_schema(
     ctx: typer.Context,
     row_count: Annotated[int, typer.Option("--row-count", help="Approved target fact row count")] = 5000,
-    dataset: Annotated[str | None, typer.Option("--dataset", help="Target BigQuery dataset ID")] = None,
+    dataset: DatasetOption = None,
     schema_file: Annotated[
         Path | None, typer.Option("--schema-file", help="Path to approved JSON DomainBlueprint schema file")
     ] = None,
-    output_json: Annotated[bool, typer.Option("--json", help="Emit the result envelope as JSON on stdout")] = False,
+    output_json: JsonOption = False,
     state_file: StateFileOption = None,
 ):
     """Record user approval of the proposed schema and target row volume (Gate 1B)."""
-    app_ctx = get_context(ctx)
-    app_ctx.use_state_file(state_file)
-    app_ctx.set_json_mode(output_json)
-    state = app_ctx.state
+    state = get_context(ctx).state
 
     if not state.schema_proposed and not schema_file:
         raise StateError(
@@ -247,33 +257,26 @@ def data_approve_schema(
             remediation="Run `demo-create data propose-schema --schema-file <path> --preview` and present the ERD and sample rows in chat before approving.",
         )
 
-    if schema_file:
-        state.schema_file_path = schema_file
-    state.schema_proposed = True
-    state.schema_approved = True
-    state.approved_row_count = row_count
-    state.bq_dataset_id = dataset or state.bq_dataset_id or state.domain_name
-    saved_path = app_ctx.save_state()
+    resolved_schema_file = schema_file or state.schema_file_path
+    resolved_dataset = state.resolve(dataset, "bq_dataset_id", "domain_name")
+    state.mark_gate("gate_1a_propose_schema", GateLifecycle.COMPLETED)
 
-    result = attach_next_gate_action(
-        CommandResult.success(
-            "data approve-schema",
-            data={
-                "schema_approved": True,
-                "approved_row_count": row_count,
-                "dataset": state.bq_dataset_id,
-                "schema_file": str(state.schema_file_path) if state.schema_file_path else None,
-                "state_file": str(saved_path),
-            },
-        ),
-        state,
+    return GateOutcome(
+        data={
+            "schema_approved": True,
+            "approved_row_count": row_count,
+            "dataset": resolved_dataset,
+            "schema_file": str(resolved_schema_file) if resolved_schema_file else None,
+        },
+        state_updates={
+            "schema_file_path": resolved_schema_file,
+            "schema_proposed": True,
+            "schema_approved": True,
+            "approved_row_count": row_count,
+            "bq_dataset_id": resolved_dataset,
+        },
+        render=lambda _: print_success(f"Approved schema and target row volume ({row_count:,} rows)."),
     )
-
-    def render(_: CommandResult) -> None:
-        print_success(f"Approved schema and target row volume ({row_count:,} rows).")
-        print_info(f"Updated state saved to `{saved_path}`")
-
-    return emit(result, json_output=output_json, human_renderer=render)
 
 
 @data_app.command(name="generate")
@@ -325,9 +328,9 @@ def data_generate(
             help="Include structured verification scorecard and emit JSON envelope on stdout",
         ),
     ] = False,
-    gcp_project: Annotated[str | None, typer.Option("--gcp-project", help="Target GCP Project ID if uploading")] = None,
-    dataset: Annotated[str | None, typer.Option("--dataset", help="Target BigQuery dataset ID if uploading")] = None,
-    output_json: Annotated[bool, typer.Option("--json", help="Emit the result envelope as JSON on stdout")] = False,
+    gcp_project: GcpProjectOption = None,
+    dataset: DatasetOption = None,
+    output_json: JsonOption = False,
     state_file: StateFileOption = None,
 ):
     """Synthesize high-fidelity relational Parquet dataset tables locally.
@@ -355,16 +358,15 @@ def data_generate(
     if json_scorecard:
         output_json = True
 
-    app_ctx = get_context(ctx)
-    app_ctx.use_state_file(state_file)
-    app_ctx.set_json_mode(output_json)
-    state = app_ctx.state
+    app_ctx, state = init_command_context(ctx, state_file=state_file, output_json=output_json)
 
     if not preview and not validate_only and state.precheck_passed and not state.schema_approved:
         raise StateError(
             "Schema and row volume have not been approved yet (Gate 1B).",
             remediation="Present the proposed schema ERD & preview to the user, then run `demo-create data approve-schema --row-count <count>` before generating data.",
         )
+    if not preview and not validate_only:
+        check_required_gates(state, ("gate_1b_approve_schema",))
 
     target_dir = output_dir or (Path.home() / "scratch" / "demo_create" / (dataset or domain))
 
@@ -443,7 +445,7 @@ def data_generate(
     state.bq_dataset_id = dataset or domain
     state.generated_parquet_dir = target_dir
     state.generated_tables = table_names
-    state.gcp_project_id = gcp_project or state.gcp_project_id or DEFAULT_GCP_PROJECT
+    state.gcp_project_id = state.resolve(gcp_project, "gcp_project_id", default=DEFAULT_GCP_PROJECT)
 
     loaded_rows: dict[str, int] = {}
     partitioned_tables: list[str] = []
@@ -482,6 +484,7 @@ def data_generate(
                 else:
                     loaded_rows[t_name] = bq_helper.load_parquet_table(state.bq_dataset_id, t_name, p_file)
         state.dataset_exists = True
+        state.mark_gate("gate_1c_generate_data", GateLifecycle.COMPLETED)
 
     saved_path = app_ctx.save_state()
 
@@ -548,8 +551,8 @@ def data_upload(
     parquet_dir: Annotated[
         Path | None, typer.Option("--parquet-dir", help="Directory containing Parquet files")
     ] = None,
-    dataset: Annotated[str | None, typer.Option("--dataset", help="Target BigQuery dataset ID")] = None,
-    gcp_project: Annotated[str | None, typer.Option("--gcp-project", help="Target GCP Project ID")] = None,
+    dataset: DatasetOption = None,
+    gcp_project: GcpProjectOption = None,
     location: Annotated[str, typer.Option("--location", help="BigQuery dataset location")] = "US",
     verify_only: Annotated[
         bool,
@@ -558,7 +561,7 @@ def data_upload(
             help="Verify tables already loaded in BigQuery and sync state without re-uploading Parquet files",
         ),
     ] = False,
-    output_json: Annotated[bool, typer.Option("--json", help="Emit the result envelope as JSON on stdout")] = False,
+    output_json: JsonOption = False,
     state_file: StateFileOption = None,
 ):
     """Upload local Parquet tables into a BigQuery dataset via ADC with automated partitioning & clustering.
@@ -579,12 +582,9 @@ def data_upload(
         ConfigError: No Parquet directory could be resolved, it holds no
             ``*.parquet`` files, or no target dataset could be resolved.
     """
-    app_ctx = get_context(ctx)
-    app_ctx.use_state_file(state_file)
-    app_ctx.set_json_mode(output_json)
-    state = app_ctx.state
+    app_ctx, state = init_command_context(ctx, state_file=state_file, output_json=output_json)
 
-    p_dir = parquet_dir or state.generated_parquet_dir
+    p_dir = state.resolve(parquet_dir, "generated_parquet_dir")
     if not p_dir or not p_dir.exists():
         raise ConfigError(
             "No Parquet directory found.",
@@ -600,14 +600,14 @@ def data_upload(
             details={"parquet_dir": str(p_dir)},
         )
 
-    ds_id = dataset or state.bq_dataset_id
-    if not ds_id:
-        raise missing_option(
-            "--dataset",
-            purpose="the BigQuery dataset to load the Parquet tables into",
-            hint="Or run `demo-create data generate` first, which records the dataset it synthesized for.",
-        )
-    proj_id = gcp_project or state.gcp_project_id or DEFAULT_GCP_PROJECT
+    ds_id = state.require(
+        dataset,
+        "bq_dataset_id",
+        option="--dataset",
+        purpose="the BigQuery dataset to load the Parquet tables into",
+        hint="Or run `demo-create data generate` first, which records the dataset it synthesized for.",
+    )
+    proj_id = state.resolve(gcp_project, "gcp_project_id", default=DEFAULT_GCP_PROJECT)
 
     bq_helper = app_ctx.bigquery(project_id=proj_id, location=location)
     bq_helper.ensure_dataset(ds_id)
@@ -634,6 +634,7 @@ def data_upload(
     state.bq_dataset_id = ds_id
     state.gcp_project_id = proj_id
     state.gcp_location = location
+    state.mark_gate("gate_1c_generate_data", GateLifecycle.COMPLETED)
     saved_path = app_ctx.save_state()
 
     result = attach_next_gate_action(
@@ -663,10 +664,10 @@ def data_upload(
 @data_app.command(name="inspect")
 def data_inspect(
     ctx: typer.Context,
-    dataset: Annotated[str | None, typer.Option("--dataset", help="BigQuery dataset ID")] = None,
-    gcp_project: Annotated[str | None, typer.Option("--gcp-project", help="Target GCP Project ID")] = None,
+    dataset: DatasetOption = None,
+    gcp_project: GcpProjectOption = None,
     location: Annotated[str, typer.Option("--location", help="BigQuery dataset location")] = "US",
-    output_json: Annotated[bool, typer.Option("--json", help="Emit the result envelope as JSON on stdout")] = False,
+    output_json: JsonOption = False,
     state_file: StateFileOption = None,
 ):
     """Inspect tables, schemas, and metadata in a BigQuery dataset.
@@ -683,18 +684,15 @@ def data_inspect(
         ConfigError: No BigQuery dataset could be resolved.
         RemoteApiError: The dataset does not exist.
     """
-    app_ctx = get_context(ctx)
-    app_ctx.use_state_file(state_file)
-    app_ctx.set_json_mode(output_json)
-    state = app_ctx.state
-    ds_id = dataset or state.bq_dataset_id
-    if not ds_id:
-        raise missing_option(
-            "--dataset",
-            purpose="the BigQuery dataset to inspect",
-            hint="Or run `demo-create data generate` or `demo-create data upload` first to record one.",
-        )
-    proj_id = gcp_project or state.gcp_project_id or DEFAULT_GCP_PROJECT
+    app_ctx, state = init_command_context(ctx, state_file=state_file, output_json=output_json)
+    ds_id = state.require(
+        dataset,
+        "bq_dataset_id",
+        option="--dataset",
+        purpose="the BigQuery dataset to inspect",
+        hint="Or run `demo-create data generate` or `demo-create data upload` first to record one.",
+    )
+    proj_id = state.resolve(gcp_project, "gcp_project_id", default=DEFAULT_GCP_PROJECT)
 
     bq_helper = app_ctx.bigquery(project_id=proj_id, location=location)
     if not bq_helper.dataset_exists(ds_id):
@@ -778,28 +776,32 @@ def data_inspect(
     return emit(result, json_output=output_json, human_renderer=render)
 
 
-@data_app.command(name="adopt")
+@gated_command(
+    data_app,
+    "adopt",
+    command_label="data adopt",
+    gate_id="gate_1c_generate_data",
+)
 def data_adopt(
     ctx: typer.Context,
     dataset: Annotated[str, typer.Option("--dataset", help="BigQuery dataset ID to adopt as demo source")],
-    gcp_project: Annotated[
-        str | None, typer.Option("--gcp-project", help="GCP Project ID. Defaults to confirmed target project.")
-    ] = None,
+    gcp_project: GcpProjectOption = None,
     tables: Annotated[
         str | None, typer.Option("--tables", help="Optional comma-separated list of table IDs to include")
     ] = None,
-    output_json: Annotated[bool, typer.Option("--json", help="Emit the result envelope as JSON on stdout")] = False,
+    output_json: JsonOption = False,
     state_file: StateFileOption = None,
 ):
     """Adopt an existing BigQuery dataset, skipping synthetic data generation gates."""
     app_ctx = get_context(ctx)
-    app_ctx.use_state_file(state_file)
-    app_ctx.set_json_mode(output_json)
     state = app_ctx.state
 
-    proj_id = gcp_project or state.gcp_project_id
-    if not proj_id:
-        raise missing_option("--gcp-project", purpose="the BigQuery project containing the dataset")
+    proj_id = state.require(
+        gcp_project,
+        "gcp_project_id",
+        option="--gcp-project",
+        purpose="the BigQuery project containing the dataset",
+    )
 
     bq = app_ctx.bigquery(project_id=proj_id)
     if not bq.dataset_exists(dataset):
@@ -829,27 +831,8 @@ def data_adopt(
     else:
         selected_tables = all_tables
 
-    state.bq_dataset_id = dataset
-    state.gcp_project_id = proj_id
-    state.dataset_exists = True
-    state.data_source_mode = "existing"
-    state.existing_tables = selected_tables
-    saved_path = app_ctx.save_state()
-
-    result = attach_next_gate_action(
-        CommandResult.success(
-            "data adopt",
-            data={
-                "dataset": dataset,
-                "project_id": proj_id,
-                "table_count": len(selected_tables),
-                "tables": selected_tables,
-                "data_source_mode": "existing",
-                "state_file": str(saved_path),
-            },
-        ),
-        state,
-    )
+    state.mark_gate("gate_1a_propose_schema", GateLifecycle.COMPLETED)
+    state.mark_gate("gate_1b_approve_schema", GateLifecycle.COMPLETED)
 
     def render(_: CommandResult) -> None:
         print_success(f"Adopted existing dataset `{dataset}` in `{proj_id}` with {len(selected_tables)} table(s).")
@@ -857,4 +840,21 @@ def data_adopt(
             f"Next: Run `demo-create lookml model --dataset {dataset}` or `demo-create catalog inspect --dataset {dataset}`."
         )
 
-    return emit(result, json_output=output_json, human_renderer=render)
+    return GateOutcome(
+        data={
+            "dataset": dataset,
+            "project_id": proj_id,
+            "table_count": len(selected_tables),
+            "tables": selected_tables,
+            "data_source_mode": "existing",
+        },
+        state_updates={
+            "bq_dataset_id": dataset,
+            "gcp_project_id": proj_id,
+            "dataset_exists": True,
+            "data_source_mode": "existing",
+            "existing_tables": selected_tables,
+        },
+        render=render,
+        print_state_saved=False,
+    )

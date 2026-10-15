@@ -186,7 +186,7 @@ demo-create agent create [OPTIONS]
 | `--instructions` | Custom system prompt instructions |  |
 | `--publish-ge` | Automatically configure and publish to Gemini Enterprise |  |
 | `--non-interactive` | Run non-interactively without prompting for GE reconfigurations |  |
-| `--skip` | Skip Conversational Analytics agent creation and advance to the next gate |  |
+| `--skip` | Skip this optional gate and advance to the next gate |  |
 | `--looker-account` | Saved Looker OAuth account alias |  |
 | `--instance` | Looker instance base URL |  |
 | `--json` | Emit the result envelope as JSON on stdout |  |
@@ -225,7 +225,7 @@ demo-create agent publish [OPTIONS]
 | :--- | :--- | :--- |
 | `--agent-id` | Target CA Agent ID to publish |  |
 | `--non-interactive` | Run non-interactively without prompting for GE reconfigurations |  |
-| `--skip` | Skip Gemini Enterprise publishing and advance to the next gate |  |
+| `--skip` | Skip this optional gate and advance to the next gate |  |
 | `--looker-account` | Saved Looker OAuth account alias |  |
 | `--instance` | Looker instance base URL |  |
 | `--json` | Emit the result envelope as JSON on stdout |  |
@@ -269,16 +269,6 @@ demo-create ge configure [OPTIONS]
 
 Verify Gemini Enterprise configuration and publish a CA agent to it (Gate 5).
 
-An alias for `looker_demo_cli.commands.agent.agent_publish`, kept
-because Gate 5 of the orchestration flow is about Gemini Enterprise and
-looking for the verb under `ge` is the natural instinct.
-
-Both spellings now share one implementation rather than one calling the
-other as a Python function -- an arrangement that held together only
-because the two declared identical options in identical order, and that
-reported `"agent publish"` in this command's *success* envelope while its
-*failure* envelope said `"ge publish"`.
-
 ```bash
 demo-create ge publish [OPTIONS]
 ```
@@ -287,7 +277,7 @@ demo-create ge publish [OPTIONS]
 | :--- | :--- | :--- |
 | `--agent-id` | Target CA Agent ID to publish |  |
 | `--non-interactive` | Run non-interactively without prompting for GE reconfigurations |  |
-| `--skip` | Skip Gemini Enterprise publishing and advance to the next gate |  |
+| `--skip` | Skip this optional gate and advance to the next gate |  |
 | `--looker-account` | Saved Looker OAuth account alias |  |
 | `--instance` | Looker instance base URL |  |
 | `--json` | Emit the result envelope as JSON on stdout |  |
@@ -367,12 +357,12 @@ demo-create catalog inspect [OPTIONS]
 
 | Option | Description | Default |
 | :--- | :--- | :--- |
-| `--dataset` | Target BigQuery dataset ID to inspect. Defaults to state dataset. |  |
-| `--gcp-project` | GCP Project ID. Defaults to confirmed target project. |  |
+| `--dataset` | Target BigQuery dataset ID |  |
+| `--gcp-project` | Target Google Cloud Project ID |  |
 | `--location` | Dataset location (e.g. 'us', 'eu', 'us-central1'). | `us` |
 | `--output-file`, `-o` | Optional path to save the CatalogSnapshot JSON file. |  |
-| `--skip` | Skip Knowledge Catalog inspection and advance to LookML modeling |  |
-| `--json` | Emit result envelope as JSON on stdout |  |
+| `--skip` | Skip this optional gate and advance to the next gate |  |
+| `--json` | Emit the result envelope as JSON on stdout |  |
 | `--state-file` | Path to .demo-state.json. Defaults to discovering it in the current directory. |  |
 
 ### `demo-create catalog profiles`
@@ -385,7 +375,7 @@ demo-create catalog profiles [OPTIONS]
 
 | Option | Description | Default |
 | :--- | :--- | :--- |
-| `--json` | Emit result envelope as JSON on stdout |  |
+| `--json` | Emit the result envelope as JSON on stdout |  |
 | `--state-file` | Path to .demo-state.json. Defaults to discovering it in the current directory. |  |
 
 ### `demo-create catalog seed`
@@ -398,16 +388,16 @@ demo-create catalog seed [OPTIONS]
 
 | Option | Description | Default |
 | :--- | :--- | :--- |
-| `--dataset` | Target BigQuery dataset ID to seed metadata for. Defaults to state dataset. |  |
-| `--gcp-project` | Target GCP Project ID. Defaults to confirmed target project. |  |
+| `--dataset` | Target BigQuery dataset ID |  |
+| `--gcp-project` | Target Google Cloud Project ID |  |
 | `--location` | Dataset location | `us` |
 | `--aspect-type-name` | Name for the semantic curation Aspect Type | `semantic-curation` |
 | `--glossary-name` | Name for the Dataplex Business Glossary (defaults to <dataset>-glossary) |  |
 | `--curation-file` | Optional path to declarative catalog curation JSON file |  |
 | `--schema-file` | Optional path to DomainBlueprint schema JSON file |  |
 | `--mode` | Execution mode: 'plan' or 'execute' | `execute` |
-| `--skip` | Skip Knowledge Catalog metadata seeding and advance to LookML modeling |  |
-| `--json` | Emit result envelope as JSON on stdout |  |
+| `--skip` | Skip this optional gate and advance to the next gate |  |
+| `--json` | Emit the result envelope as JSON on stdout |  |
 | `--state-file` | Path to .demo-state.json. Defaults to discovering it in the current directory. |  |
 
 ### `demo-create catalog sync`
@@ -420,16 +410,16 @@ demo-create catalog sync [OPTIONS]
 
 | Option | Description | Default |
 | :--- | :--- | :--- |
-| `--dataset` | Target BigQuery dataset ID to sync. Defaults to state dataset. |  |
-| `--gcp-project` | GCP Project ID. Defaults to confirmed target project. |  |
-| `--lookml-dir` | Path to LookML directory to sync. Defaults to state output dir or ./lookml. |  |
+| `--dataset` | Target BigQuery dataset ID |  |
+| `--gcp-project` | Target Google Cloud Project ID |  |
+| `--lookml-dir` | Directory containing LookML files |  |
 | `--catalog` | Optional path to CatalogSnapshot JSON file to sync against. |  |
 | `--profile` | Knowledge Catalog mapping profile ('rich', 'hybrid', 'minimal'). Defaults to state or recommended. |  |
 | `--layered`, `--no-layered` | Use layered LookML views (base/ and refinements/). Defaults to auto-detecting project structure. |  |
 | `--dry-run` | Report planned metadata diffs without modifying LookML files. |  |
-| `--skip` | Skip Knowledge Catalog LookML synchronization |  |
+| `--skip` | Skip this optional gate and advance to the next gate |  |
 | `--location` | Dataset/Catalog location (e.g. 'us', 'eu', 'us-central1'). | `us` |
-| `--json` | Emit result envelope as JSON on stdout |  |
+| `--json` | Emit the result envelope as JSON on stdout |  |
 | `--state-file` | Path to .demo-state.json. Defaults to discovering it in the current directory. |  |
 
 ---
@@ -458,7 +448,7 @@ demo-create data adopt [OPTIONS]
 | Option | Description | Default |
 | :--- | :--- | :--- |
 | `--dataset` | BigQuery dataset ID to adopt as demo source **(required)** |  |
-| `--gcp-project` | GCP Project ID. Defaults to confirmed target project. |  |
+| `--gcp-project` | Target Google Cloud Project ID |  |
 | `--tables` | Optional comma-separated list of table IDs to include |  |
 | `--json` | Emit the result envelope as JSON on stdout |  |
 | `--state-file` | Path to .demo-state.json. Defaults to discovering it in the current directory. |  |
@@ -501,8 +491,8 @@ demo-create data generate [OPTIONS]
 | `--validate-only` | Execute topological DAG and in-memory validation gates without uploading to BigQuery |  |
 | `--upload` | Automatically upload synthesized Parquet tables to BigQuery via ADC |  |
 | `--json-scorecard` | Include structured verification scorecard and emit JSON envelope on stdout |  |
-| `--gcp-project` | Target GCP Project ID if uploading |  |
-| `--dataset` | Target BigQuery dataset ID if uploading |  |
+| `--gcp-project` | Target Google Cloud Project ID |  |
+| `--dataset` | Target BigQuery dataset ID |  |
 | `--json` | Emit the result envelope as JSON on stdout |  |
 | `--state-file` | Path to .demo-state.json. Defaults to discovering it in the current directory. |  |
 
@@ -516,8 +506,8 @@ demo-create data inspect [OPTIONS]
 
 | Option | Description | Default |
 | :--- | :--- | :--- |
-| `--dataset` | BigQuery dataset ID |  |
-| `--gcp-project` | Target GCP Project ID |  |
+| `--dataset` | Target BigQuery dataset ID |  |
+| `--gcp-project` | Target Google Cloud Project ID |  |
 | `--location` | BigQuery dataset location | `US` |
 | `--json` | Emit the result envelope as JSON on stdout |  |
 | `--state-file` | Path to .demo-state.json. Defaults to discovering it in the current directory. |  |
@@ -551,7 +541,7 @@ demo-create data upload [OPTIONS]
 | :--- | :--- | :--- |
 | `--parquet-dir` | Directory containing Parquet files |  |
 | `--dataset` | Target BigQuery dataset ID |  |
-| `--gcp-project` | Target GCP Project ID |  |
+| `--gcp-project` | Target Google Cloud Project ID |  |
 | `--location` | BigQuery dataset location | `US` |
 | `--verify-only` | Verify tables already loaded in BigQuery and sync state without re-uploading Parquet files |  |
 | `--json` | Emit the result envelope as JSON on stdout |  |
@@ -583,7 +573,7 @@ demo-create lookml approve-critique [OPTIONS]
 
 | Option | Description | Default |
 | :--- | :--- | :--- |
-| `--looker-project` | Looker project name |  |
+| `--looker-project` | Looker project and model name |  |
 | `--notes` | Optional visual critique approval notes |  |
 | `--json` | Emit the result envelope as JSON on stdout |  |
 | `--state-file` | Path to .demo-state.json. Defaults to discovering it in the current directory. |  |
@@ -617,7 +607,7 @@ demo-create lookml clean-root [OPTIONS]
 
 | Option | Description | Default |
 | :--- | :--- | :--- |
-| `--looker-project` | Looker project name to audit and clean |  |
+| `--looker-project` | Looker project and model name |  |
 | `--looker-account` | Saved Looker OAuth account alias |  |
 | `--instance` | Looker instance base URL |  |
 | `--dry-run` | Report root duplicates without deleting them |  |
@@ -635,7 +625,7 @@ demo-create lookml deploy [OPTIONS]
 | Option | Description | Default |
 | :--- | :--- | :--- |
 | `--lookml-dir` | Directory containing LookML files |  |
-| `--looker-project` | Looker project name |  |
+| `--looker-project` | Looker project and model name |  |
 | `--looker-account` | Saved Looker OAuth account alias |  |
 | `--json` | Emit the result envelope as JSON on stdout |  |
 | `--state-file` | Path to .demo-state.json. Defaults to discovering it in the current directory. |  |
@@ -650,13 +640,13 @@ demo-create lookml model [OPTIONS]
 
 | Option | Description | Default |
 | :--- | :--- | :--- |
-| `--dataset` | Existing BigQuery dataset ID to model |  |
+| `--dataset` | Target BigQuery dataset ID |  |
 | `--tables` | Comma-separated list of table names to include |  |
 | `--parquet-dir` | Directory containing Parquet files |  |
 | `--looker-project` | Looker project and model name |  |
-| `--connection` | Looker database connection name; reused from prior state if omitted |  |
+| `--connection` | Looker database connection name |  |
 | `--output-dir` | Directory to output generated LookML files |  |
-| `--gcp-project` | Target GCP Project ID |  |
+| `--gcp-project` | Target Google Cloud Project ID |  |
 | `--catalog` | Path to a CatalogSnapshot JSON file to enrich LookML with Knowledge Catalog metadata |  |
 | `--profile` | Knowledge Catalog mapping profile ('rich', 'hybrid', 'minimal'). Defaults to snapshot recommendation |  |
 | `--use-catalog`, `--no-catalog` | Explicitly enable or disable Knowledge Catalog metadata enrichment |  |
@@ -675,7 +665,7 @@ demo-create lookml optimize [OPTIONS]
 | Option | Description | Default |
 | :--- | :--- | :--- |
 | `--lookml-dir` | Directory containing LookML files |  |
-| `--skip` | Record decision to skip LookML server performance optimization |  |
+| `--skip` | Skip this optional gate and advance to the next gate |  |
 | `--json` | Emit the result envelope as JSON on stdout |  |
 | `--backup`, `--no-backup` | Snapshot LookML files into .backup_pre_opt before patching | `true` |
 | `--state-file` | Path to .demo-state.json. Defaults to discovering it in the current directory. |  |
@@ -714,16 +704,16 @@ demo-create embed scaffold [OPTIONS]
 
 | Option | Description | Default |
 | :--- | :--- | :--- |
-| `--looker-project` | Looker/demo project name |  |
+| `--looker-project` | Looker project and model name |  |
 | `--target-dir` | Directory where the web app will be scaffolded |  |
 | `--dashboard-id` | Looker dashboard ID to embed |  |
 | `--agent-id` | Looker CA Agent ID to embed |  |
 | `--brand-name` | Customer brand display name |  |
-| `--instance` | Looker instance URL |  |
+| `--instance` | Looker instance base URL |  |
 | `--client-id` | Looker API Service Account client ID for headless embed token generation |  |
 | `--client-secret` | Looker API Service Account client secret for headless embed token generation |  |
 | `--looker-account` | Saved Looker OAuth account alias |  |
-| `--skip` | Skip external embed portal scaffolding and complete the pipeline |  |
+| `--skip` | Skip this optional gate and advance to the next gate |  |
 | `--json` | Emit the result envelope as JSON on stdout |  |
 | `--state-file` | Path to .demo-state.json. Defaults to discovering it in the current directory. |  |
 
@@ -749,8 +739,8 @@ demo-create stream delete [OPTIONS]
 
 | Option | Description | Default |
 | :--- | :--- | :--- |
-| `--gcp-project` | Target GCP project ID. Defaults to state project. |  |
-| `--dataset` | Target BigQuery dataset ID. Defaults to state dataset. |  |
+| `--gcp-project` | Target Google Cloud Project ID |  |
+| `--dataset` | Target BigQuery dataset ID |  |
 | `--target-table` | Target BigQuery table name. |  |
 | `--vm-name` | Locked-down GCE VM name to delete. |  |
 | `--zone` | GCE zone of the streamer VM. |  |
@@ -772,8 +762,8 @@ demo-create stream deploy [OPTIONS]
 
 | Option | Description | Default |
 | :--- | :--- | :--- |
-| `--gcp-project` | Target GCP project ID. Defaults to state or plan project. |  |
-| `--dataset` | Target BigQuery dataset ID. Defaults to state or plan dataset. |  |
+| `--gcp-project` | Target Google Cloud Project ID |  |
+| `--dataset` | Target BigQuery dataset ID |  |
 | `--target-table` | Target BigQuery table name for streaming & CDC. |  |
 | `--frequency` | Streaming tick interval (e.g. '1m', '5m', '15m', '1h'). |  |
 | `--crud-mode` | Database mutation mode: 'insert_only', 'upsert_cdc', or 'full_crud'. |  |
@@ -786,7 +776,7 @@ demo-create stream deploy [OPTIONS]
 | `--scaffold-only` | Phase A: materialize Go template and emit subagent briefs without executing cloud infrastructure. |  |
 | `--execute-infra` | Phase B: run Go unit tests, apply BigQuery CDC DDL, and deploy to locked-down GCE VM over IAP. |  |
 | `--dry-run` | Record and print infrastructure commands without executing live cloud mutations. |  |
-| `--skip` | Skip live BigQuery streaming & CDC deployment. |  |
+| `--skip` | Skip this optional gate and advance to the next gate |  |
 | `--json` | Emit the result envelope as JSON on stdout |  |
 | `--state-file` | Path to .demo-state.json. Defaults to discovering it in the current directory. |  |
 
@@ -800,8 +790,8 @@ demo-create stream plan [OPTIONS]
 
 | Option | Description | Default |
 | :--- | :--- | :--- |
-| `--gcp-project` | Target GCP project ID. Defaults to confirmed target project. |  |
-| `--dataset` | Target BigQuery dataset ID. Defaults to state dataset. |  |
+| `--gcp-project` | Target Google Cloud Project ID |  |
+| `--dataset` | Target BigQuery dataset ID |  |
 | `--target-table` | Target BigQuery fact table for streaming & CDC mutations. |  |
 | `--frequency` | Streaming tick interval (e.g. '1m', '5m', '15m', '1h'). | `1m` |
 | `--crud-mode` | Database mutation mode: 'insert_only', 'upsert_cdc', or 'full_crud'. | `upsert_cdc` |
@@ -812,6 +802,6 @@ demo-create stream plan [OPTIONS]
 | `--zone` | GCE zone for the locked-down e2-micro instance. | `us-central1-a` |
 | `--output-dir` | Directory where the Go streamer service will be scaffolded. |  |
 | `--spec-file` | Path to SPEC.md to update with Section 4B. |  |
-| `--skip` | Skip live BigQuery streaming & CDC deployment and complete the pipeline. |  |
+| `--skip` | Skip this optional gate and advance to the next gate |  |
 | `--json` | Emit the result envelope as JSON on stdout |  |
 | `--state-file` | Path to .demo-state.json. Defaults to discovering it in the current directory. |  |

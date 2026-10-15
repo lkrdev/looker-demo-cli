@@ -14,13 +14,19 @@ import typer
 from rich.panel import Panel
 from rich.table import Table
 
-from looker_demo_cli.commands.options import StateFileOption
-from looker_demo_cli.context import get_context
-from looker_demo_cli.error_boundary import ErrorHandlingGroup
-from looker_demo_cli.errors import ConfigError, RemoteApiError, ValidationError, missing_option
+from looker_demo_cli.commands.options import (
+    DatasetOption,
+    GcpProjectOption,
+    JsonOption,
+    SkipOption,
+    StateFileOption,
+)
+from looker_demo_cli.commands.runner import SkipSpec, handle_gate_skip, init_command_context
+from looker_demo_cli.error_boundary import make_typer
+from looker_demo_cli.errors import ConfigError, RemoteApiError, ValidationError
 from looker_demo_cli.gates import attach_next_gate_action
 from looker_demo_cli.output import CommandResult, emit
-from looker_demo_cli.state import FlowState
+from looker_demo_cli.state import FlowState, GateLifecycle
 from looker_demo_cli.utils.console import console, print_info, print_success, print_warning
 
 COST_NOTICE: Final[str] = (
@@ -400,11 +406,9 @@ WantedBy=multi-user.target
 """,
 }
 
-stream_app = typer.Typer(
+stream_app = make_typer(
     name="stream",
     help="Plan, deploy, and tear down synthetic BigQuery streaming & CDC services.",
-    no_args_is_help=True,
-    cls=ErrorHandlingGroup,
 )
 app = stream_app
 
@@ -744,14 +748,8 @@ def _build_verification_sql(project: str, dataset: str, target_table: str) -> li
 @stream_app.command(name="plan")
 def stream_plan(
     ctx: typer.Context,
-    gcp_project: Annotated[
-        str | None,
-        typer.Option("--gcp-project", help="Target GCP project ID. Defaults to confirmed target project."),
-    ] = None,
-    dataset: Annotated[
-        str | None,
-        typer.Option("--dataset", help="Target BigQuery dataset ID. Defaults to state dataset."),
-    ] = None,
+    gcp_project: GcpProjectOption = None,
+    dataset: DatasetOption = None,
     target_table: Annotated[
         str | None,
         typer.Option("--target-table", help="Target BigQuery fact table for streaming & CDC mutations."),
@@ -798,51 +796,41 @@ def stream_plan(
         Path | None,
         typer.Option("--spec-file", help="Path to SPEC.md to update with Section 4B."),
     ] = None,
-    skip: Annotated[
-        bool,
-        typer.Option("--skip", help="Skip live BigQuery streaming & CDC deployment and complete the pipeline."),
-    ] = False,
-    output_json: Annotated[bool, typer.Option("--json", help="Emit the result envelope as JSON on stdout")] = False,
+    skip: SkipOption = False,
+    output_json: JsonOption = False,
     state_file: StateFileOption = None,
 ):
     """Generate a 4-phase BigQuery streaming & CDC execution plan and update SPEC.md Section 4B."""
-    app_ctx = get_context(ctx)
-    app_ctx.use_state_file(state_file)
-    app_ctx.set_json_mode(output_json)
-    state = app_ctx.state
+    app_ctx, state = init_command_context(ctx, state_file=state_file, output_json=output_json)
 
     if skip:
-        state.stream_status = "skipped"
-        state.stream_planned = False
-        saved_path = app_ctx.save_state()
-        result = CommandResult.success(
+        return handle_gate_skip(
+            app_ctx,
             "stream plan",
-            data={
-                "skipped": True,
-                "stream_status": "skipped",
-                "cost_notice": COST_NOTICE,
-                "state_file": str(saved_path),
-            },
-            warnings=[COST_NOTICE],
-        )
-        attach_next_gate_action(result, state)
-        return emit(
-            result,
-            json_output=output_json,
-            human_renderer=lambda _: print_info(
-                f"Skipped live BigQuery streaming & CDC service. Updated state saved to `{saved_path}`"
+            SkipSpec(
+                state_updates={"stream_status": "skipped", "stream_planned": False},
+                message="Skipped live BigQuery streaming & CDC service.",
+                gate_id="gate_7_stream",
+                extra_data={"cost_notice": COST_NOTICE},
+                warnings=[COST_NOTICE],
             ),
+            output_json=output_json,
         )
 
-    project = (gcp_project or state.gcp_project_id or "").strip()
-    if not project:
-        raise missing_option(
-            "--gcp-project", purpose="the GCP project hosting the BigQuery dataset and GCE streamer VM"
-        )
+    project = state.require(
+        gcp_project,
+        "gcp_project_id",
+        option="--gcp-project",
+        purpose="the GCP project hosting the BigQuery dataset and GCE streamer VM",
+    )
 
-    ds = (dataset or state.bq_dataset_id or state.domain_name or "").strip()
-    if not ds:
-        raise missing_option("--dataset", purpose="the BigQuery dataset ID to stream into")
+    ds = state.require(
+        dataset,
+        "bq_dataset_id",
+        "domain_name",
+        option="--dataset",
+        purpose="the BigQuery dataset ID to stream into",
+    )
 
     cmode, bmode, lsev, freq = _validate_stream_params(
         crud_mode=crud_mode,
@@ -852,8 +840,8 @@ def stream_plan(
     )
 
     tbl = _resolve_target_table(target_table, state)
-    resolved_log_name = (log_name or state.stream_log_name or f"{ds}-streamer").strip()
-    resolved_vm_name = (vm_name or state.stream_vm_name or f"{ds.replace('_', '-')}-bq-streamer").strip()
+    resolved_log_name = state.resolve(log_name, "stream_log_name", default=f"{ds}-streamer")
+    resolved_vm_name = state.resolve(vm_name, "stream_vm_name", default=f"{ds.replace('_', '-')}-bq-streamer")
     service_name = _resolve_service_name(ds)
     service_file = _resolve_service_file(ds)
     resolved_output_dir = output_dir or state.stream_dir or (Path.cwd() / "streamer")
@@ -929,6 +917,7 @@ def stream_plan(
     state.stream_log_name = resolved_log_name
     state.stream_vm_name = resolved_vm_name
     state.stream_zone = zone
+    state.mark_gate("gate_7_stream", GateLifecycle.IN_PROGRESS, substage="planned")
     saved_path = app_ctx.save_state()
 
     plan_payload["state_file"] = str(saved_path)
@@ -963,14 +952,8 @@ def stream_plan(
 @stream_app.command(name="deploy")
 def stream_deploy(
     ctx: typer.Context,
-    gcp_project: Annotated[
-        str | None,
-        typer.Option("--gcp-project", help="Target GCP project ID. Defaults to state or plan project."),
-    ] = None,
-    dataset: Annotated[
-        str | None,
-        typer.Option("--dataset", help="Target BigQuery dataset ID. Defaults to state or plan dataset."),
-    ] = None,
+    gcp_project: GcpProjectOption = None,
+    dataset: DatasetOption = None,
     target_table: Annotated[
         str | None,
         typer.Option("--target-table", help="Target BigQuery table name for streaming & CDC."),
@@ -1027,55 +1010,45 @@ def stream_deploy(
             "--dry-run", help="Record and print infrastructure commands without executing live cloud mutations."
         ),
     ] = False,
-    skip: Annotated[
-        bool,
-        typer.Option("--skip", help="Skip live BigQuery streaming & CDC deployment."),
-    ] = False,
-    output_json: Annotated[bool, typer.Option("--json", help="Emit the result envelope as JSON on stdout")] = False,
+    skip: SkipOption = False,
+    output_json: JsonOption = False,
     state_file: StateFileOption = None,
 ):
     """Scaffold the Go BigQuery Storage Write API streamer and deploy it to a locked-down GCE e2-micro VM."""
-    app_ctx = get_context(ctx)
-    app_ctx.use_state_file(state_file)
-    app_ctx.set_json_mode(output_json)
-    state = app_ctx.state
+    app_ctx, state = init_command_context(ctx, state_file=state_file, output_json=output_json)
 
     if skip:
-        state.stream_status = "skipped"
-        state.stream_deployed = False
-        saved_path = app_ctx.save_state()
-        result = CommandResult.success(
+        return handle_gate_skip(
+            app_ctx,
             "stream deploy",
-            data={
-                "skipped": True,
-                "stream_status": "skipped",
-                "cost_notice": COST_NOTICE,
-                "state_file": str(saved_path),
-            },
-            warnings=[COST_NOTICE],
-        )
-        attach_next_gate_action(result, state)
-        return emit(
-            result,
-            json_output=output_json,
-            human_renderer=lambda _: print_info(
-                f"Skipped live BigQuery streaming & CDC deployment. Updated state saved to `{saved_path}`"
+            SkipSpec(
+                state_updates={"stream_status": "skipped", "stream_deployed": False},
+                message="Skipped live BigQuery streaming & CDC deployment.",
+                gate_id="gate_7_stream",
+                extra_data={"cost_notice": COST_NOTICE},
+                warnings=[COST_NOTICE],
             ),
+            output_json=output_json,
         )
 
-    project = (gcp_project or state.gcp_project_id or "").strip()
-    if not project:
-        raise missing_option(
-            "--gcp-project", purpose="the GCP project hosting the BigQuery dataset and GCE streamer VM"
-        )
+    project = state.require(
+        gcp_project,
+        "gcp_project_id",
+        option="--gcp-project",
+        purpose="the GCP project hosting the BigQuery dataset and GCE streamer VM",
+    )
 
-    ds = (dataset or state.bq_dataset_id or state.domain_name or "").strip()
-    if not ds:
-        raise missing_option("--dataset", purpose="the BigQuery dataset ID to stream into")
+    ds = state.require(
+        dataset,
+        "bq_dataset_id",
+        "domain_name",
+        option="--dataset",
+        purpose="the BigQuery dataset ID to stream into",
+    )
 
-    raw_freq = frequency or state.stream_frequency or "1m"
-    raw_cmode = crud_mode or state.stream_crud_mode or "upsert_cdc"
-    raw_bmode = backfill_mode or state.stream_backfill_mode or "skip"
+    raw_freq = state.resolve(frequency, "stream_frequency", default="1m")
+    raw_cmode = state.resolve(crud_mode, "stream_crud_mode", default="upsert_cdc")
+    raw_bmode = state.resolve(backfill_mode, "stream_backfill_mode", default="skip")
 
     cmode, bmode, lsev, freq = _validate_stream_params(
         crud_mode=raw_cmode,
@@ -1085,11 +1058,11 @@ def stream_deploy(
     )
 
     tbl = _resolve_target_table(target_table, state)
-    lname = (log_name or state.stream_log_name or f"{ds}-streamer").strip()
-    vname = (vm_name or state.stream_vm_name or f"{ds.replace('_', '-')}-bq-streamer").strip()
+    lname = state.resolve(log_name, "stream_log_name", default=f"{ds}-streamer")
+    vname = state.resolve(vm_name, "stream_vm_name", default=f"{ds.replace('_', '-')}-bq-streamer")
     service_name = _resolve_service_name(ds)
     service_file = _resolve_service_file(ds)
-    resolved_zone = (zone or state.stream_zone or "us-central1-a").strip()
+    resolved_zone = state.resolve(zone, "stream_zone", default="us-central1-a")
     region = resolved_zone.rsplit("-", 1)[0] if "-" in resolved_zone else "us-central1"
     resolved_output_dir = output_dir or state.stream_dir or (Path.cwd() / "streamer")
 
@@ -1234,10 +1207,12 @@ def stream_deploy(
         state.stream_status = "planned"
         state.stream_planned = True
         state.stream_deployed = False
+        state.mark_gate("gate_7_stream", GateLifecycle.IN_PROGRESS, substage="planned")
     else:
         state.stream_status = "deployed"
         state.stream_planned = True
         state.stream_deployed = True
+        state.mark_gate("gate_7_stream", GateLifecycle.COMPLETED)
 
     saved_path = app_ctx.save_state()
 
@@ -1302,14 +1277,8 @@ def stream_deploy(
 @stream_app.command(name="delete")
 def stream_delete(
     ctx: typer.Context,
-    gcp_project: Annotated[
-        str | None,
-        typer.Option("--gcp-project", help="Target GCP project ID. Defaults to state project."),
-    ] = None,
-    dataset: Annotated[
-        str | None,
-        typer.Option("--dataset", help="Target BigQuery dataset ID. Defaults to state dataset."),
-    ] = None,
+    gcp_project: GcpProjectOption = None,
+    dataset: DatasetOption = None,
     target_table: Annotated[
         str | None,
         typer.Option("--target-table", help="Target BigQuery table name."),
@@ -1342,14 +1311,11 @@ def stream_delete(
         bool,
         typer.Option("--dry-run", help="Print teardown commands without executing live deletions."),
     ] = False,
-    output_json: Annotated[bool, typer.Option("--json", help="Emit the result envelope as JSON on stdout")] = False,
+    output_json: JsonOption = False,
     state_file: StateFileOption = None,
 ):
     """Tear down the GCE streaming daemon, VM, secrets, and optionally drop BigQuery table/dataset."""
-    app_ctx = get_context(ctx)
-    app_ctx.use_state_file(state_file)
-    app_ctx.set_json_mode(output_json)
-    state = app_ctx.state
+    app_ctx, state = init_command_context(ctx, state_file=state_file, output_json=output_json)
 
     selected_flags = sum([bool(keep_bq), bool(drop_bq_table), bool(drop_bq_dataset)])
     if selected_flags > 1:
@@ -1363,18 +1329,25 @@ def stream_delete(
             },
         )
 
-    project = (gcp_project or state.gcp_project_id or "").strip()
-    if not project:
-        raise missing_option("--gcp-project", purpose="the GCP project containing the GCE streamer VM")
+    project = state.require(
+        gcp_project,
+        "gcp_project_id",
+        option="--gcp-project",
+        purpose="the GCP project containing the GCE streamer VM",
+    )
 
-    ds = (dataset or state.bq_dataset_id or state.domain_name or "").strip()
-    if not ds:
-        raise missing_option("--dataset", purpose="the BigQuery dataset ID associated with the streamer")
+    ds = state.require(
+        dataset,
+        "bq_dataset_id",
+        "domain_name",
+        option="--dataset",
+        purpose="the BigQuery dataset ID associated with the streamer",
+    )
 
     tbl = _resolve_target_table(target_table, state)
-    vname = (vm_name or state.stream_vm_name or f"{ds.replace('_', '-')}-bq-streamer").strip()
+    vname = state.resolve(vm_name, "stream_vm_name", default=f"{ds.replace('_', '-')}-bq-streamer")
     service_file = _resolve_service_file(ds)
-    resolved_zone = (zone or state.stream_zone or "us-central1-a").strip()
+    resolved_zone = state.resolve(zone, "stream_zone", default="us-central1-a")
 
     if selected_flags == 0:
         if not output_json and not yes and not dry_run:
@@ -1467,8 +1440,10 @@ def stream_delete(
 
     state.stream_deployed = False
     state.stream_status = "skipped"
+    state.mark_gate("gate_7_stream", GateLifecycle.SKIPPED)
     if drop_bq_dataset:
         state.dataset_exists = False
+        state.mark_gate("gate_1c_generate_data", GateLifecycle.PENDING)
     saved_path = app_ctx.save_state()
 
     data_payload: dict[str, Any] = {

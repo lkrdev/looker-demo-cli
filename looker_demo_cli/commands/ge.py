@@ -6,13 +6,18 @@ from typing import Annotated
 
 import typer
 
-from looker_demo_cli.commands.agent import publish_agent
-from looker_demo_cli.commands.options import StateFileOption
+from looker_demo_cli.commands.agent import agent_publish
+from looker_demo_cli.commands.options import (
+    GcpProjectOption,
+    JsonOption,
+    LookerAccountOption,
+    LookerInstanceOption,
+    StateFileOption,
+)
+from looker_demo_cli.commands.runner import init_command_context
 from looker_demo_cli.config import DEFAULT_GCP_PROJECT
-from looker_demo_cli.context import get_context
-from looker_demo_cli.error_boundary import ErrorHandlingGroup
+from looker_demo_cli.error_boundary import make_typer
 from looker_demo_cli.errors import RemoteApiError
-from looker_demo_cli.gates import attach_next_gate_action  # noqa: F401
 from looker_demo_cli.output import CommandResult, emit
 from looker_demo_cli.services.ge_service import (
     ensure_gemini_enterprise_configured,
@@ -23,20 +28,18 @@ from looker_demo_cli.services.ge_service import (
 from looker_demo_cli.state import FlowState
 from looker_demo_cli.utils.console import print_success, print_warning
 
-ge_app = typer.Typer(
+ge_app = make_typer(
     name="ge",
     help="Inspect and configure Looker Gemini Enterprise (GE) integration.",
-    no_args_is_help=True,
-    cls=ErrorHandlingGroup,
 )
 
 
 @ge_app.command(name="status")
 def ge_status(
     ctx: typer.Context,
-    instance_url: Annotated[str | None, typer.Option("--instance", help="Looker instance base URL")] = None,
-    account: Annotated[str | None, typer.Option("--looker-account", help="Saved Looker OAuth account alias")] = None,
-    output_json: Annotated[bool, typer.Option("--json", help="Emit the result envelope as JSON on stdout")] = False,
+    instance_url: LookerInstanceOption = None,
+    account: LookerAccountOption = None,
+    output_json: JsonOption = False,
     state_file: StateFileOption = None,
 ):
     """Fetch and display current Looker Gemini enablement and GE configuration.
@@ -52,9 +55,7 @@ def ge_status(
         AuthError: No usable Looker credentials.
         RemoteApiError: Looker refused or failed the enablement lookup.
     """
-    app_ctx = get_context(ctx)
-    app_ctx.use_state_file(state_file)
-    app_ctx.set_json_mode(output_json)
+    app_ctx, _state = init_command_context(ctx, state_file=state_file, output_json=output_json)
     auth = app_ctx.looker_auth(instance_url, account)
 
     config = get_looker_ge_config(auth.base_url, auth.headers)
@@ -94,12 +95,12 @@ def ge_status(
 @ge_app.command(name="configure")
 def ge_configure(
     ctx: typer.Context,
-    gcp_project: Annotated[str | None, typer.Option("--gcp-project", help="Target Google Cloud Project ID")] = None,
-    instance_url: Annotated[str | None, typer.Option("--instance", help="Looker instance base URL")] = None,
-    account: Annotated[str | None, typer.Option("--looker-account", help="Saved Looker OAuth account alias")] = None,
+    gcp_project: GcpProjectOption = None,
+    instance_url: LookerInstanceOption = None,
+    account: LookerAccountOption = None,
     app_id: Annotated[str | None, typer.Option("--app-id", help="Gemini Enterprise App/Engine ID")] = None,
     location: Annotated[str, typer.Option("--location", help="Gemini Enterprise Location/Region")] = "global",
-    output_json: Annotated[bool, typer.Option("--json", help="Emit the result envelope as JSON on stdout")] = False,
+    output_json: JsonOption = False,
     state_file: StateFileOption = None,
 ):
     """Configure Gemini Enterprise settings in Looker and grant the required IAM role.
@@ -123,11 +124,8 @@ def ge_configure(
         AuthError: No usable Looker credentials.
         RemoteApiError: Looker or Discovery Engine rejected the configuration.
     """
-    app_ctx = get_context(ctx)
-    app_ctx.use_state_file(state_file)
-    app_ctx.set_json_mode(output_json)
+    app_ctx, persisted_state = init_command_context(ctx, state_file=state_file, output_json=output_json)
     auth = app_ctx.looker_auth(instance_url, account)
-    persisted_state = app_ctx.state
     resolved_project = (
         gcp_project or persisted_state.ge_project_id or persisted_state.gcp_project_id or DEFAULT_GCP_PROJECT
     )
@@ -187,66 +185,4 @@ def ge_configure(
     return emit(result, json_output=output_json, human_renderer=render)
 
 
-@ge_app.command(name="publish")
-def ge_publish(
-    ctx: typer.Context,
-    agent_id: Annotated[str | None, typer.Option("--agent-id", help="Target CA Agent ID to publish")] = None,
-    non_interactive: Annotated[
-        bool,
-        typer.Option("--non-interactive", help="Run non-interactively without prompting for GE reconfigurations"),
-    ] = False,
-    skip: Annotated[
-        bool,
-        typer.Option("--skip", help="Skip Gemini Enterprise publishing and advance to the next gate"),
-    ] = False,
-    account: Annotated[
-        str | None,
-        typer.Option("--looker-account", help="Saved Looker OAuth account alias"),
-    ] = None,
-    instance_url: Annotated[str | None, typer.Option("--instance", help="Looker instance base URL")] = None,
-    output_json: Annotated[
-        bool,
-        typer.Option("--json", help="Emit the result envelope as JSON on stdout"),
-    ] = False,
-    state_file: StateFileOption = None,
-):
-    """Verify Gemini Enterprise configuration and publish a CA agent to it (Gate 5).
-
-    An alias for :func:`~looker_demo_cli.commands.agent.agent_publish`, kept
-    because Gate 5 of the orchestration flow is about Gemini Enterprise and
-    looking for the verb under ``ge`` is the natural instinct.
-
-    Both spellings now share one implementation rather than one calling the
-    other as a Python function -- an arrangement that held together only
-    because the two declared identical options in identical order, and that
-    reported ``"agent publish"`` in this command's *success* envelope while its
-    *failure* envelope said ``"ge publish"``.
-
-    Args:
-        ctx: Typer context carrying the resolved :class:`AppContext`.
-        agent_id: Target CA agent. Falls back to the agent in prior state.
-        non_interactive: Never prompt during GE configuration.
-        skip: Skip Gemini Enterprise publishing and advance to the next gate.
-        account: Saved ``lkr`` OAuth account alias.
-        instance_url: Looker instance base URL.
-        output_json: Emit the JSON envelope on stdout.
-        state_file: Optional explicit path to ``.demo-state.json``.
-
-    Raises:
-        ConfigError: No agent ID could be resolved.
-        AuthError: No usable Looker credentials.
-        RemoteApiError: Gemini Enterprise rejected the publish.
-    """
-    app_ctx = get_context(ctx)
-    app_ctx.use_state_file(state_file)
-    app_ctx.set_json_mode(output_json)
-    return publish_agent(
-        app_ctx,
-        command="ge publish",
-        agent_id=agent_id,
-        non_interactive=non_interactive,
-        account=account,
-        instance_url=instance_url,
-        output_json=output_json,
-        skip=skip,
-    )
+ge_publish = ge_app.command(name="publish")(agent_publish)

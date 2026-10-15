@@ -12,13 +12,13 @@ module is the I/O shell: load the state, ask the gate model, emit the envelope.
 
 from __future__ import annotations
 
-from typing import Annotated, Any
+from typing import Any
 
 import typer
 from rich.table import Table
 
-from looker_demo_cli.commands.options import StateFileOption
-from looker_demo_cli.context import get_context
+from looker_demo_cli.commands.options import JsonOption, StateFileOption
+from looker_demo_cli.commands.runner import init_command_context
 from looker_demo_cli.gates import GateStatus, current_gate, evaluate_gates
 from looker_demo_cli.output import CommandResult, emit
 from looker_demo_cli.utils.console import console, print_success
@@ -110,7 +110,7 @@ def _render(statuses: list[GateStatus], state_file: str, *, is_complete: bool) -
 
 def status(
     ctx: typer.Context,
-    output_json: Annotated[bool, typer.Option("--json", help="Emit the result envelope as JSON on stdout")] = False,
+    output_json: JsonOption = False,
     state_file: StateFileOption = None,
 ):
     """Report the completed gates, the current gate, and the exact next command.
@@ -126,11 +126,7 @@ def status(
     Returns:
         The emitted result envelope.
     """
-    app_ctx = get_context(ctx)
-    app_ctx.use_state_file(state_file)
-    app_ctx.set_json_mode(output_json)
-
-    state = app_ctx.state
+    app_ctx, state = init_command_context(ctx, state_file=state_file, output_json=output_json)
     resolved_state_file = str(app_ctx.resolved_state_path)
 
     statuses = evaluate_gates(state)
