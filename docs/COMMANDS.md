@@ -34,6 +34,28 @@ Failures are reported by exit code, so a caller never has to parse prose:
 > Start with [`demo-create status`](#demo-create-status). It reports which gates
 > are complete and prints the exact next command to run.
 
+## The 15 Granular Gates
+
+| Gate | ID | Stage | Human Pause? | Canonical CLI Command |
+| ---: | :--- | :--- | :---: | :--- |
+| **0** | `gate_0a_precheck` | Environment, credential & skill-tree audit | `false` | `demo-create pre-check --fix --gcp-project <gcp-project>` |
+| **1** | `gate_0b_confirm_targets` | 4-target environment confirmation | **`true`** | `demo-create confirm-targets --gcp-account <gcp-account> --gcp-project <gcp-project> --looker-account <looker-account> --connection <connection-name>` *([--mode full\|bq_only])* |
+| **2** | `gate_1a_propose_schema` | Schema blueprint authoring & 5-row micro-sample preview | `false` | `demo-create data propose-schema --schema-file <schema-file> --preview` |
+| **3** | `gate_1b_approve_schema` | Schema ERD & target row volume approval | **`true`** | `demo-create data approve-schema --row-count <row-count> --dataset <dataset-id>` |
+| **4** | `gate_1c_generate_data` | Modular DAG synthesis & BigQuery load | `false` | `demo-create data generate --schema-file <schema-file> --row-count <row-count> --gcp-project <gcp-project> --dataset <dataset-id> --upload --json-scorecard` |
+| **5** | `gate_1d_catalog` | Knowledge Catalog semantic curation & enrichment | **`true`** | `demo-create catalog seed --dataset <dataset-id> --gcp-project <gcp-project>` *(or `catalog inspect` / `catalog sync` / `--skip`)* |
+| **6** | `gate_2a_lookml_model` | Semantic LookML modeling & draft dashboard scaffolding | `false` | `demo-create lookml model --looker-project <looker-project> --dataset <dataset-id> --connection <connection-name> --gcp-project <gcp-project>` |
+| **7** | `gate_2b_certify_polish` | 3-Pass Executive Dashboard Polish & filtered measure audit | **`true`** | `demo-create lookml certify-polish --lookml-dir <lookml-dir>` |
+| **8** | `gate_3a_optimize` | LookML Server Performance Optimizer gate | **`true`** | `demo-create lookml optimize --lookml-dir <lookml-dir>` *(or `--skip`)* |
+| **9** | `gate_3b_deploy` | Pre-deployment LookML validation, query testing & production release | `false` | `demo-create lookml deploy --looker-project <looker-project> --lookml-dir <lookml-dir>` |
+| **10** | `gate_3c_critique` | Post-deploy dashboard screenshot critique (Pass 3) | **`true`** | `demo-create lookml approve-critique --looker-project <looker-project>` |
+| **11** | `gate_4_agent` | Conversational Analytics agent provisioning & golden queries | **`true`** | `demo-create agent create --model <model-name> --explore <explore-name>` *(or `--skip`)* |
+| **12** | `gate_5_publish` | Gemini Enterprise publishing | **`true`** | `demo-create agent publish --agent-id <agent-id>` *(or `--skip`)* |
+| **13** | `gate_6_embed` | External Embedded Analytics portal scaffolding | **`true`** | `demo-create embed scaffold --looker-project <looker-project>` *(or `--skip`)* |
+| **14** | `gate_7_stream` | Live BigQuery streaming & CDC GCE deployment (optional) | **`true`** | `demo-create stream plan --gcp-project <gcp-project> --dataset <dataset-id>` *(or `stream deploy` / `stream delete` / `--skip`)* |
+
+---
+
 ## Commands at a glance
 
 | Command | Description |
@@ -82,6 +104,8 @@ The verdict is persisted to the state file as `precheck_passed` so that
 `demo-create status` can report gate 0 as cleared without re-running the
 (slow, network-bound) audit.
 
+**Gate:** Gate 0 (`gate_0a_precheck`) — Environment, credential & skill-tree audit
+
 ```bash
 demo-create pre-check [OPTIONS]
 ```
@@ -99,6 +123,8 @@ demo-create pre-check [OPTIONS]
 ## `demo-create confirm-targets`
 
 Record the human-confirmed environment targets and deployment mode, and initialize SPEC.md (Gate 0B).
+
+**Gate:** Gate 1 (`gate_0b_confirm_targets`) — 4-target environment confirmation
 
 ```bash
 demo-create confirm-targets [OPTIONS]
@@ -171,6 +197,8 @@ Provision Looker Conversational Analytics AI agents, ground golden queries, and 
 
 Create a Conversational Analytics agent and ground it with golden queries.
 
+**Gate:** Gate 11 (`gate_4_agent`) — Conversational Analytics agent provisioning & golden queries
+
 ```bash
 demo-create agent create [OPTIONS]
 ```
@@ -216,6 +244,8 @@ demo-create agent golden-queries [OPTIONS]
 ### `demo-create agent publish`
 
 Verify Gemini Enterprise configuration and publish a CA agent to it (Gate 5).
+
+**Gate:** Gate 12 (`gate_5_publish`) — Gemini Enterprise publishing
 
 ```bash
 demo-create agent publish [OPTIONS]
@@ -268,6 +298,8 @@ demo-create ge configure [OPTIONS]
 ### `demo-create ge publish`
 
 Verify Gemini Enterprise configuration and publish a CA agent to it (Gate 5).
+
+**Gate:** Gate 12 (`gate_5_publish`) — Gemini Enterprise publishing
 
 ```bash
 demo-create ge publish [OPTIONS]
@@ -351,6 +383,8 @@ Inspect Knowledge Catalog (Dataplex) metadata, view mapping profiles, and seed c
 
 Inspect BigQuery tables and Dataplex Knowledge Catalog metadata, generating a CatalogSnapshot.
 
+**Gate:** Gate 5 (`gate_1d_catalog`) — Knowledge Catalog semantic curation & enrichment
+
 ```bash
 demo-create catalog inspect [OPTIONS]
 ```
@@ -382,6 +416,8 @@ demo-create catalog profiles [OPTIONS]
 
 Seed Knowledge Catalog curation metadata (Aspect Types, Aspects, Glossaries, EntryLinks, PK/FK constraints).
 
+**Gate:** Gate 5 (`gate_1d_catalog`) — Knowledge Catalog semantic curation & enrichment
+
 ```bash
 demo-create catalog seed [OPTIONS]
 ```
@@ -403,6 +439,8 @@ demo-create catalog seed [OPTIONS]
 ### `demo-create catalog sync`
 
 Synchronize Knowledge Catalog (Dataplex) metadata into LookML views and refinements.
+
+**Gate:** Gate 5 (`gate_1d_catalog`) — Knowledge Catalog semantic curation & enrichment
 
 ```bash
 demo-create catalog sync [OPTIONS]
@@ -441,6 +479,8 @@ Design, synthesize, inspect, and upload BigQuery demo datasets.
 
 Adopt an existing BigQuery dataset, skipping synthetic data generation gates.
 
+**Gate:** Gate 4 (`gate_1c_generate_data`) — Modular DAG synthesis & BigQuery load
+
 ```bash
 demo-create data adopt [OPTIONS]
 ```
@@ -457,6 +497,8 @@ demo-create data adopt [OPTIONS]
 
 Record user approval of the proposed schema and target row volume (Gate 1B).
 
+**Gate:** Gate 3 (`gate_1b_approve_schema`) — Schema ERD & target row volume approval
+
 ```bash
 demo-create data approve-schema [OPTIONS]
 ```
@@ -472,6 +514,8 @@ demo-create data approve-schema [OPTIONS]
 ### `demo-create data generate`
 
 Synthesize high-fidelity relational Parquet dataset tables locally.
+
+**Gate:** Gate 4 (`gate_1c_generate_data`) — Modular DAG synthesis & BigQuery load
 
 ```bash
 demo-create data generate [OPTIONS]
@@ -516,6 +560,8 @@ demo-create data inspect [OPTIONS]
 
 Validate a schema blueprint and synthesize a 5-row micro-sample preview & Mermaid ERD (Gate 1A).
 
+**Gate:** Gate 2 (`gate_1a_propose_schema`) — Schema blueprint authoring & 5-row micro-sample preview
+
 ```bash
 demo-create data propose-schema [OPTIONS]
 ```
@@ -532,6 +578,8 @@ demo-create data propose-schema [OPTIONS]
 ### `demo-create data upload`
 
 Upload local Parquet tables into a BigQuery dataset via ADC with automated partitioning & clustering.
+
+**Gate:** Gate 4 (`gate_1c_generate_data`) — Modular DAG synthesis & BigQuery load
 
 ```bash
 demo-create data upload [OPTIONS]
@@ -567,6 +615,8 @@ Generate LookML models from BigQuery/Knowledge Catalog or Parquet, and deploy.
 
 Record user approval of the post-deploy dashboard screenshot critique (Gate 3C).
 
+**Gate:** Gate 10 (`gate_3c_critique`) — Post-deploy dashboard screenshot critique (Pass 3)
+
 ```bash
 demo-create lookml approve-critique [OPTIONS]
 ```
@@ -581,6 +631,8 @@ demo-create lookml approve-critique [OPTIONS]
 ### `demo-create lookml certify-polish`
 
 Audit dashboard LookML for 3-Pass Executive Polish and filtered measure distinct-value grounding (Gate 2B).
+
+**Gate:** Gate 7 (`gate_2b_certify_polish`) — 3-Pass Executive Dashboard Polish & filtered measure audit
 
 ```bash
 demo-create lookml certify-polish [OPTIONS]
@@ -618,6 +670,8 @@ demo-create lookml clean-root [OPTIONS]
 
 Push local LookML to the dev workspace, validate it, and deploy to production.
 
+**Gate:** Gate 9 (`gate_3b_deploy`) — Pre-deployment LookML validation, query testing & production release
+
 ```bash
 demo-create lookml deploy [OPTIONS]
 ```
@@ -633,6 +687,8 @@ demo-create lookml deploy [OPTIONS]
 ### `demo-create lookml model`
 
 Generate LookML views, explores, and dashboards from BigQuery or Parquet.
+
+**Gate:** Gate 6 (`gate_2a_lookml_model`) — Semantic LookML modeling & draft dashboard scaffolding
 
 ```bash
 demo-create lookml model [OPTIONS]
@@ -657,6 +713,8 @@ demo-create lookml model [OPTIONS]
 ### `demo-create lookml optimize`
 
 Patch staged LookML in place with Google Cloud server performance best practices.
+
+**Gate:** Gate 8 (`gate_3a_optimize`) — LookML Server Performance Optimizer gate
 
 ```bash
 demo-create lookml optimize [OPTIONS]
@@ -697,6 +755,8 @@ Scaffold standalone Embedded Analytics web applications and portals.
 ### `demo-create embed scaffold`
 
 Scaffold a full-stack React/Vite analytics embed portal workspace and provision Looker embed settings.
+
+**Gate:** Gate 13 (`gate_6_embed`) — External Embedded Analytics portal scaffolding
 
 ```bash
 demo-create embed scaffold [OPTIONS]
@@ -756,6 +816,8 @@ demo-create stream delete [OPTIONS]
 
 Scaffold the Go BigQuery Storage Write API streamer and deploy it to a locked-down GCE e2-micro VM.
 
+**Gate:** Gate 14 (`gate_7_stream`) — Live BigQuery streaming & CDC GCE deployment (optional)
+
 ```bash
 demo-create stream deploy [OPTIONS]
 ```
@@ -783,6 +845,8 @@ demo-create stream deploy [OPTIONS]
 ### `demo-create stream plan`
 
 Generate a 4-phase BigQuery streaming & CDC execution plan and update SPEC.md Section 4B.
+
+**Gate:** Gate 14 (`gate_7_stream`) — Live BigQuery streaming & CDC GCE deployment (optional)
 
 ```bash
 demo-create stream plan [OPTIONS]

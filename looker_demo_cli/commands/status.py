@@ -23,10 +23,11 @@ from looker_demo_cli.gates import GateStatus, current_gate, evaluate_gates
 from looker_demo_cli.output import CommandResult, emit
 from looker_demo_cli.utils.console import console, print_success
 
-#: Leading marker per gate row. A glyph rather than a word so the three states
-#: are distinguishable at a glance in a six-row table.
+#: Leading marker per gate row. A glyph rather than a word so the states
+#: are distinguishable at a glance in the status table.
 _MARKER_COMPLETE = "[green]✓[/green]"
 _MARKER_CURRENT = "[bold yellow]▶[/bold yellow]"
+_MARKER_NOT_APPLICABLE = "[dim]–[/dim]"  # noqa: RUF001
 _MARKER_PENDING = "[dim]·[/dim]"
 
 
@@ -74,7 +75,7 @@ def _build_data(statuses: list[GateStatus], state_file: str) -> dict[str, Any]:
 
 
 def _render(statuses: list[GateStatus], state_file: str, *, is_complete: bool) -> None:
-    """Render the six-gate table to stderr.
+    """Render the gate table to stderr.
 
     Deliberately does not print the next command: :func:`emit` prints every
     ``next_actions`` entry immediately after this returns, and the command
@@ -93,10 +94,12 @@ def _render(statuses: list[GateStatus], state_file: str, *, is_complete: bool) -
     table.add_column("Human gate")
 
     for status in statuses:
-        if status.complete:
+        if status.status == "complete":
             marker, verdict = _MARKER_COMPLETE, "[green]complete[/green]"
-        elif status.is_current:
+        elif status.status == "current":
             marker, verdict = _MARKER_CURRENT, "[bold yellow]current[/bold yellow]"
+        elif status.status == "not_applicable":
+            marker, verdict = _MARKER_NOT_APPLICABLE, "[dim]not_applicable[/dim]"
         else:
             marker, verdict = _MARKER_PENDING, "[dim]pending[/dim]"
         human = "[yellow]confirm[/yellow]" if status.gate.requires_human_confirmation else "[dim]--[/dim]"

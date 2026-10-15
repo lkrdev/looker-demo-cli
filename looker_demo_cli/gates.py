@@ -31,10 +31,11 @@ Typical use::
 
 from __future__ import annotations
 
+import shlex
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any, Final
+from typing import Any, Final, Literal
 
 from looker_demo_cli.state import FlowState
 
@@ -50,10 +51,8 @@ from looker_demo_cli.state import FlowState
 _PLACEHOLDER_GCP_PROJECT: Final[str] = "<gcp-project>"
 _PLACEHOLDER_GCP_ACCOUNT: Final[str] = "<gcp-account>"
 _PLACEHOLDER_LOOKER_ACCOUNT: Final[str] = "<looker-account>"
-_PLACEHOLDER_DOMAIN: Final[str] = "<domain>"
 _PLACEHOLDER_SCHEMA_FILE: Final[str] = "<schema-file>"
 _PLACEHOLDER_ROW_COUNT: Final[str] = "<row-count>"
-_PLACEHOLDER_OUTPUT_DIR: Final[str] = "<output-dir>"
 _PLACEHOLDER_PARQUET_DIR: Final[str] = "<parquet-dir>"
 _PLACEHOLDER_DATASET: Final[str] = "<dataset-id>"
 _PLACEHOLDER_LOOKER_PROJECT: Final[str] = "<looker-project>"
@@ -72,27 +71,109 @@ COMMAND_PREFIX: Final[str] = "demo-create "
 #: precise one keeps the resolution in the command from depending on layout.
 _DASHBOARDS_SUBDIR: Final[str] = "dashboards"
 
+#: Declarative mapping of deployment modes to active gate IDs.
+MODE_ACTIVE_GATES: Final[dict[str, frozenset[str]]] = {
+    "full": frozenset(
+        {
+            "gate_0a_precheck",
+            "gate_0b_confirm_targets",
+            "gate_1a_propose_schema",
+            "gate_1b_approve_schema",
+            "gate_1c_generate_data",
+            "gate_1d_catalog",
+            "gate_2a_lookml_model",
+            "gate_2b_certify_polish",
+            "gate_3a_optimize",
+            "gate_3b_deploy",
+            "gate_3c_critique",
+            "gate_4_agent",
+            "gate_5_publish",
+            "gate_6_embed",
+            "gate_7_stream",
+        }
+    ),
+    "bq_only": frozenset(
+        {
+            "gate_0a_precheck",
+            "gate_0b_confirm_targets",
+            "gate_1a_propose_schema",
+            "gate_1b_approve_schema",
+            "gate_1c_generate_data",
+            "gate_1d_catalog",
+            "gate_7_stream",
+        }
+    ),
+}
 
-def _resolved(value: str | int | Path | None, placeholder: str) -> str:
-    """Render a state value for interpolation, or fall back to a placeholder.
 
-    Empty strings are treated as unknown, not as values. ``FlowState`` defaults
-    several fields from environment-derived config -- ``gcp_project_id`` is
-    ``os.getenv("GOOGLE_CLOUD_PROJECT", "")`` -- so an unset environment
-    produces ``""``, and interpolating that yields a command with a silently
-    missing argument.
+# ---------------------------------------------------------------------------
+# Declarative Command Rendering
+# ---------------------------------------------------------------------------
 
-    Args:
-        value: The state value, which may be absent or blank.
-        placeholder: The ``<angle-bracketed>`` token to emit instead.
 
-    Returns:
-        The stringified value, or ``placeholder`` when it is absent or blank.
-    """
-    if value is None:
-        return placeholder
-    text = str(value).strip()
-    return text or placeholder
+@dataclass(frozen=True)
+class ParamBinding:
+    """Declarative binding from a CLI flag to a :class:`FlowState` attribute or literal."""
+
+    flag: str
+    state_attr: str | tuple[str, ...] | Callable[[FlowState], Any] | None = None
+    placeholder: str | None = None
+    is_flag: bool = False
+    optional: bool = False
+    literal: str | None = None
+
+    def _resolve_raw(self, state: FlowState) -> Any:
+        if self.state_attr is None:
+            return None
+        if callable(self.state_attr):
+            return self.state_attr(state)
+        if isinstance(self.state_attr, tuple):
+            for attr in self.state_attr:
+                val = getattr(state, attr, None)
+                if val is not None and str(val).strip() != "":
+                    return val
+            return None
+        return getattr(state, self.state_attr, None)
+
+    def render(self, state: FlowState) -> str | None:
+        """Render this parameter against ``state``, or return ``None`` when omitted."""
+        if self.is_flag:
+            return self.flag
+        if self.literal is not None:
+            return f"{self.flag} {self.literal}"
+        raw = self._resolve_raw(state)
+        if raw is None or str(raw).strip() == "":
+            if self.optional:
+                return None
+            return f"{self.flag} {self.placeholder or '<value>'}"
+        text = str(raw).strip()
+        val = shlex.quote(text) if any(ch.isspace() for ch in text) else text
+        return f"{self.flag} {val}"
+
+
+@dataclass(frozen=True)
+class CommandSpec:
+    """Declarative specification for a gate's CLI subcommand and its parameters."""
+
+    subcommand: str
+    params: tuple[ParamBinding, ...] = ()
+    when: Callable[[FlowState], bool] | None = None
+    register_only: bool = False
+
+    def matches(self, state: FlowState) -> bool:
+        """Whether this command spec applies to ``state`` for rendering."""
+        if self.register_only:
+            return False
+        return True if self.when is None else self.when(state)
+
+    def render(self, state: FlowState) -> str:
+        """Render the full ``demo-create <subcommand> ...`` string against ``state``."""
+        parts = [f"{COMMAND_PREFIX}{self.subcommand}"]
+        for param in self.params:
+            rendered = param.render(state)
+            if rendered is not None:
+                parts.append(rendered)
+        return " ".join(parts)
 
 
 # ---------------------------------------------------------------------------
@@ -141,42 +222,39 @@ def _is_bq_only_complete(state: FlowState) -> bool:
 
 
 def _gate_2a_complete(state: FlowState) -> bool:
-    """Whether ``lookml model`` has written a LookML tree (or auto-satisfied in bq_only mode)."""
-    return _is_bq_only_complete(state) or state.lookml_output_dir is not None
+    """Whether ``lookml model`` has written a LookML tree."""
+    return state.lookml_output_dir is not None
 
 
 def _gate_2b_complete(state: FlowState) -> bool:
     """Whether the 3-Pass Executive Dashboard Polish and filtered measure checks passed ``lookml certify-polish``."""
-    return _is_bq_only_complete(state) or state.polish_certified
+    return state.polish_certified
 
 
 def _gate_3a_complete(state: FlowState) -> bool:
     """Whether the human has made an explicit decision on ``lookml optimize`` (applied or skipped)."""
-    return _is_bq_only_complete(state) or state.optimizer_status in ("applied", "skipped")
+    return state.optimizer_status in ("applied", "skipped")
 
 
 def _gate_3b_complete(state: FlowState) -> bool:
     """Whether a dashboard is live in production."""
-    return _is_bq_only_complete(state) or state.deployed_dashboard_url is not None
+    return state.deployed_dashboard_url is not None
 
 
 def _gate_3c_complete(state: FlowState) -> bool:
     """Whether the post-deploy visual layout critique (Pass 3) has been approved via ``lookml approve-critique``."""
-    return _is_bq_only_complete(state) or state.critique_approved
+    return state.critique_approved
 
 
 def _gate_4_complete(state: FlowState) -> bool:
     """Whether a Conversational Analytics agent has been provisioned or explicitly skipped."""
-    return (
-        _is_bq_only_complete(state) or state.ca_agent_id is not None or state.ca_agent_status in ("created", "skipped")
-    )
+    return state.ca_agent_id is not None or state.ca_agent_status in ("created", "skipped")
 
 
 def _gate_5_complete(state: FlowState) -> bool:
     """Whether the agent has been published to Gemini Enterprise or explicitly skipped."""
     return (
-        _is_bq_only_complete(state)
-        or state.published_to_ge
+        state.published_to_ge
         or state.ge_publish_status in ("published", "skipped")
         or state.ca_agent_status == "skipped"
     )
@@ -184,125 +262,12 @@ def _gate_5_complete(state: FlowState) -> bool:
 
 def _gate_6_complete(state: FlowState) -> bool:
     """Whether the external embed portal has been scaffolded or explicitly skipped."""
-    return (
-        _is_bq_only_complete(state)
-        or state.embed_workspace_dir is not None
-        or state.embed_status in ("scaffolded", "skipped")
-    )
+    return state.embed_workspace_dir is not None or state.embed_status in ("scaffolded", "skipped")
 
 
 def _gate_7_complete(state: FlowState) -> bool:
     """Whether the optional live BigQuery streaming & CDC service has been deployed or skipped."""
     return state.stream_status in ("deployed", "skipped") or state.stream_deployed
-
-
-# ---------------------------------------------------------------------------
-# Command builders
-# ---------------------------------------------------------------------------
-
-
-def _gate_0a_command(state: FlowState) -> str:
-    """Build the gate 0A command: audit the environment, repairing what it can."""
-    project = _resolved(state.gcp_project_id, _PLACEHOLDER_GCP_PROJECT)
-    return f"demo-create pre-check --fix --gcp-project {project}"
-
-
-def _gate_0b_command(state: FlowState) -> str:
-    """Build the gate 0B command: record the human-confirmed environment targets."""
-    account = _resolved(state.gcp_account, _PLACEHOLDER_GCP_ACCOUNT)
-    project = _resolved(state.gcp_project_id, _PLACEHOLDER_GCP_PROJECT)
-    if state.deployment_mode == "bq_only":
-        return f"demo-create confirm-targets --mode bq_only --gcp-account {account} --gcp-project {project}"
-    looker_account = _resolved(state.looker_account, _PLACEHOLDER_LOOKER_ACCOUNT)
-    connection = _resolved(state.looker_connection_name, _PLACEHOLDER_CONNECTION)
-    return (
-        f"demo-create confirm-targets --gcp-account {account} "
-        f"--gcp-project {project} --looker-account {looker_account} --connection {connection}"
-    )
-
-
-def _gate_1a_command(state: FlowState) -> str:
-    """Build the gate 1A command: validate schema blueprint, generate 5-row micro-sample & Mermaid ERD."""
-    schema_file = _resolved(state.schema_file_path, _PLACEHOLDER_SCHEMA_FILE)
-    return f"demo-create data propose-schema --schema-file {schema_file} --preview"
-
-
-def _gate_1b_command(state: FlowState) -> str:
-    """Build the gate 1B command: record user approval of the schema and target row volume."""
-    row_count = _resolved(state.approved_row_count, _PLACEHOLDER_ROW_COUNT)
-    dataset = _resolved(state.bq_dataset_id or state.domain_name, _PLACEHOLDER_DATASET)
-    return f"demo-create data approve-schema --row-count {row_count} --dataset {dataset}"
-
-
-def _gate_1c_command(state: FlowState) -> str:
-    """Build the gate 1C command: synthesize the approved dataset and load it into BigQuery."""
-    if state.generated_parquet_dir is not None:
-        parquet_dir = _resolved(state.generated_parquet_dir, _PLACEHOLDER_PARQUET_DIR)
-        project = _resolved(state.gcp_project_id, _PLACEHOLDER_GCP_PROJECT)
-        dataset = _resolved(state.bq_dataset_id, _PLACEHOLDER_DATASET)
-        return f"demo-create data upload --parquet-dir {parquet_dir} --gcp-project {project} --dataset {dataset}"
-
-    schema_file = _resolved(state.schema_file_path, _PLACEHOLDER_SCHEMA_FILE)
-    row_count = _resolved(state.approved_row_count, _PLACEHOLDER_ROW_COUNT)
-    project = _resolved(state.gcp_project_id, _PLACEHOLDER_GCP_PROJECT)
-    dataset = _resolved(state.bq_dataset_id or state.domain_name, _PLACEHOLDER_DATASET)
-    return (
-        f"demo-create data generate --schema-file {schema_file} "
-        f"--row-count {row_count} --gcp-project {project} --dataset {dataset} "
-        f"--upload --json-scorecard"
-    )
-
-
-def _gate_1d_command(state: FlowState) -> str:
-    """Build the gate 1D command: seed (synthetic), inspect (existing), or sync Knowledge Catalog."""
-    dataset = _resolved(state.bq_dataset_id or state.domain_name, _PLACEHOLDER_DATASET)
-    project = _resolved(state.gcp_project_id, _PLACEHOLDER_GCP_PROJECT)
-    if state.data_source_mode == "synthetic":
-        return f"demo-create catalog seed --dataset {dataset} --gcp-project {project}"
-    return f"demo-create catalog inspect --dataset {dataset} --gcp-project {project}"
-
-
-def _gate_2a_command(state: FlowState) -> str:
-    """Build the gate 2A command: generate views, explores, and draft dashboards."""
-    looker_project = _resolved(state.looker_project_name, _PLACEHOLDER_LOOKER_PROJECT)
-    dataset = _resolved(state.bq_dataset_id, _PLACEHOLDER_DATASET)
-    connection = _resolved(state.looker_connection_name, _PLACEHOLDER_CONNECTION)
-    project = _resolved(state.gcp_project_id, _PLACEHOLDER_GCP_PROJECT)
-    cmd = (
-        f"demo-create lookml model --looker-project {looker_project} "
-        f"--dataset {dataset} --connection {connection} --gcp-project {project}"
-    )
-    if state.catalog_snapshot_path:
-        cmd += f" --catalog {state.catalog_snapshot_path}"
-    return cmd
-
-
-def _gate_2b_command(state: FlowState) -> str:
-    """Build the gate 2B command: certify 3-Pass Dashboard Polish and filtered measure grounding."""
-    lookml_dir = _resolved(state.lookml_output_dir, _PLACEHOLDER_LOOKML_DIR)
-    return f"demo-create lookml certify-polish --lookml-dir {lookml_dir}"
-
-
-def _gate_3a_command(state: FlowState) -> str:
-    """Build the gate 3A command: run (or skip with --skip) the LookML server performance optimizer."""
-    lookml_dir = _resolved(state.lookml_output_dir, _PLACEHOLDER_LOOKML_DIR)
-    return f"demo-create lookml optimize --lookml-dir {lookml_dir}"
-
-
-def _gate_3b_command(state: FlowState) -> str:
-    """Build the gate 3B command: push, validate, query-test, and release to production."""
-    looker_project = _resolved(state.looker_project_name, _PLACEHOLDER_LOOKER_PROJECT)
-    lookml_dir = _resolved(state.lookml_output_dir, _PLACEHOLDER_LOOKML_DIR)
-    command = f"demo-create lookml deploy --looker-project {looker_project} --lookml-dir {lookml_dir}"
-    if state.looker_account:
-        command += f" --looker-account {state.looker_account}"
-    return command
-
-
-def _gate_3c_command(state: FlowState) -> str:
-    """Build the gate 3C command: record user approval of the rendered dashboard layout (Pass 3 critique)."""
-    looker_project = _resolved(state.looker_project_name, _PLACEHOLDER_LOOKER_PROJECT)
-    return f"demo-create lookml approve-critique --looker-project {looker_project}"
 
 
 def _resolve_primary_explore(state: FlowState) -> str | None:
@@ -316,37 +281,6 @@ def _resolve_primary_explore(state: FlowState) -> str | None:
     return fact_tables[0] if fact_tables else tables[0]
 
 
-def _gate_4_command(state: FlowState) -> str:
-    """Build the gate 4 command: provision the CA agent and ground it (or pass --skip)."""
-    model = _resolved(state.lookml_model_name, _PLACEHOLDER_MODEL)
-    explore = _resolved(_resolve_primary_explore(state), _PLACEHOLDER_EXPLORE)
-    command = f"demo-create agent create --model {model} --explore {explore}"
-    if state.lookml_output_dir is not None:
-        command += f" --dashboards-dir {Path(state.lookml_output_dir) / _DASHBOARDS_SUBDIR}"
-    return command
-
-
-def _gate_5_command(state: FlowState) -> str:
-    """Build the gate 5 command: publish the agent to Gemini Enterprise (or pass --skip)."""
-    agent_id = _resolved(state.ca_agent_id, _PLACEHOLDER_AGENT_ID)
-    return f"demo-create agent publish --agent-id {agent_id}"
-
-
-def _gate_6_command(state: FlowState) -> str:
-    """Build the gate 6 command: scaffold the external embedded analytics portal (or pass --skip)."""
-    looker_project = _resolved(state.looker_project_name, _PLACEHOLDER_LOOKER_PROJECT)
-    return f"demo-create embed scaffold --looker-project {looker_project}"
-
-
-def _gate_7_command(state: FlowState) -> str:
-    """Build the gate 7 command: plan or deploy live BigQuery streaming & CDC on locked-down GCE (or pass --skip)."""
-    project = _resolved(state.gcp_project_id, _PLACEHOLDER_GCP_PROJECT)
-    dataset = _resolved(state.bq_dataset_id or state.domain_name, _PLACEHOLDER_DATASET)
-    if state.stream_status == "planned" or state.stream_planned:
-        return f"demo-create stream deploy --gcp-project {project} --dataset {dataset}"
-    return f"demo-create stream plan --gcp-project {project} --dataset {dataset}"
-
-
 # ---------------------------------------------------------------------------
 # The gate model
 # ---------------------------------------------------------------------------
@@ -358,8 +292,8 @@ class Gate:
 
     Attributes:
         number: Position in the pipeline, contiguous from 0.
-        id: Stable machine-readable identifier, e.g. ``"gate_2a_model"``. Safe
-            to branch on; the ``title`` is not.
+        id: Stable machine-readable identifier, e.g. ``"gate_2a_lookml_model"``.
+            Safe to branch on; the ``title`` is not.
         title: Short human-readable name.
         requires_human_confirmation: Whether an orchestrator must pause and ask
             the user before running :meth:`command`. This is the single field
@@ -368,7 +302,10 @@ class Gate:
             Non-``None`` exactly when ``requires_human_confirmation`` is set --
             "ask the user" without saying what to ask is not actionable.
         _is_complete: Predicate over the persisted state.
-        _command: Builds the literal next command from the persisted state.
+        _command: Optional legacy command builder fallback.
+        command_specs: Declarative command specifications for this gate.
+        sample_completion_state: Minimal ``FlowState`` overrides satisfying this gate.
+        sample_skip_state: Minimal ``FlowState`` overrides skipping this gate (if optional).
     """
 
     number: int
@@ -377,7 +314,15 @@ class Gate:
     requires_human_confirmation: bool
     human_checkpoint: str | None
     _is_complete: Callable[[FlowState], bool]
-    _command: Callable[[FlowState], str]
+    _command: Callable[[FlowState], str] | None = None
+    command_specs: tuple[CommandSpec, ...] = ()
+    sample_completion_state: dict[str, Any] = field(default_factory=dict)
+    sample_skip_state: dict[str, Any] | None = None
+
+    def is_applicable(self, state: FlowState) -> bool:
+        """Whether this gate is active in ``state.deployment_mode``."""
+        active = MODE_ACTIVE_GATES.get(state.deployment_mode, MODE_ACTIVE_GATES["full"])
+        return self.id in active
 
     def is_complete(self, state: FlowState) -> bool:
         """Whether this gate's work is already done.
@@ -388,24 +333,13 @@ class Gate:
         Returns:
             True when the state carries this gate's completion signal.
         """
+        if not self.is_applicable(state) and _is_bq_only_complete(state):
+            return True
         rec = state.gates.get(self.id)
         if rec is not None and rec.explicit:
             state.sync_gates()
             rec = state.gates[self.id]
-            if rec.is_satisfied:
-                return True
-            if self.id in {
-                "gate_2a_lookml_model",
-                "gate_2b_certify_polish",
-                "gate_3a_optimize",
-                "gate_3b_deploy",
-                "gate_3c_critique",
-                "gate_4_agent",
-                "gate_5_publish",
-                "gate_6_embed",
-            } and _is_bq_only_complete(state):
-                return True
-            return False
+            return rec.is_satisfied
         return self._is_complete(state)
 
     def command(self, state: FlowState) -> str:
@@ -418,7 +352,12 @@ class Gate:
             A runnable ``demo-create`` command, with ``<placeholder>`` tokens
             wherever the state does not yet know a value.
         """
-        return self._command(state)
+        for spec in self.command_specs:
+            if spec.matches(state):
+                return spec.render(state)
+        if self._command is not None:
+            return self._command(state)
+        raise RuntimeError(f"No matching CommandSpec or _command for gate {self.id!r}")
 
     def describe(self) -> dict[str, Any]:
         """Serialize the state-independent half of this gate.
@@ -447,12 +386,25 @@ class GateStatus:
         command: The literal command for this gate, resolved against the same
             state. Populated for completed gates too, so a caller can re-run
             one without reconstructing the arguments.
+        applicable: Whether the gate applies to the active deployment mode.
     """
 
     gate: Gate
     complete: bool
     is_current: bool
     command: str
+    applicable: bool = True
+
+    @property
+    def status(self) -> Literal["complete", "current", "pending", "not_applicable"]:
+        """Canonical 4-state status label for this gate against the evaluated state."""
+        if self.is_current:
+            return "current"
+        if self.complete:
+            return "complete"
+        if not self.applicable:
+            return "not_applicable"
+        return "pending"
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize for the ``--json`` envelope.
@@ -468,7 +420,12 @@ class GateStatus:
         }
 
 
-GATES: Final[tuple[Gate, ...]] = (
+def _number_gates(*gates: Gate) -> tuple[Gate, ...]:
+    """Assign contiguous 0-based gate numbers from tuple position."""
+    return tuple(replace(gate, number=idx) for idx, gate in enumerate(gates))
+
+
+GATES: Final[tuple[Gate, ...]] = _number_gates(
     Gate(
         number=0,
         id="gate_0a_precheck",
@@ -476,7 +433,16 @@ GATES: Final[tuple[Gate, ...]] = (
         requires_human_confirmation=False,
         human_checkpoint=None,
         _is_complete=_gate_0a_complete,
-        _command=_gate_0a_command,
+        command_specs=(
+            CommandSpec(
+                subcommand="pre-check",
+                params=(
+                    ParamBinding("--fix", is_flag=True),
+                    ParamBinding("--gcp-project", "gcp_project_id", _PLACEHOLDER_GCP_PROJECT),
+                ),
+            ),
+        ),
+        sample_completion_state={"precheck_passed": True},
     ),
     Gate(
         number=1,
@@ -490,7 +456,27 @@ GATES: Final[tuple[Gate, ...]] = (
             "database connection name. Then record them with `demo-create confirm-targets`."
         ),
         _is_complete=_gate_0b_complete,
-        _command=_gate_0b_command,
+        command_specs=(
+            CommandSpec(
+                subcommand="confirm-targets",
+                when=lambda s: s.deployment_mode == "bq_only",
+                params=(
+                    ParamBinding("--mode", literal="bq_only"),
+                    ParamBinding("--gcp-account", "gcp_account", _PLACEHOLDER_GCP_ACCOUNT),
+                    ParamBinding("--gcp-project", "gcp_project_id", _PLACEHOLDER_GCP_PROJECT),
+                ),
+            ),
+            CommandSpec(
+                subcommand="confirm-targets",
+                params=(
+                    ParamBinding("--gcp-account", "gcp_account", _PLACEHOLDER_GCP_ACCOUNT),
+                    ParamBinding("--gcp-project", "gcp_project_id", _PLACEHOLDER_GCP_PROJECT),
+                    ParamBinding("--looker-account", "looker_account", _PLACEHOLDER_LOOKER_ACCOUNT),
+                    ParamBinding("--connection", "looker_connection_name", _PLACEHOLDER_CONNECTION),
+                ),
+            ),
+        ),
+        sample_completion_state={"targets_confirmed": True},
     ),
     Gate(
         number=2,
@@ -499,7 +485,16 @@ GATES: Final[tuple[Gate, ...]] = (
         requires_human_confirmation=False,
         human_checkpoint=None,
         _is_complete=_gate_1a_complete,
-        _command=_gate_1a_command,
+        command_specs=(
+            CommandSpec(
+                subcommand="data propose-schema",
+                params=(
+                    ParamBinding("--schema-file", "schema_file_path", _PLACEHOLDER_SCHEMA_FILE),
+                    ParamBinding("--preview", is_flag=True),
+                ),
+            ),
+        ),
+        sample_completion_state={"schema_proposed": True},
     ),
     Gate(
         number=3,
@@ -513,7 +508,16 @@ GATES: Final[tuple[Gate, ...]] = (
             "confirm user approval and target row volume, then record approval via `demo-create data approve-schema`."
         ),
         _is_complete=_gate_1b_complete,
-        _command=_gate_1b_command,
+        command_specs=(
+            CommandSpec(
+                subcommand="data approve-schema",
+                params=(
+                    ParamBinding("--row-count", "approved_row_count", _PLACEHOLDER_ROW_COUNT),
+                    ParamBinding("--dataset", ("bq_dataset_id", "domain_name"), _PLACEHOLDER_DATASET),
+                ),
+            ),
+        ),
+        sample_completion_state={"schema_approved": True},
     ),
     Gate(
         number=4,
@@ -522,7 +526,30 @@ GATES: Final[tuple[Gate, ...]] = (
         requires_human_confirmation=False,
         human_checkpoint=None,
         _is_complete=_gate_1c_complete,
-        _command=_gate_1c_command,
+        command_specs=(
+            CommandSpec(
+                subcommand="data upload",
+                when=lambda s: s.generated_parquet_dir is not None,
+                params=(
+                    ParamBinding("--parquet-dir", "generated_parquet_dir", _PLACEHOLDER_PARQUET_DIR),
+                    ParamBinding("--gcp-project", "gcp_project_id", _PLACEHOLDER_GCP_PROJECT),
+                    ParamBinding("--dataset", "bq_dataset_id", _PLACEHOLDER_DATASET),
+                ),
+            ),
+            CommandSpec(
+                subcommand="data generate",
+                params=(
+                    ParamBinding("--schema-file", "schema_file_path", _PLACEHOLDER_SCHEMA_FILE),
+                    ParamBinding("--row-count", "approved_row_count", _PLACEHOLDER_ROW_COUNT),
+                    ParamBinding("--gcp-project", "gcp_project_id", _PLACEHOLDER_GCP_PROJECT),
+                    ParamBinding("--dataset", ("bq_dataset_id", "domain_name"), _PLACEHOLDER_DATASET),
+                    ParamBinding("--upload", is_flag=True),
+                    ParamBinding("--json-scorecard", is_flag=True),
+                ),
+            ),
+            CommandSpec(subcommand="data adopt", register_only=True),
+        ),
+        sample_completion_state={"dataset_exists": True},
     ),
     Gate(
         number=5,
@@ -538,7 +565,26 @@ GATES: Final[tuple[Gate, ...]] = (
             "or skip (`demo-create catalog seed --skip` / `demo-create catalog inspect --skip`)."
         ),
         _is_complete=_gate_1d_complete,
-        _command=_gate_1d_command,
+        command_specs=(
+            CommandSpec(
+                subcommand="catalog seed",
+                when=lambda s: s.data_source_mode == "synthetic",
+                params=(
+                    ParamBinding("--dataset", ("bq_dataset_id", "domain_name"), _PLACEHOLDER_DATASET),
+                    ParamBinding("--gcp-project", "gcp_project_id", _PLACEHOLDER_GCP_PROJECT),
+                ),
+            ),
+            CommandSpec(
+                subcommand="catalog inspect",
+                params=(
+                    ParamBinding("--dataset", ("bq_dataset_id", "domain_name"), _PLACEHOLDER_DATASET),
+                    ParamBinding("--gcp-project", "gcp_project_id", _PLACEHOLDER_GCP_PROJECT),
+                ),
+            ),
+            CommandSpec(subcommand="catalog sync", register_only=True),
+        ),
+        sample_completion_state={"catalog_status": "seeded"},
+        sample_skip_state={"catalog_status": "skipped"},
     ),
     Gate(
         number=6,
@@ -547,7 +593,19 @@ GATES: Final[tuple[Gate, ...]] = (
         requires_human_confirmation=False,
         human_checkpoint=None,
         _is_complete=_gate_2a_complete,
-        _command=_gate_2a_command,
+        command_specs=(
+            CommandSpec(
+                subcommand="lookml model",
+                params=(
+                    ParamBinding("--looker-project", "looker_project_name", _PLACEHOLDER_LOOKER_PROJECT),
+                    ParamBinding("--dataset", "bq_dataset_id", _PLACEHOLDER_DATASET),
+                    ParamBinding("--connection", "looker_connection_name", _PLACEHOLDER_CONNECTION),
+                    ParamBinding("--gcp-project", "gcp_project_id", _PLACEHOLDER_GCP_PROJECT),
+                    ParamBinding("--catalog", "catalog_snapshot_path", optional=True),
+                ),
+            ),
+        ),
+        sample_completion_state={"lookml_output_dir": Path("/scratch/lookml")},
     ),
     Gate(
         number=7,
@@ -561,7 +619,13 @@ GATES: Final[tuple[Gate, ...]] = (
             "and review the design with the user before proceeding."
         ),
         _is_complete=_gate_2b_complete,
-        _command=_gate_2b_command,
+        command_specs=(
+            CommandSpec(
+                subcommand="lookml certify-polish",
+                params=(ParamBinding("--lookml-dir", "lookml_output_dir", _PLACEHOLDER_LOOKML_DIR),),
+            ),
+        ),
+        sample_completion_state={"polish_certified": True},
     ),
     Gate(
         number=8,
@@ -574,7 +638,14 @@ GATES: Final[tuple[Gate, ...]] = (
             "(`demo-create lookml optimize --lookml-dir <dir> --skip`)."
         ),
         _is_complete=_gate_3a_complete,
-        _command=_gate_3a_command,
+        command_specs=(
+            CommandSpec(
+                subcommand="lookml optimize",
+                params=(ParamBinding("--lookml-dir", "lookml_output_dir", _PLACEHOLDER_LOOKML_DIR),),
+            ),
+        ),
+        sample_completion_state={"optimizer_status": "applied"},
+        sample_skip_state={"optimizer_status": "skipped"},
     ),
     Gate(
         number=9,
@@ -583,7 +654,17 @@ GATES: Final[tuple[Gate, ...]] = (
         requires_human_confirmation=False,
         human_checkpoint=None,
         _is_complete=_gate_3b_complete,
-        _command=_gate_3b_command,
+        command_specs=(
+            CommandSpec(
+                subcommand="lookml deploy",
+                params=(
+                    ParamBinding("--looker-project", "looker_project_name", _PLACEHOLDER_LOOKER_PROJECT),
+                    ParamBinding("--lookml-dir", "lookml_output_dir", _PLACEHOLDER_LOOKML_DIR),
+                    ParamBinding("--looker-account", "looker_account", optional=True),
+                ),
+            ),
+        ),
+        sample_completion_state={"deployed_dashboard_url": "https://acme.looker.com/dashboards/42"},
     ),
     Gate(
         number=10,
@@ -596,7 +677,13 @@ GATES: Final[tuple[Gate, ...]] = (
             "layout as-is. Once approved, run `demo-create lookml approve-critique`."
         ),
         _is_complete=_gate_3c_complete,
-        _command=_gate_3c_command,
+        command_specs=(
+            CommandSpec(
+                subcommand="lookml approve-critique",
+                params=(ParamBinding("--looker-project", "looker_project_name", _PLACEHOLDER_LOOKER_PROJECT),),
+            ),
+        ),
+        sample_completion_state={"critique_approved": True},
     ),
     Gate(
         number=11,
@@ -609,7 +696,24 @@ GATES: Final[tuple[Gate, ...]] = (
             "(`demo-create agent create --skip`)."
         ),
         _is_complete=_gate_4_complete,
-        _command=_gate_4_command,
+        command_specs=(
+            CommandSpec(
+                subcommand="agent create",
+                params=(
+                    ParamBinding("--model", "lookml_model_name", _PLACEHOLDER_MODEL),
+                    ParamBinding("--explore", _resolve_primary_explore, _PLACEHOLDER_EXPLORE),
+                    ParamBinding(
+                        "--dashboards-dir",
+                        lambda s: (
+                            Path(s.lookml_output_dir) / _DASHBOARDS_SUBDIR if s.lookml_output_dir is not None else None
+                        ),
+                        optional=True,
+                    ),
+                ),
+            ),
+        ),
+        sample_completion_state={"ca_agent_id": "agent-42", "ca_agent_status": "created"},
+        sample_skip_state={"ca_agent_id": None, "ca_agent_status": "skipped"},
     ),
     Gate(
         number=12,
@@ -622,7 +726,15 @@ GATES: Final[tuple[Gate, ...]] = (
             "(`demo-create agent publish --skip`)."
         ),
         _is_complete=_gate_5_complete,
-        _command=_gate_5_command,
+        command_specs=(
+            CommandSpec(
+                subcommand="agent publish",
+                params=(ParamBinding("--agent-id", "ca_agent_id", _PLACEHOLDER_AGENT_ID),),
+            ),
+            CommandSpec(subcommand="ge publish", register_only=True),
+        ),
+        sample_completion_state={"published_to_ge": True, "ge_publish_status": "published"},
+        sample_skip_state={"published_to_ge": False, "ge_publish_status": "skipped"},
     ),
     Gate(
         number=13,
@@ -638,7 +750,14 @@ GATES: Final[tuple[Gate, ...]] = (
             "`PUT /api/4.0/lookml_dashboards/move`, CA agent sharing, and `<Brand>_Light`/`<Brand>_Dark` themes)."
         ),
         _is_complete=_gate_6_complete,
-        _command=_gate_6_command,
+        command_specs=(
+            CommandSpec(
+                subcommand="embed scaffold",
+                params=(ParamBinding("--looker-project", "looker_project_name", _PLACEHOLDER_LOOKER_PROJECT),),
+            ),
+        ),
+        sample_completion_state={"embed_workspace_dir": Path("/scratch/embed"), "embed_status": "scaffolded"},
+        sample_skip_state={"embed_workspace_dir": None, "embed_status": "skipped"},
     ),
     Gate(
         number=14,
@@ -654,9 +773,44 @@ GATES: Final[tuple[Gate, ...]] = (
             "need for your demo resource is done."
         ),
         _is_complete=_gate_7_complete,
-        _command=_gate_7_command,
+        command_specs=(
+            CommandSpec(
+                subcommand="stream deploy",
+                when=lambda s: s.stream_status == "planned" or s.stream_planned,
+                params=(
+                    ParamBinding("--gcp-project", "gcp_project_id", _PLACEHOLDER_GCP_PROJECT),
+                    ParamBinding("--dataset", ("bq_dataset_id", "domain_name"), _PLACEHOLDER_DATASET),
+                ),
+            ),
+            CommandSpec(
+                subcommand="stream plan",
+                params=(
+                    ParamBinding("--gcp-project", "gcp_project_id", _PLACEHOLDER_GCP_PROJECT),
+                    ParamBinding("--dataset", ("bq_dataset_id", "domain_name"), _PLACEHOLDER_DATASET),
+                ),
+            ),
+        ),
+        sample_completion_state={"stream_status": "deployed", "stream_deployed": True},
+        sample_skip_state={"stream_status": "skipped", "stream_deployed": False},
     ),
 )
+
+_GATES_BY_ID: Final[dict[str, Gate]] = {gate.id: gate for gate in GATES}
+
+
+def gate_by_id(gate_id: str) -> Gate:
+    """Look up a :class:`Gate` by its stable machine-readable ID.
+
+    Args:
+        gate_id: The gate identifier (e.g. ``"gate_2a_lookml_model"``).
+
+    Returns:
+        The matching :class:`Gate`.
+
+    Raises:
+        KeyError: If ``gate_id`` is not a registered gate.
+    """
+    return _GATES_BY_ID[gate_id]
 
 
 def current_gate(state: FlowState) -> Gate | None:
@@ -712,6 +866,7 @@ def evaluate_gates(state: FlowState) -> list[GateStatus]:
             complete=gate.is_complete(state),
             is_current=current is not None and gate.id == current.id,
             command=gate.command(state),
+            applicable=gate.is_applicable(state),
         )
         for gate in GATES
     ]
@@ -729,29 +884,7 @@ def is_pipeline_complete(state: FlowState) -> bool:
     return current_gate(state) is None
 
 
-_COMMAND_TO_GATE_ID: Final[dict[str, str]] = {
-    "pre-check": "gate_0a_precheck",
-    "confirm-targets": "gate_0b_confirm_targets",
-    "data propose-schema": "gate_1a_propose_schema",
-    "data approve-schema": "gate_1b_approve_schema",
-    "data generate": "gate_1c_generate_data",
-    "data upload": "gate_1c_generate_data",
-    "data adopt": "gate_1c_generate_data",
-    "catalog seed": "gate_1d_catalog",
-    "catalog inspect": "gate_1d_catalog",
-    "catalog sync": "gate_1d_catalog",
-    "lookml model": "gate_2a_lookml_model",
-    "lookml certify-polish": "gate_2b_certify_polish",
-    "lookml optimize": "gate_3a_optimize",
-    "lookml deploy": "gate_3b_deploy",
-    "lookml approve-critique": "gate_3c_critique",
-    "agent create": "gate_4_agent",
-    "agent publish": "gate_5_publish",
-    "ge publish": "gate_5_publish",
-    "embed scaffold": "gate_6_embed",
-    "stream plan": "gate_7_stream",
-    "stream deploy": "gate_7_stream",
-}
+_COMMAND_TO_GATE_ID: Final[dict[str, str]] = {spec.subcommand: gate.id for gate in GATES for spec in gate.command_specs}
 
 
 def attach_next_gate_action(result: Any, state: FlowState) -> Any:

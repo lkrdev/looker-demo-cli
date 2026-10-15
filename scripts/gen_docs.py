@@ -27,9 +27,32 @@ from typing import Any
 from typer.main import get_command
 
 from looker_demo_cli.cli import app
+from looker_demo_cli.gates import _COMMAND_TO_GATE_ID, GATES
+from looker_demo_cli.state import FlowState
 
 #: Written relative to the repository root so the script works from anywhere.
-OUTPUT_PATH = Path(__file__).resolve().parent.parent / "docs" / "COMMANDS.md"
+REPO_ROOT = Path(__file__).resolve().parent.parent
+OUTPUT_PATH = REPO_ROOT / "docs" / "COMMANDS.md"
+
+#: Markdown files containing a synchronized `<!-- BEGIN GENERATED GATES TABLE -->` block.
+MARKER_FILES = [
+    REPO_ROOT / "AGENTS.md",
+    REPO_ROOT / "README.md",
+    REPO_ROOT / "skills" / "looker-demo-orchestrator" / "SKILL.md",
+]
+
+_BEGIN_GATES_MARKER = "<!-- BEGIN GENERATED GATES TABLE -->"
+_END_GATES_MARKER = "<!-- END GENERATED GATES TABLE -->"
+
+_GATE_COMMAND_SUFFIXES: dict[str, str] = {
+    "gate_0b_confirm_targets": r" *([--mode full\|bq_only])*",
+    "gate_1d_catalog": " *(or `catalog inspect` / `catalog sync` / `--skip`)*",
+    "gate_3a_optimize": " *(or `--skip`)*",
+    "gate_4_agent": " *(or `--skip`)*",
+    "gate_5_publish": " *(or `--skip`)*",
+    "gate_6_embed": " *(or `--skip`)*",
+    "gate_7_stream": " *(or `stream deploy` / `stream delete` / `--skip`)*",
+}
 
 #: Google-style docstring section headers, which mark the end of user-facing prose.
 _SECTION_HEADER = re.compile(r"^\s*(Args|Arguments|Returns|Yields|Raises|Note|Notes|Attributes|Example|Examples):\s*$")
@@ -74,6 +97,28 @@ Failures are reported by exit code, so a caller never has to parse prose:
 > are complete and prints the exact next command to run.
 
 """
+
+
+def _render_gates_table() -> list[str]:
+    """Render a canonical Markdown table of all pipeline gates in ``GATES``.
+
+    Returns:
+        Markdown lines forming the 15-stage gate reference table.
+    """
+    empty_state = FlowState(gcp_project_id="")
+    rows: list[str] = [
+        "| Gate | ID | Stage | Human Pause? | Canonical CLI Command |",
+        "| ---: | :--- | :--- | :---: | :--- |",
+    ]
+    for gate in GATES:
+        number = f"**{gate.number}**"
+        gate_id = f"`{gate.id}`"
+        title = gate.title
+        human = "**`true`**" if gate.requires_human_confirmation else "`false`"
+        suffix = _GATE_COMMAND_SUFFIXES.get(gate.id, "")
+        cmd = f"`{gate.command(empty_state)}`{suffix}"
+        rows.append(f"| {number} | {gate_id} | {title} | {human} | {cmd} |")
+    return rows
 
 
 def _md(text: str) -> str:
@@ -207,6 +252,14 @@ def _walk(command: Any, path: str, depth: int, lines: list[str]) -> None:
         lines.append("")
 
     if not children:
+        cmd_key = path.removeprefix("demo-create ")
+        gate_id = _COMMAND_TO_GATE_ID.get(cmd_key)
+        if gate_id is not None:
+            gates_by_id = {g.id: g for g in GATES}
+            gate = gates_by_id.get(gate_id)
+            if gate is not None:
+                lines.append(f"**Gate:** Gate {gate.number} (`{gate.id}`) — {gate.title}")
+                lines.append("")
         lines.append("```bash")
         lines.append(f"{path} [OPTIONS]")
         lines.append("```")
@@ -234,6 +287,13 @@ def render() -> str:
     root = get_command(app)
     lines: list[str] = []
 
+    lines.append("## The 15 Granular Gates")
+    lines.append("")
+    lines.extend(_render_gates_table())
+    lines.append("")
+    lines.append("---")
+    lines.append("")
+
     # Registration order is meaningful (it follows the gate sequence), so the
     # root listing preserves it rather than sorting alphabetically.
     commands = getattr(root, "commands", {})
@@ -260,41 +320,87 @@ def render() -> str:
     return _HEADER + "\n".join(lines) + "\n"
 
 
+def sync_marker_files(*, check: bool = False) -> list[Path]:
+    """Synchronize or verify the generated gates table in ``MARKER_FILES``.
+
+    Args:
+        check: When True, only check whether files match without writing.
+
+    Returns:
+        List of paths in ``MARKER_FILES`` that were out of date (or updated).
+    """
+    replacement_block = "\n".join([_BEGIN_GATES_MARKER, *_render_gates_table(), _END_GATES_MARKER])
+    dirty: list[Path] = []
+
+    for path in MARKER_FILES:
+        if not path.exists():
+            dirty.append(path)
+            continue
+        original = path.read_text(encoding="utf-8")
+        begin_idx = original.find(_BEGIN_GATES_MARKER)
+        end_idx = original.find(_END_GATES_MARKER)
+        if begin_idx == -1 or end_idx == -1 or end_idx < begin_idx:
+            dirty.append(path)
+            continue
+        end_pos = end_idx + len(_END_GATES_MARKER)
+        updated = original[:begin_idx] + replacement_block + original[end_pos:]
+        if updated != original:
+            dirty.append(path)
+            if not check:
+                path.write_text(updated, encoding="utf-8")
+
+    return dirty
+
+
 def main(argv: list[str] | None = None) -> int:
-    """Write or verify ``docs/COMMANDS.md``.
+    """Write or verify ``docs/COMMANDS.md`` and ``MARKER_FILES``.
 
     Args:
         argv: Command-line arguments; defaults to ``sys.argv[1:]``.
 
     Returns:
-        ``0`` on success, ``1`` when ``--check`` finds the file out of date.
+        ``0`` on success, ``1`` when ``--check`` finds any file out of date.
     """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--check",
         action="store_true",
-        help="Exit non-zero if the checked-in file differs from what would be generated.",
+        help="Exit non-zero if the checked-in files differ from what would be generated.",
     )
     args = parser.parse_args(argv)
 
     content = render()
 
     if args.check:
+        rc = 0
         if not OUTPUT_PATH.exists():
             print(f"{OUTPUT_PATH} does not exist. Run: python scripts/gen_docs.py", file=sys.stderr)
-            return 1
-        if OUTPUT_PATH.read_text(encoding="utf-8") != content:
+            rc = 1
+        elif OUTPUT_PATH.read_text(encoding="utf-8") != content:
             print(
                 f"{OUTPUT_PATH} is out of date with the CLI implementation.\nRun: python scripts/gen_docs.py",
                 file=sys.stderr,
             )
-            return 1
-        print(f"{OUTPUT_PATH} is up to date.")
-        return 0
+            rc = 1
+
+        stale_markers = sync_marker_files(check=True)
+        for path in stale_markers:
+            print(
+                f"{path} gate table is out of date with GATES.\nRun: python scripts/gen_docs.py",
+                file=sys.stderr,
+            )
+            rc = 1
+
+        if rc == 0:
+            print(f"{OUTPUT_PATH} and marker files are up to date.")
+        return rc
 
     OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
     OUTPUT_PATH.write_text(content, encoding="utf-8")
     print(f"Wrote {OUTPUT_PATH}")
+    updated_markers = sync_marker_files(check=False)
+    for path in updated_markers:
+        print(f"Updated {path}")
     return 0
 
 

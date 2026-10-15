@@ -107,23 +107,25 @@ The envelope reports:
 
 ### The 15-Stage Gate State Machine (`looker_demo_cli/gates.py`)
 
-| Gate `#` | Gate ID | Title | `requires_human_confirmation` | Canonical CLI Command Template |
+<!-- BEGIN GENERATED GATES TABLE -->
+| Gate | ID | Stage | Human Pause? | Canonical CLI Command |
 | ---: | :--- | :--- | :---: | :--- |
-| **0** | `gate_0a_precheck` | Environment, credential & skill-tree audit | `False` | `demo-create pre-check --fix --gcp-project <gcp-project>` |
-| **1** | `gate_0b_confirm_targets` | Target environment & deployment mode confirmation | **`True`** | `demo-create confirm-targets --gcp-account <gcp-account> --gcp-project <gcp-project> --looker-account <looker-account> --connection <connection-name> [--mode full\|bq_only]` |
-| **2** | `gate_1a_propose_schema` | Schema blueprint authoring & 5-row micro-sample preview | `False` | `demo-create data propose-schema --schema-file <schema-file> --preview` |
-| **3** | `gate_1b_approve_schema` | Schema ERD & target row volume approval | **`True`** | `demo-create data approve-schema --row-count <row-count> --dataset <dataset-id>` |
-| **4** | `gate_1c_generate_data` | Modular DAG synthesis & BigQuery load | `False` | `demo-create data generate --schema-file <schema-file> --row-count <row-count> --gcp-project <gcp-project> --dataset <dataset-id> --upload --json-scorecard` |
-| **5** | `gate_1d_catalog` | Knowledge Catalog semantic curation & enrichment | **`True`** | `demo-create catalog seed --dataset <dataset-id> --gcp-project <gcp-project>` *(or `inspect` / `sync` / `--skip`; in `bq_only` mode, auto-completes Gates 6–13 and advances to Gate 14 `gate_7_stream`)* |
-| **6** | `gate_2a_lookml_model` | Semantic LookML modeling & draft dashboard scaffolding | `False` | `demo-create lookml model --looker-project <looker-project> --dataset <dataset-id> --connection <connection-name> --gcp-project <gcp-project>` |
-| **7** | `gate_2b_certify_polish` | 3-Pass Executive Dashboard Polish & filtered measure audit | **`True`** | `demo-create lookml certify-polish --lookml-dir <lookml-dir>` |
-| **8** | `gate_3a_optimize` | LookML Server Performance Optimizer gate | **`True`** | `demo-create lookml optimize --lookml-dir <lookml-dir>` *(or `--skip`)* |
-| **9** | `gate_3b_deploy` | Pre-deployment LookML validation, query testing & production release | `False` | `demo-create lookml deploy --looker-project <looker-project> --lookml-dir <lookml-dir>` |
-| **10** | `gate_3c_critique` | Post-deploy dashboard screenshot critique (Pass 3) | **`True`** | `demo-create lookml approve-critique --looker-project <looker-project>` |
-| **11** | `gate_4_agent` | Conversational Analytics agent provisioning & golden queries | **`True`** | `demo-create agent create --model <model-name> --explore <explore-name>` *(or `--skip`)* |
-| **12** | `gate_5_publish` | Gemini Enterprise publishing | **`True`** | `demo-create agent publish --agent-id <agent-id>` *(or `--skip`)* |
-| **13** | `gate_6_embed` | External Embedded Analytics portal scaffolding | **`True`** | `demo-create embed scaffold --looker-project <looker-project>` *(or `--skip`)* |
-| **14** | `gate_7_stream` | Optional live BigQuery streaming & CDC on locked-down GCE | **`True`** | `demo-create stream plan --gcp-project <gcp-project> --dataset <dataset-id>` *(or `stream deploy` / `stream delete` / `--skip`)* |
+| **0** | `gate_0a_precheck` | Environment, credential & skill-tree audit | `false` | `demo-create pre-check --fix --gcp-project <gcp-project>` |
+| **1** | `gate_0b_confirm_targets` | 4-target environment confirmation | **`true`** | `demo-create confirm-targets --gcp-account <gcp-account> --gcp-project <gcp-project> --looker-account <looker-account> --connection <connection-name>` *([--mode full\|bq_only])* |
+| **2** | `gate_1a_propose_schema` | Schema blueprint authoring & 5-row micro-sample preview | `false` | `demo-create data propose-schema --schema-file <schema-file> --preview` |
+| **3** | `gate_1b_approve_schema` | Schema ERD & target row volume approval | **`true`** | `demo-create data approve-schema --row-count <row-count> --dataset <dataset-id>` |
+| **4** | `gate_1c_generate_data` | Modular DAG synthesis & BigQuery load | `false` | `demo-create data generate --schema-file <schema-file> --row-count <row-count> --gcp-project <gcp-project> --dataset <dataset-id> --upload --json-scorecard` |
+| **5** | `gate_1d_catalog` | Knowledge Catalog semantic curation & enrichment | **`true`** | `demo-create catalog seed --dataset <dataset-id> --gcp-project <gcp-project>` *(or `catalog inspect` / `catalog sync` / `--skip`)* |
+| **6** | `gate_2a_lookml_model` | Semantic LookML modeling & draft dashboard scaffolding | `false` | `demo-create lookml model --looker-project <looker-project> --dataset <dataset-id> --connection <connection-name> --gcp-project <gcp-project>` |
+| **7** | `gate_2b_certify_polish` | 3-Pass Executive Dashboard Polish & filtered measure audit | **`true`** | `demo-create lookml certify-polish --lookml-dir <lookml-dir>` |
+| **8** | `gate_3a_optimize` | LookML Server Performance Optimizer gate | **`true`** | `demo-create lookml optimize --lookml-dir <lookml-dir>` *(or `--skip`)* |
+| **9** | `gate_3b_deploy` | Pre-deployment LookML validation, query testing & production release | `false` | `demo-create lookml deploy --looker-project <looker-project> --lookml-dir <lookml-dir>` |
+| **10** | `gate_3c_critique` | Post-deploy dashboard screenshot critique (Pass 3) | **`true`** | `demo-create lookml approve-critique --looker-project <looker-project>` |
+| **11** | `gate_4_agent` | Conversational Analytics agent provisioning & golden queries | **`true`** | `demo-create agent create --model <model-name> --explore <explore-name>` *(or `--skip`)* |
+| **12** | `gate_5_publish` | Gemini Enterprise publishing | **`true`** | `demo-create agent publish --agent-id <agent-id>` *(or `--skip`)* |
+| **13** | `gate_6_embed` | External Embedded Analytics portal scaffolding | **`true`** | `demo-create embed scaffold --looker-project <looker-project>` *(or `--skip`)* |
+| **14** | `gate_7_stream` | Live BigQuery streaming & CDC GCE deployment (optional) | **`true`** | `demo-create stream plan --gcp-project <gcp-project> --dataset <dataset-id>` *(or `stream deploy` / `stream delete` / `--skip`)* |
+<!-- END GENERATED GATES TABLE -->
 
 The gate sections below explain *why* each gate exists and precisely what to
 confirm with the user. `demo-create status` tells you *where you are*. Prefer the
