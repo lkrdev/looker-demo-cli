@@ -69,7 +69,7 @@ def lookml_model(
     output_dir: Annotated[
         Path | None, typer.Option("--output-dir", help="Directory to output generated LookML files")
     ] = None,
-    gcp_project: Annotated[str, typer.Option("--gcp-project", help="Target GCP Project ID")] = DEFAULT_GCP_PROJECT,
+    gcp_project: Annotated[str | None, typer.Option("--gcp-project", help="Target GCP Project ID")] = None,
     catalog: Annotated[
         Path | None,
         typer.Option(
@@ -159,7 +159,7 @@ def lookml_model(
             purpose="the Looker database connection the generated model binds to",
             hint="Run `demo-create pre-check --json` to list the connections defined on the target instance.",
         )
-    gcp_proj = gcp_project or state.gcp_project_id
+    gcp_proj = gcp_project or state.gcp_project_id or DEFAULT_GCP_PROJECT
     out_dir = output_dir or (Path.home() / "scratch" / "demo_create" / f"lookml_{proj_name}")
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -731,7 +731,7 @@ def lookml_optimize(
             "Roll back the optimization if the patched LookML is unsatisfactory",
             f"demo-create lookml restore --lookml-dir {target_dir}",
         )
-        attach_next_gate_action(result, state)
+    attach_next_gate_action(result, state)
 
     return emit(
         result,

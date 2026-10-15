@@ -756,20 +756,20 @@ Prompt the user via `ask_question` whether they want to configure and deploy liv
   demo-create stream plan \
     --gcp-project "${PROJECT_ID}" \
     --dataset "${DATASET}" \
-    --target-table "${TARGET_TABLE:-all}" \
-    --frequency "${FREQUENCY:-15s}" \
-    --crud-mode "${CRUD_MODE:-upsert}" \
-    --backfill-mode "${BACKFILL_MODE:-fill_gap}" \
+    --target-table "${TARGET_TABLE:-order_items}" \
+    --frequency "${FREQUENCY:-1m}" \
+    --crud-mode "${CRUD_MODE:-upsert_cdc}" \
+    --backfill-mode "${BACKFILL_MODE:-skip}" \
     --log-name "${LOG_NAME:-demo-create-streamer}" \
     --log-severity "${LOG_SEVERITY:-INFO}"
   ```
   - **Key `stream plan` Flags**:
     - `--skip`: Skip live streaming and mark Gate 14 complete.
-    - `--frequency`: Tick interval (`5s`, `15s`, `60s`, `5m`; default `15s`).
-    - `--crud-mode`: Mutation mode (`insert_only` for append-only telemetry, `upsert` for `INSERT` + stateful `UPSERT` lifecycle updates, or `full_cdc` for `INSERT` + `UPSERT` + bounded `DELETE`; default `upsert`).
-    - `--backfill-mode`: Historical catch-up mode (`fill_gap` to synthesize rows from the table's max timestamp up to `NOW()` before starting real-time ticks, or `live_only`; default `fill_gap`).
-    - `--target-table`: Specific fact table name or `"all"` (default `"all"`).
-    - `--log-name`: Cloud Logging log stream name (default `demo-create-streamer`).
+    - `--frequency`: Tick interval (`1m`, `5m`, `15m`, `1h`; default `1m`).
+    - `--crud-mode`: Mutation mode (`insert_only` for append-only telemetry, `upsert_cdc` for `INSERT` + stateful `UPSERT` lifecycle updates, or `full_crud` for `INSERT` + `UPSERT` + bounded `DELETE`; default `upsert_cdc`).
+    - `--backfill-mode`: Historical catch-up mode (`skip`, `local`, `vm`, or `sample_mirror`; default `skip`).
+    - `--target-table`: Specific fact table name (default resolved from state or `order_items`).
+    - `--log-name`: Cloud Logging log stream name (default `<dataset>-streamer`).
     - `--log-severity`: Cloud Logging minimum severity (`INFO`, `DEBUG`, `WARNING`, `ERROR`; default `INFO`).
   - Persists `.demo-stream-plan.json` and sets `stream_status="planned"`.
 
@@ -826,7 +826,7 @@ demo-create stream delete \
   --keep-bq
 
 # Optional flags:
-# --drop-bq-table <table-name> : Also drop a specific streamed BigQuery table
+# --drop-bq-table              : Also drop the streamed target table in BigQuery
 # --drop-bq-dataset            : Also drop the entire BigQuery dataset
 # --dry-run                    : Preview gcloud / bq teardown commands without executing
 ```
@@ -885,9 +885,9 @@ When performing isolated operations or advancing through the 15-stage state mach
 | | `golden-queries` | — | Extracts queries from dashboard files/IDs and links as Golden Queries | `--agent-id`, `--dashboard-id`, `--dashboards-dir`, `--json` |
 | | `publish` | **Gate 12** (`gate_5_publish`) | Verifies GE config and publishes CA Agent to Gemini Enterprise (or skips with `--skip`) | `--agent-id`, `--looker-account`, `--skip`, `--json` |
 | **`demo-create embed`** | `scaffold` | **Gate 13** (`gate_6_embed`) | Provisions Looker instance embed settings (group, folder, dashboard move, CA agent share, themes) and scaffolds React/Vite + FastAPI embed portal (or skips with `--skip`) | `--looker-project`, `--dashboard-id`, `--agent-id`, `--brand-name`, `--client-id`, `--client-secret`, `--looker-account`, `--target-dir`, `--skip`, `--json` |
-| **`demo-create stream`** | `plan` | **Gate 14** (`gate_7_stream`) | Persists `.demo-stream-plan.json` for live BigQuery streaming & CDC (or skips Gate 14 with `--skip`) | `--gcp-project`, `--dataset`, `--target-table`, `--frequency`, `--crud-mode`, `--backfill-mode`, `--log-name`, `--log-severity`, `--skip`, `--json` |
-| | `deploy` | **Gate 14** (`gate_7_stream`) | Phase A: scaffolds `./streamer/` & emits 4 subagent specs; Phase B (`--execute-infra`): runs `go test ./...`, applies BQ PK/staleness DDL, deploys locked-down `e2-micro` GCE VM (`--no-address`), and verifies Cloud Logging | `--gcp-project`, `--dataset`, `--output-dir`, `--region`, `--zone`, `--machine-type`, `--execute-infra`, `--dry-run`, `--json` |
-| | `delete` | **Gate 14** (`gate_7_stream`) | Tears down GCE streaming VM, Cloud NAT, Cloud Router, IAP firewall rule, and dedicated service account | `--gcp-project`, `--dataset`, `--region`, `--zone`, `--keep-bq`, `--drop-bq-table`, `--drop-bq-dataset`, `--dry-run`, `--json` |
+| **`demo-create stream`** | `plan` | **Gate 14** (`gate_7_stream`) | Persists `.demo-stream-plan.json` for live BigQuery streaming & CDC (or skips Gate 14 with `--skip`) | `--gcp-project`, `--dataset`, `--target-table`, `--frequency`, `--crud-mode`, `--backfill-mode`, `--log-name`, `--log-severity`, `--vm-name`, `--zone`, `--output-dir`, `--spec-file`, `--skip`, `--json` |
+| | `deploy` | **Gate 14** (`gate_7_stream`) | Phase A (`--scaffold-only`): scaffolds `./streamer/` & emits 4 subagent specs; Phase B (`--execute-infra`): runs `go test ./...`, applies BQ PK/staleness DDL, deploys locked-down `e2-micro` GCE VM (`--no-address`), and verifies Cloud Logging | `--gcp-project`, `--dataset`, `--target-table`, `--frequency`, `--crud-mode`, `--backfill-mode`, `--log-name`, `--log-severity`, `--vm-name`, `--zone`, `--output-dir`, `--scaffold-only`, `--execute-infra`, `--dry-run`, `--skip`, `--json` |
+| | `delete` | **Gate 14** (`gate_7_stream`) | Tears down GCE streaming VM, secrets, and optionally drops BigQuery table/dataset | `--gcp-project`, `--dataset`, `--target-table`, `--vm-name`, `--zone`, `--keep-bq`, `--drop-bq-table`, `--drop-bq-dataset`, `--yes`, `--dry-run`, `--json` |
 | **`demo-create ge`** | `status` | — | Displays current Looker Gemini enablement and GE config | `--looker-account`, `--json` |
 | | `configure` | — | Discovers GE apps on GCP, configures Looker GE settings, and grants IAM roles | `--app-id`, `--location`, `--gcp-project`, `--json` |
 | | `publish` | **Gate 12** (`gate_5_publish`) | Alias for `agent publish` (supports `--skip`) | `--agent-id`, `--looker-account`, `--skip`, `--json` |

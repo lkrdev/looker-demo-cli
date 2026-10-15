@@ -21,7 +21,6 @@ from looker_demo_cli.commands.options import StateFileOption
 from looker_demo_cli.context import get_context
 from looker_demo_cli.gates import GateStatus, current_gate, evaluate_gates
 from looker_demo_cli.output import CommandResult, emit
-from looker_demo_cli.state import get_default_state_path
 from looker_demo_cli.utils.console import console, print_success
 
 #: Leading marker per gate row. A glyph rather than a word so the three states
@@ -132,10 +131,7 @@ def status(
     app_ctx.set_json_mode(output_json)
 
     state = app_ctx.state
-    # `AppContext.state_path` is None when the location was discovered rather
-    # than passed, so re-run the same discovery the load used instead of
-    # reporting a null path the caller cannot act on.
-    resolved_state_file = str(app_ctx.state_path or get_default_state_path())
+    resolved_state_file = str(app_ctx.resolved_state_path)
 
     statuses = evaluate_gates(state)
     current = current_gate(state)

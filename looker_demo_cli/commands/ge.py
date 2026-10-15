@@ -94,9 +94,7 @@ def ge_status(
 @ge_app.command(name="configure")
 def ge_configure(
     ctx: typer.Context,
-    gcp_project: Annotated[
-        str, typer.Option("--gcp-project", help="Target Google Cloud Project ID")
-    ] = DEFAULT_GCP_PROJECT,
+    gcp_project: Annotated[str | None, typer.Option("--gcp-project", help="Target Google Cloud Project ID")] = None,
     instance_url: Annotated[str | None, typer.Option("--instance", help="Looker instance base URL")] = None,
     account: Annotated[str | None, typer.Option("--looker-account", help="Saved Looker OAuth account alias")] = None,
     app_id: Annotated[str | None, typer.Option("--app-id", help="Gemini Enterprise App/Engine ID")] = None,
@@ -129,12 +127,16 @@ def ge_configure(
     app_ctx.use_state_file(state_file)
     app_ctx.set_json_mode(output_json)
     auth = app_ctx.looker_auth(instance_url, account)
+    persisted_state = app_ctx.state
+    resolved_project = (
+        gcp_project or persisted_state.ge_project_id or persisted_state.gcp_project_id or DEFAULT_GCP_PROJECT
+    )
 
     # A purpose-built state rather than the persisted one: this command
     # configures the *instance*, and reusing on-disk state would let a stale
     # ge_instance_id from a previous demo leak into the payload.
     state = FlowState(
-        gcp_project_id=gcp_project,
+        gcp_project_id=resolved_project,
         looker_instance_url=auth.base_url,
         looker_account=account,
         ge_instance_id=app_id,
@@ -157,7 +159,7 @@ def ge_configure(
                 "exists in the target project and the Looker service account has "
                 "roles/discoveryengine.admin."
             ),
-            details={"gcp_project": gcp_project, "app_id": app_id, "location": location},
+            details={"gcp_project": resolved_project, "app_id": app_id, "location": location},
         )
 
     result = CommandResult.success(

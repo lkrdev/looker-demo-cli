@@ -152,7 +152,9 @@ def test_optimize_no_backup_and_error_paths(invoke, sample_lookml_dir: Path, tmp
     no_bak = invoke(["lookml", "optimize", "--lookml-dir", str(sample_lookml_dir), "--no-backup", "--json"])
     assert no_bak.exit_code == 0
     assert envelope(no_bak)["data"]["backup_created"] is False
-    assert envelope(no_bak)["next_actions"] == []
+    assert len(envelope(no_bak)["next_actions"]) == 1
+    assert envelope(no_bak)["next_actions"][0]["gate"] == 9
+    assert "lookml restore" not in envelope(no_bak)["next_actions"][0]["command"]
 
     missing_res = invoke(["lookml", "restore", "--lookml-dir", str(sample_lookml_dir), "--json"])
     assert missing_res.exit_code == StateError.exit_code

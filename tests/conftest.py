@@ -5,12 +5,15 @@ from __future__ import annotations
 import importlib
 import json
 import os
+import pkgutil
 import shutil
 from pathlib import Path
 from typing import Any
 
 import pytest
 from typer.testing import CliRunner
+
+import looker_demo_cli.commands
 
 # Strip credential env vars at collection time before `looker_demo_cli.config`
 # freezes module-level defaults at import time.
@@ -99,19 +102,23 @@ def patched_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 # Command-module symbol patching & CLI invocation
 # ---------------------------------------------------------------------------
 
-_COMMAND_MODULES = (
-    "looker_demo_cli.cli",
-    "looker_demo_cli.context",
-    "looker_demo_cli.commands.agent",
-    "looker_demo_cli.commands.catalog",
-    "looker_demo_cli.commands.data",
-    "looker_demo_cli.commands.embed",
-    "looker_demo_cli.commands.env",
-    "looker_demo_cli.commands.ge",
-    "looker_demo_cli.commands.lookml",
-    "looker_demo_cli.commands.precheck",
-    "looker_demo_cli.commands.status",
-)
+
+def _discover_command_modules() -> tuple[str, ...]:
+    """Discover all command modules dynamically under :mod:`looker_demo_cli.commands`."""
+    discovered: list[str] = [
+        "looker_demo_cli.cli",
+        "looker_demo_cli.context",
+    ]
+    for module_info in pkgutil.iter_modules(
+        looker_demo_cli.commands.__path__,
+        prefix="looker_demo_cli.commands.",
+    ):
+        importlib.import_module(module_info.name)
+        discovered.append(module_info.name)
+    return tuple(discovered)
+
+
+_COMMAND_MODULES = _discover_command_modules()
 
 
 @pytest.fixture
@@ -203,6 +210,7 @@ def install_looker_auth(monkeypatch: pytest.MonkeyPatch):
         targets = (
             "looker_demo_cli.context",
             "looker_demo_cli.services.ge_service",
+            "looker_demo_cli.services.lookml_cleaner",
         )
         patched = 0
         for target in targets:

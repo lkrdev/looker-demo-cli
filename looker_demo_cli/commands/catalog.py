@@ -66,9 +66,17 @@ def catalog_inspect(
 
     if skip:
         state.catalog_status = "skipped"
-        app_ctx.save_state()
+        saved_path = app_ctx.save_state()
         result = attach_next_gate_action(
-            CommandResult.success("catalog inspect", data={"status": "skipped", "catalog_status": "skipped"}),
+            CommandResult.success(
+                "catalog inspect",
+                data={
+                    "status": "skipped",
+                    "skipped": True,
+                    "catalog_status": "skipped",
+                    "state_file": str(saved_path),
+                },
+            ),
             state,
         )
         skip_msg = (
@@ -195,9 +203,12 @@ def catalog_inspect(
 def catalog_profiles(
     ctx: typer.Context,
     output_json: Annotated[bool, typer.Option("--json", help="Emit result envelope as JSON on stdout")] = False,
+    state_file: StateFileOption = None,
 ):
     """Display Knowledge Catalog -> LookML mapping profiles and configuration rules."""
-    get_context(ctx).set_json_mode(output_json)
+    app_ctx = get_context(ctx)
+    app_ctx.use_state_file(state_file)
+    app_ctx.set_json_mode(output_json)
 
     profiles_map: dict[str, dict[str, str]] = {
         "rich": {
@@ -319,9 +330,17 @@ def catalog_seed(
 
     if skip:
         state.catalog_status = "skipped"
-        app_ctx.save_state()
+        saved_path = app_ctx.save_state()
         result = attach_next_gate_action(
-            CommandResult.success("catalog seed", data={"status": "skipped", "catalog_status": "skipped"}),
+            CommandResult.success(
+                "catalog seed",
+                data={
+                    "status": "skipped",
+                    "skipped": True,
+                    "catalog_status": "skipped",
+                    "state_file": str(saved_path),
+                },
+            ),
             state,
         )
         skip_msg = (
@@ -483,15 +502,28 @@ def catalog_sync(
 
     if skip:
         state.catalog_status = "skipped"
-        app_ctx.save_state()
+        saved_path = app_ctx.save_state()
         result = attach_next_gate_action(
-            CommandResult.success("catalog sync", data={"status": "skipped", "catalog_status": "skipped"}),
+            CommandResult.success(
+                "catalog sync",
+                data={
+                    "status": "skipped",
+                    "skipped": True,
+                    "catalog_status": "skipped",
+                    "state_file": str(saved_path),
+                },
+            ),
             state,
+        )
+        skip_msg = (
+            "Skipped Knowledge Catalog LookML synchronization. BigQuery + Knowledge Catalog workflow complete (mode=bq_only)."
+            if state.deployment_mode == "bq_only"
+            else "Skipped Knowledge Catalog LookML synchronization."
         )
         return emit(
             result,
             json_output=output_json,
-            human_renderer=lambda _: print_info("Skipped Knowledge Catalog LookML synchronization."),
+            human_renderer=lambda _: print_info(skip_msg),
         )
 
     proj_id = gcp_project or state.gcp_project_id

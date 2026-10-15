@@ -325,9 +325,7 @@ def data_generate(
             help="Include structured verification scorecard and emit JSON envelope on stdout",
         ),
     ] = False,
-    gcp_project: Annotated[
-        str, typer.Option("--gcp-project", help="Target GCP Project ID if uploading")
-    ] = DEFAULT_GCP_PROJECT,
+    gcp_project: Annotated[str | None, typer.Option("--gcp-project", help="Target GCP Project ID if uploading")] = None,
     dataset: Annotated[str | None, typer.Option("--dataset", help="Target BigQuery dataset ID if uploading")] = None,
     output_json: Annotated[bool, typer.Option("--json", help="Emit the result envelope as JSON on stdout")] = False,
     state_file: StateFileOption = None,
@@ -445,7 +443,7 @@ def data_generate(
     state.bq_dataset_id = dataset or domain
     state.generated_parquet_dir = target_dir
     state.generated_tables = table_names
-    state.gcp_project_id = gcp_project or state.gcp_project_id
+    state.gcp_project_id = gcp_project or state.gcp_project_id or DEFAULT_GCP_PROJECT
 
     loaded_rows: dict[str, int] = {}
     partitioned_tables: list[str] = []
@@ -551,7 +549,7 @@ def data_upload(
         Path | None, typer.Option("--parquet-dir", help="Directory containing Parquet files")
     ] = None,
     dataset: Annotated[str | None, typer.Option("--dataset", help="Target BigQuery dataset ID")] = None,
-    gcp_project: Annotated[str, typer.Option("--gcp-project", help="Target GCP Project ID")] = DEFAULT_GCP_PROJECT,
+    gcp_project: Annotated[str | None, typer.Option("--gcp-project", help="Target GCP Project ID")] = None,
     location: Annotated[str, typer.Option("--location", help="BigQuery dataset location")] = "US",
     verify_only: Annotated[
         bool,
@@ -609,7 +607,7 @@ def data_upload(
             purpose="the BigQuery dataset to load the Parquet tables into",
             hint="Or run `demo-create data generate` first, which records the dataset it synthesized for.",
         )
-    proj_id = gcp_project or state.gcp_project_id
+    proj_id = gcp_project or state.gcp_project_id or DEFAULT_GCP_PROJECT
 
     bq_helper = app_ctx.bigquery(project_id=proj_id, location=location)
     bq_helper.ensure_dataset(ds_id)
@@ -666,7 +664,7 @@ def data_upload(
 def data_inspect(
     ctx: typer.Context,
     dataset: Annotated[str | None, typer.Option("--dataset", help="BigQuery dataset ID")] = None,
-    gcp_project: Annotated[str, typer.Option("--gcp-project", help="Target GCP Project ID")] = DEFAULT_GCP_PROJECT,
+    gcp_project: Annotated[str | None, typer.Option("--gcp-project", help="Target GCP Project ID")] = None,
     location: Annotated[str, typer.Option("--location", help="BigQuery dataset location")] = "US",
     output_json: Annotated[bool, typer.Option("--json", help="Emit the result envelope as JSON on stdout")] = False,
     state_file: StateFileOption = None,
@@ -696,7 +694,7 @@ def data_inspect(
             purpose="the BigQuery dataset to inspect",
             hint="Or run `demo-create data generate` or `demo-create data upload` first to record one.",
         )
-    proj_id = gcp_project or state.gcp_project_id
+    proj_id = gcp_project or state.gcp_project_id or DEFAULT_GCP_PROJECT
 
     bq_helper = app_ctx.bigquery(project_id=proj_id, location=location)
     if not bq_helper.dataset_exists(ds_id):

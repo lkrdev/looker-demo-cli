@@ -386,6 +386,7 @@ demo-create catalog profiles [OPTIONS]
 | Option | Description | Default |
 | :--- | :--- | :--- |
 | `--json` | Emit result envelope as JSON on stdout |  |
+| `--state-file` | Path to .demo-state.json. Defaults to discovering it in the current directory. |  |
 
 ### `demo-create catalog seed`
 
