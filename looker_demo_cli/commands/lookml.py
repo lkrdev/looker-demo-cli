@@ -109,7 +109,7 @@ def lookml_model(
             "--layered/--no-layered",
             help="Generate layered LookML (views/base/ for physical schema, views/refinements/ for semantic layer)",
         ),
-    ] = False,
+    ] = True,
     output_json: JsonOption = False,
     state_file: StateFileOption = None,
 ):
@@ -135,6 +135,9 @@ def lookml_model(
             Catalog metadata.
         use_catalog: Explicitly enable or disable Knowledge Catalog metadata
             enrichment.
+        layered: Generate layered LookML (``views/base/*.view.lkml`` and
+            ``views/refinements/*.view.lkml``). Enabled by default; pass
+            ``--no-layered`` to generate monolithic views.
         output_json: Emit the JSON envelope on stdout.
         state_file: Optional explicit path to ``.demo-state.json``.
 
@@ -346,7 +349,9 @@ def lookml_model(
             console.print(f"  • {f.relative_to(out_dir)}")
         print_info(
             "NOTE: The generated `.dashboard.lookml` is a RAW SCAFFOLDING DRAFT. "
-            "Consult `looker-visualizations` skills to apply the 3-Pass Executive Polish before running `lookml deploy`."
+            "You MUST delegate dashboard design and 3-Pass Executive Polish to the `lookml-dashboard-designer` "
+            "subagent via `invoke_subagent` (which loads `looker-visualizations` skills and runs `lookml certify-polish`) "
+            "before running `lookml deploy`."
         )
         print_info(f"Updated state saved to `{saved_path}`")
 
@@ -429,9 +434,10 @@ def lookml_certify_polish(
                     code=ValidationError.code,
                     message=error_msg,
                     remediation=(
-                        "Consult the `looker-visualizations` skill suite or delegate to the "
-                        "`lookml-dashboard-designer` subagent to replace placeholder metrics with domain KPIs, "
-                        f"apply tailored palettes, and re-run `demo-create lookml certify-polish --lookml-dir {target_dir}`."
+                        "Delegate to the `lookml-dashboard-designer` subagent via `invoke_subagent` "
+                        "(which loads the `looker-visualizations` skill suite) to replace placeholder metrics "
+                        "with domain KPIs in `views/refinements/*.view.lkml`, apply tailored palettes, and "
+                        f"re-run `demo-create lookml certify-polish --lookml-dir {target_dir}`."
                     ),
                     details={
                         "status": "FAILED_POLISH_CHECK",
@@ -453,12 +459,14 @@ def lookml_certify_polish(
             )
             console.print(rule)
             console.print("The dashboard currently contains raw generator defaults from LookMLGenerator.")
-            console.print("To satisfy Gate 6 and achieve production-grade quality:\n")
+            console.print("To satisfy Gate 7 (`gate_2b_certify_polish`) and achieve production-grade quality:\n")
             console.print(
-                "1. Consult the `looker-visualizations` skill suite or delegate to the\n"
-                "   `lookml-dashboard-designer` subagent."
+                "1. Delegate to the `lookml-dashboard-designer` subagent via `invoke_subagent`\n"
+                "   (which loads the `looker-visualizations` skill suite)."
             )
-            console.print("2. Replace placeholder metrics with domain KPIs (e.g., Retention, Playtime, ARPU).")
+            console.print(
+                "2. Author domain KPIs in `views/refinements/*.view.lkml` and replace placeholder dashboard metrics."
+            )
             console.print("3. Apply tailored color palettes, donut breakdowns, and modern Highcharts styling.")
             console.print(f"4. Re-run `demo-create lookml certify-polish --lookml-dir {target_dir}`.")
             console.print(rule)

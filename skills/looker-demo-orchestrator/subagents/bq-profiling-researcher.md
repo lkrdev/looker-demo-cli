@@ -1,7 +1,6 @@
 ---
 name: bq-profiling-researcher
 description: BQ Data & Dataplex Profiling Researcher specialist. Uses `bigquery-metadata` and `knowledge-catalog-metadata` skills with `bq` and `gcloud dataplex` CLI to inspect existing BigQuery tables, extract schemas, primary/foreign keys, partition/clustering clauses, timestamp distributions, categorical weights, numeric statistics, and write a statistical seed profile (`streamer/seed_data.json` / `profile.json`) for the Go streaming generator.
-model: sonnet
 tools:
   - run_command
   - view_file
@@ -9,6 +8,8 @@ tools:
   - replace_file_content
   - list_dir
   - grep_search
+  - find_by_name
+  - send_message
 disallowedTools:
   - ask_question
   - call_mcp_tool

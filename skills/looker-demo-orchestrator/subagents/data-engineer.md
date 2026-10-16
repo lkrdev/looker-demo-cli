@@ -1,7 +1,6 @@
 ---
 name: data-engineer
 description: High-performance synthetic dataset generation and resilient BigQuery ADC ingestion specialist. Uses `synthetic-data-authoring` principles, `ModularDAGSynthesizer`, in-memory `TableValidator` quality gates, and `demo-create data generate --upload --json-scorecard`.
-model: sonnet
 tools:
   - run_command
   - view_file
@@ -9,6 +8,8 @@ tools:
   - replace_file_content
   - list_dir
   - grep_search
+  - find_by_name
+  - send_message
 disallowedTools:
   - ask_question
   - call_mcp_tool

@@ -194,7 +194,15 @@ def deploy_lookml_project(state: FlowState) -> FlowState:
     )
 
     print_info(f"Pushing LookML to dev workspace: {' '.join(cmd_push)}")
+    backup_dir = state.lookml_output_dir / ".backup_pre_opt"
+    parked_backup_dir = state.lookml_output_dir.parent / f".backup_pre_opt_{state.lookml_output_dir.name}"
+    moved_backup = False
     try:
+        if backup_dir.exists():
+            if parked_backup_dir.exists():
+                shutil.rmtree(parked_backup_dir)
+            shutil.move(str(backup_dir), str(parked_backup_dir))
+            moved_backup = True
         res_push = subprocess.run(cmd_push, capture_output=True, text=True, check=True, env=env)
         print_success("LookML files successfully pushed to dev workspace.")
         if res_push.stdout:
@@ -209,6 +217,11 @@ def deploy_lookml_project(state: FlowState) -> FlowState:
         state.status = "failed"
         state.error_message = str(e)
         return state
+    finally:
+        if moved_backup and parked_backup_dir.exists():
+            if backup_dir.exists():
+                shutil.rmtree(backup_dir)
+            shutil.move(str(parked_backup_dir), str(backup_dir))
 
     # Refresh OAuth token & SDK client in case `lkr push` refreshed an expired token in ~/.lkr/auth.db
     oauth_instances = get_authenticated_oauth_instances()

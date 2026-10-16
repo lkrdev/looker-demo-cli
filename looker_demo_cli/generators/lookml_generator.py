@@ -539,7 +539,7 @@ class LookMLGenerator:
         return "\n".join(lines)
 
     def generate_refinement_view_lkml(self, spec: LookMLTableSpec) -> str:
-        """Generate a semantic LookML refinement view file (views/refinements/<name>.refinement.lkml)."""
+        """Generate a semantic LookML refinement view file (views/refinements/<name>.view.lkml)."""
         lines = [
             f'include: "/views/base/{spec.table_name}.view.lkml"',
             "",
@@ -744,7 +744,7 @@ class LookMLGenerator:
             lines.extend(
                 [
                     'include: "/views/base/**/*.view.lkml"',
-                    'include: "/views/refinements/**/*.refinement.lkml"',
+                    'include: "/views/refinements/**/*.view.lkml"',
                 ]
             )
         else:
@@ -1324,7 +1324,7 @@ class LookMLGenerator:
         model_name: str,
         tables: list[LookMLTableSpec],
         dashboard_content: str | None = None,
-        layered: bool = False,
+        layered: bool = True,
     ) -> list[Path]:
         """Write all LookML files to local output folder."""
         models_dir = output_dir / "models"
@@ -1349,7 +1349,10 @@ class LookMLGenerator:
                 written_files.append(b_path)
 
                 r_content = self.generate_refinement_view_lkml(t)
-                r_path = refinements_dir / f"{t.table_name}.refinement.lkml"
+                r_path = refinements_dir / f"{t.table_name}.view.lkml"
+                legacy_r_path = refinements_dir / f"{t.table_name}.refinement.lkml"
+                if legacy_r_path.exists():
+                    legacy_r_path.unlink()
                 r_path.write_text(r_content, encoding="utf-8")
                 written_files.append(r_path)
         else:

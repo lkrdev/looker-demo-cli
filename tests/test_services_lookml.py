@@ -146,21 +146,166 @@ def test_clean_root_deletes_each_duplicate() -> None:
 
 
 def test_optimize_layered_refinement_files(tmp_path: Path) -> None:
-    """Optimizer finds and patches suggestable flags in layered refinement files."""
+    """Optimizer patches suggestable flags in layered refinement files without hiding primary keys or duplicating onto base views."""
+    base_dir = tmp_path / "views" / "base"
     ref_dir = tmp_path / "views" / "refinements"
+    dash_dir = tmp_path / "dashboards"
+    base_dir.mkdir(parents=True)
     ref_dir.mkdir(parents=True)
-    ref_file = ref_dir / "users.refinement.lkml"
-    ref_file.write_text(
-        """
-view: +users {
-  dimension: user_uuid {
+    dash_dir.mkdir(parents=True)
+
+    base_file = base_dir / "users.view.lkml"
+    base_content = """view: users {
+  sql_table_name: `p.d.users` ;;
+  dimension: user_id {
+    primary_key: yes
     type: string
+    sql: ${TABLE}.user_id ;;
+  }
+  dimension: external_ref_id {
+    type: string
+    sql: ${TABLE}.external_ref_id ;;
+  }
+}
+"""
+    base_file.write_text(base_content, encoding="utf-8")
+
+    ref_file = ref_dir / "users.view.lkml"
+    ref_file.write_text(
+        """include: "/views/base/users.view.lkml"
+
+view: +users {
+  dimension: user_id {
+    label: "User ID"
+  }
+  dimension: external_ref_id {
+    label: "External Reference ID"
   }
 }
 """,
         encoding="utf-8",
     )
-    result = optimize_lookml_project(tmp_path, backup=False)
+
+    dash_file = dash_dir / "overview.dashboard.lookml"
+    dash_file.write_text("- dashboard: overview\n  title: Executive Overview\n", encoding="utf-8")
+
+    result = optimize_lookml_project(tmp_path, backup=True)
     assert result["status"] == "SUCCESS"
-    updated = ref_file.read_text(encoding="utf-8")
-    assert "suggestable: no" in updated
+    updated_ref = ref_file.read_text(encoding="utf-8")
+    assert "suggestable: no" in updated_ref
+    # Primary key user_id must NOT be marked hidden: yes in refinement view
+    user_id_block = updated_ref.split("dimension: external_ref_id")[0]
+    assert "hidden: yes" not in user_id_block
+    # Foreign/reference ID external_ref_id IS marked hidden: yes in refinement view
+    ext_id_block = updated_ref.split("dimension: external_ref_id")[1]
+    assert "hidden: yes" in ext_id_block
+    # Base view remains untouched because refinement view owns those dimensions
+    assert base_file.read_text(encoding="utf-8") == base_content
+
+    # Dashboard (.lookml) is also snapshotted in .backup_pre_opt and restored by restore_lookml_backup
+    assert (tmp_path / ".backup_pre_opt" / "dashboards" / "overview.dashboard.lookml").exists()
+    restore_res = restore_lookml_backup(tmp_path)
+    assert restore_res["status"] == "SUCCESS"
+    assert not (tmp_path / ".backup_pre_opt").exists()
+
+
+def test_find_root_duplicates_detects_layered_base_and_refinement_views() -> None:
+    """Root view files shadowing views/base/ or views/refinements/ are flagged as duplicates."""
+    layered_files = [
+        {"path": "views/base/orders.view.lkml"},
+        {"path": "views/refinements/orders.view.lkml"},
+        {"path": "orders.view.lkml"},
+        {"path": "manifest.lkml"},
+    ]
+    with patch("requests.get", return_value=MagicMock(status_code=200, json=lambda: layered_files)):
+        duplicates = find_root_duplicate_files(**CLEANER_KWARGS)
+    assert duplicates == ["orders.view.lkml"]
+
+
+def test_validate_filtered_measures_across_layered_base_and_refinement(tmp_path: Path) -> None:
+    """Filtered measures in views/refinements/*.view.lkml resolve sql_table_name and dimensions from views/base/*.view.lkml."""
+    import pandas as pd
+
+    from looker_demo_cli.services.validator_service import validate_filtered_measures_in_lookml
+
+    parquet_dir = tmp_path / "parquet"
+    parquet_dir.mkdir()
+    df = pd.DataFrame({"order_id": ["o1", "o2"], "status": ["COMPLETED", "CANCELLED"], "amount": [10.0, 20.0]})
+    df.to_parquet(parquet_dir / "fct_orders.parquet")
+
+    lookml_dir = tmp_path / "lookml"
+    base_dir = lookml_dir / "views" / "base"
+    ref_dir = lookml_dir / "views" / "refinements"
+    base_dir.mkdir(parents=True)
+    ref_dir.mkdir(parents=True)
+
+    (base_dir / "fct_orders.view.lkml").write_text(
+        """view: fct_orders {
+  sql_table_name: `proj.ds.fct_orders` ;;
+  dimension: order_id {
+    primary_key: yes
+    type: string
+    sql: ${TABLE}.order_id ;;
+  }
+  dimension: status {
+    type: string
+    sql: ${TABLE}.status ;;
+  }
+  dimension: amount {
+    type: number
+    sql: ${TABLE}.amount ;;
+  }
+}
+""",
+        encoding="utf-8",
+    )
+
+    (ref_dir / "fct_orders.view.lkml").write_text(
+        """include: "/views/base/fct_orders.view.lkml"
+view: +fct_orders {
+  measure: completed_revenue {
+    type: sum
+    sql: ${amount} ;;
+    filters: [status: "COMPLETED"]
+  }
+  measure: bogus_revenue {
+    type: sum
+    sql: ${amount} ;;
+    filters: [status: "NON_EXISTENT_STATUS"]
+  }
+}
+""",
+        encoding="utf-8",
+    )
+
+    diagnostics = validate_filtered_measures_in_lookml(lookml_dir=lookml_dir, parquet_dirs=[parquet_dir])
+    assert len(diagnostics) == 1
+    assert "bogus_revenue" in diagnostics[0]
+    assert "NON_EXISTENT_STATUS" in diagnostics[0]
+
+
+def test_subagent_definitions_are_client_agnostic() -> None:
+    """All subagent markdown definitions must include send_message in tools, omit `model: sonnet`, and omit editor-specific keys."""
+    repo_root = Path(__file__).resolve().parent.parent
+    subagents_dir = repo_root / "skills" / "looker-demo-orchestrator" / "subagents"
+    md_files = list(subagents_dir.glob("*.md"))
+    assert len(md_files) >= 9
+    for md_file in md_files:
+        text = md_file.read_text(encoding="utf-8")
+        assert "model: sonnet" not in text, f"{md_file.name} should not hardcode model: sonnet"
+        assert "mainAgent:" not in text, f"{md_file.name} should not contain Jetski-specific mainAgent key"
+        assert "commandExecutionPolicy:" not in text, f"{md_file.name} should not contain commandExecutionPolicy"
+        assert "- send_message" in text, f"{md_file.name} must include send_message in tools list"
+
+
+def test_install_subagent_definitions(tmp_path: Path) -> None:
+    """`install_subagent_definitions` copies subagent markdown definitions into target directory."""
+    from looker_demo_cli.precheck.skills_organizer import install_subagent_definitions
+
+    agents_dir = tmp_path / "agents"
+    installed = install_subagent_definitions(agents_dir=agents_dir)
+    assert len(installed) >= 9
+    assert any("lookml-dashboard-designer.md" in p for p in installed)
+    dest_file = agents_dir / "lookml-dashboard-designer.md"
+    assert dest_file.exists()
+    assert "- send_message" in dest_file.read_text(encoding="utf-8")

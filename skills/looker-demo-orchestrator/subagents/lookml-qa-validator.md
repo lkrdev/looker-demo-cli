@@ -1,7 +1,6 @@
 ---
 name: lookml-qa-validator
 description: Independent LookML validator, dashboard query test executor, and bounded self-healer. Validates dev branch, tests 100% of dashboard queries, and self-heals up to 3 iterations.
-model: sonnet
 tools:
   - run_command
   - view_file
@@ -9,6 +8,8 @@ tools:
   - replace_file_content
   - list_dir
   - grep_search
+  - find_by_name
+  - send_message
 disallowedTools:
   - ask_question
 skills:

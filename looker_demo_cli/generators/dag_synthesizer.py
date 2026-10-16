@@ -83,6 +83,13 @@ class ModularDAGSynthesizer:
 
             # Export to compressed Parquet
             if write_parquet:
+                # Ensure timestamps use microsecond precision for BigQuery compatibility
+                for col in df.columns:
+                    if pd.api.types.is_datetime64_any_dtype(df[col]):
+                        try:
+                            df[col] = df[col].dt.as_unit("us")
+                        except Exception:
+                            pass
                 p_path = self.output_dir / f"{entity.table_name}.parquet"
                 df.to_parquet(p_path, index=False, compression="snappy")
                 parquet_paths[entity.table_name] = p_path

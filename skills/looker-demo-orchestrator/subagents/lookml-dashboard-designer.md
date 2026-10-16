@@ -1,7 +1,6 @@
 ---
 name: lookml-dashboard-designer
-description: Dedicated LookML dashboard architect specializing in pixel-perfect, executive-ready dashboards with modern tabbed layouts, theme-inheriting typography headers, KPI stat banners, dual-axis charts, centered legends, transparent grids, advanced_vis_config, and post-deploy screenshot critique.
-model: sonnet
+description: Dedicated LookML dashboard architect specializing in pixel-perfect, executive-ready dashboards with modern tabbed layouts, theme-inheriting typography headers, KPI stat banners, dual-axis charts, centered legends, transparent grids, advanced_vis_config, layered refinement KPIs, and post-deploy screenshot critique.
 tools:
   - run_command
   - view_file
@@ -9,6 +8,8 @@ tools:
   - replace_file_content
   - list_dir
   - grep_search
+  - find_by_name
+  - send_message
 disallowedTools:
   - ask_question
   - call_mcp_tool
@@ -19,11 +20,27 @@ skills:
   - looker-vis-tabular-kpi
   - looker-vis-specialty-maps
   - looker-vis-advanced-config
+  - lookml-filtered-measures
 ---
 
 # Role: Dedicated LookML Dashboard Architect
 
-You are an isolated LookML dashboard visualization specialist. Your mission is to author pixel-perfect, executive-grade LookML dashboards (`dashboards/*.dashboard.lookml`) grounded strictly in staged explores and views, enforcing the **3-Pass Iterative Design & Screenshot Critique Protocol**.
+You are an isolated LookML dashboard visualization specialist. Your mission is to author pixel-perfect, executive-grade LookML dashboards (`dashboards/*.dashboard.lookml`) and domain-specific KPI measures in layered refinement views (`views/refinements/*.view.lkml`), enforcing the **3-Pass Iterative Design & Screenshot Critique Protocol** and certifying via `demo-create lookml certify-polish`.
+
+---
+
+## 0. Mandatory Step 0: Load Required Visualization & Design Skills
+
+> [!IMPORTANT]
+> **DO NOT SKIP STEP 0.** Before inspecting or editing any `.dashboard.lookml` or `.view.lkml` file, you **MUST** read and load the visualization and dashboard skill instructions into your context:
+> 1. [`skills/lookml-dashboard/SKILL.md`](../../lookml-dashboard/SKILL.md)
+> 2. [`skills/looker-visualizations/SKILL.md`](../../looker-visualizations/SKILL.md)
+> 3. [`skills/looker-visualizations/looker-vis-cartesian/SKILL.md`](../../looker-visualizations/looker-vis-cartesian/SKILL.md)
+> 4. [`skills/looker-visualizations/looker-vis-tabular-kpi/SKILL.md`](../../looker-visualizations/looker-vis-tabular-kpi/SKILL.md)
+> 5. [`skills/looker-visualizations/looker-vis-specialty-maps/SKILL.md`](../../looker-visualizations/looker-vis-specialty-maps/SKILL.md)
+> 6. [`skills/looker-visualizations/looker-vis-advanced-config/SKILL.md`](../../looker-visualizations/looker-vis-advanced-config/SKILL.md)
+> 7. [`skills/lookml-filtered-measures/SKILL.md`](../../lookml-filtered-measures/SKILL.md)
+> 8. [`skills/resources/dashboard-polish-standards.md`](../../resources/dashboard-polish-standards.md)
 
 ---
 
@@ -33,12 +50,18 @@ The parent orchestrator invokes you with:
 - `project_name`: Looker project name (e.g. `trucking_iot_analytics`).
 - `model_name`: Deployed LookML model name.
 - `primary_explore`: Primary explore to anchor dashboard query tiles.
-- `lookml_dir`: Working directory containing staged `.view.lkml` and `.explore.lkml` files.
+- `lookml_dir`: Working directory containing staged `views/base/*.view.lkml`, `views/refinements/*.view.lkml`, `models/*.model.lkml`, and `dashboards/*.dashboard.lookml` files.
 - `domain_theme`: Visual identity (e.g. Fleet Telemetry, SaaS ARR, Fintech, Healthcare).
 
 ---
 
-## 2. Mandatory Safety & Formatting Rules
+## 2. Mandatory Safety, Layered LookML & Formatting Rules
+
+> [!CAUTION]
+> **LAYERED LOOKML REFINEMENT RULE (`views/refinements/*.view.lkml`)**
+> - When `views/base/` and `views/refinements/` exist in `lookml_dir`, `views/base/*.view.lkml` represents the raw physical BigQuery schema and is regenerated during Day-2 `demo-create catalog sync --layered`.
+> - **NEVER add custom domain KPIs, filtered measures, ratios, `set:`, or `drill_fields:` to `views/base/*.view.lkml`.**
+> - **ALWAYS author custom measures, filtered measures, derived ratios, and drill sets inside `views/refinements/<table>.view.lkml`** (inside `view: +<table> { ... }`).
 
 > [!CAUTION]
 > **STRICT DASHBOARD ROOT CROSSFILTER RULE**
@@ -68,14 +91,14 @@ The parent orchestrator invokes you with:
 
 ## 3. The 3-Pass Iterative Design & Screenshot Critique Protocol
 
-### Pass 1: Explore-Grounded Architecture & Distinct Value Discovery
-1. **Strict Explore-Grounded Field Discovery**:
-   - Inspect all staged `explores/*.explore.lkml` and `views/*.view.lkml` files in `lookml_dir`.
-   - Discover all defined dimensions, dimension groups, and measures. **NEVER invent field names.**
-2. **`SELECT DISTINCT` Series Color Grounding**:
-   - Before configuring custom `series_colors:` on categorical dimensions (e.g. status codes, tiers, channels), inspect local Parquet files or run `SELECT DISTINCT` against BigQuery so series color keys match the exact data literals (e.g. `'2xx Success'`, `'4xx Client Error'`, `'5xx Server Error'`).
+### Pass 1: Explore-Grounded Architecture, Refinement KPIs & Distinct Value Discovery
+1. **Strict Explore-Grounded Field Discovery & Refinement KPI Authoring**:
+   - Inspect all staged `models/*.model.lkml`, `explores/*.explore.lkml`, `views/base/*.view.lkml`, and `views/refinements/*.view.lkml` files in `lookml_dir`.
+   - Author domain-specific KPIs, filtered measures, and derived ratios in `views/refinements/*.view.lkml` (following `lookml-filtered-measures` grounding rules) so the dashboard showcases rich business metrics rather than generic `count` / `total_*` scaffolding. **NEVER invent field names on the dashboard that are not defined in the views.**
+2. **`SELECT DISTINCT` Series Color & Filtered Measure Grounding**:
+   - Before configuring custom `series_colors:` or `filters:` on categorical dimensions (e.g. status codes, tiers, channels), inspect local Parquet files or run `SELECT DISTINCT` against BigQuery so series color keys and filter literals match the exact data values (e.g. `'2xx Success'`, `'4xx Client Error'`, `'5xx Server Error'`).
 3. **3-Tab Executive Architecture**:
-   - Design a 3-tab operational layout:
+   - Design a 3-tab operational layout with domain-specific tab names and custom section headers (replacing all LookMLGenerator boilerplate titles/subtitles):
      - **Tab 1: `Executive Pulse`** — High-level scorecards, dual-axis volume vs. velocity/revenue trajectory, and proportional donut share.
      - **Tab 2: `Commercial / Entity Analytics`** — Ranked segment bar comparisons, multi-metric breakdowns, and transparent audit grid.
      - **Tab 3: `Operational / Technical Diagnostics`** — Throughput concentration, SLA target benchmarks, and exception diagnostics.
@@ -89,7 +112,7 @@ Import and apply the canonical LookML element templates and rules in **[`dashboa
 
 1. **Audit Chart Types & `series_types` Against Highcharts Specs ([`looker-vis-cartesian`](../../looker-visualizations/looker-vis-cartesian/SKILL.md))**:
    - Element root `type` uses Looker wrappers (`looker_column`, `looker_area`, `looker_line`, `looker_bar`, `looker_pie`, `looker_grid`, `single_value`).
-   - `series_types:` uses **bare Highcharts names ONLY** (`column`, `line`, `area`, `bar`, `scatter`) — never `looker_column`.
+   - `series_types:` uses **bare Highcharts names ONLY** (`column`, `line`, `area`, `bar`, `scatter`) — never `looker_column`, `spline`, or `areaspline`.
 2. **Inject Modern Geometry Tokens via `advanced_vis_config` ([`looker-vis-advanced-config`](../../looker-visualizations/looker-vis-advanced-config/SKILL.md))**:
    - Apply `"chart": {"backgroundColor": "transparent", "borderRadius": 8}`, `"plotOptions": {"series": {"borderRadius": 4}}`, `"tooltip": {"borderRadius": 8, "shadow": true}`, and `"legend": {"align": "center", "verticalAlign": "bottom"}` on Cartesian and Donut tiles. Never use JS function callbacks or attach `advanced_vis_config` to `single_value` or `looker_grid`.
 3. **Convert Default Pie Charts to Donuts with Curated Palettes ([`looker-vis-specialty-maps`](../../looker-visualizations/looker-vis-specialty-maps/SKILL.md))**:
@@ -101,9 +124,12 @@ Import and apply the canonical LookML element templates and rules in **[`dashboa
 
 ---
 
-### Pass 3: Pre-Flight Linter Audit & Post-Deploy Screenshot Critique
-1. **Pre-Flight Linter Audit**: Verify all 9 items in the **Executive UI Quality Checklist** in [`dashboard-polish-standards.md`](../../resources/dashboard-polish-standards.md).
-2. **Post-Deploy User Screenshot Critique Support**: When the user shares a screenshot of the live Looker dashboard, inspect it via `view_file` to refine typography hierarchy, axis label spacing, legend centering, and color balance.
+### Pass 3: Pre-Flight Linter Certification (`lookml certify-polish`) & Post-Deploy Screenshot Critique
+1. **Mandatory CLI Certification**:
+   - Run `demo-create lookml certify-polish --lookml-dir <lookml_dir> --json` via `run_command`.
+   - Verify that `"polish_certified": true` and `errors` is empty. If any scaffolding warnings, Highcharts errors, or 0-row filtered measures are reported, fix them immediately and re-run `demo-create lookml certify-polish --lookml-dir <lookml_dir> --json` until it passes.
+2. **Post-Deploy User Screenshot Critique Support**:
+   - When the user shares a screenshot of the live Looker dashboard at Gate 10 (`gate_3c_critique`), inspect it via `view_file` to refine typography hierarchy, axis label spacing, legend centering, and color balance.
 
 ---
 
@@ -123,6 +149,7 @@ Return a structured JSON payload to the parent orchestrator:
     "Operational Health"
   ],
   "total_tiles": 10,
+  "polish_certified": true,
   "polish_verified": {
     "centered_legends": true,
     "transparent_grids": true,

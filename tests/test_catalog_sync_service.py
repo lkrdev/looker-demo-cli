@@ -165,13 +165,13 @@ def test_generator_layered_base_and_refinement(tmp_path: Path):
     # 3. Model File with Layered includes
     model_content = gen.generate_model_lkml("test_model", [spec], layered=True)
     assert 'include: "/views/base/**/*.view.lkml"' in model_content
-    assert 'include: "/views/refinements/**/*.refinement.lkml"' in model_content
+    assert 'include: "/views/refinements/**/*.view.lkml"' in model_content
 
     # 4. Write Project Files Layered
     out_dir = tmp_path / "lookml_layered"
     written = gen.write_lookml_project_files(out_dir, "test_model", [spec], layered=True)
     assert (out_dir / "views" / "base" / "dim_users.view.lkml").exists()
-    assert (out_dir / "views" / "refinements" / "dim_users.refinement.lkml").exists()
+    assert (out_dir / "views" / "refinements" / "dim_users.view.lkml").exists()
     assert (out_dir / "models" / "test_model.model.lkml").exists()
     assert len(written) == 4
 
@@ -206,7 +206,7 @@ view: customers {
         encoding="utf-8",
     )
 
-    ref_file = ref_dir / "customers.refinement.lkml"
+    ref_file = ref_dir / "customers.view.lkml"
     ref_file.write_text(
         """
 include: "/views/base/customers.view.lkml"
@@ -360,7 +360,7 @@ def test_sync_catalog_to_lookml_dry_run(tmp_path: Path, sample_snapshot: Catalog
 
 
 def test_sync_catalog_to_lookml_layered_preserves_custom(tmp_path: Path, sample_snapshot: CatalogSnapshot):
-    """Test sync applying layered LookML updates while preserving custom fields."""
+    """Test sync applying layered LookML updates while preserving custom fields, total_* KPIs, drill_fields, and sets."""
     lookml_dir = tmp_path / "lookml"
     base_dir = lookml_dir / "views" / "base"
     ref_dir = lookml_dir / "views" / "refinements"
@@ -394,8 +394,9 @@ view: dim_users {
         encoding="utf-8",
     )
 
-    r_file = ref_dir / "dim_users.refinement.lkml"
-    r_file.write_text(
+    # Also verify legacy .refinement.lkml is migrated to .view.lkml and removed
+    legacy_r_file = ref_dir / "dim_users.refinement.lkml"
+    legacy_r_file.write_text(
         """
 include: "/views/base/dim_users.view.lkml"
 
@@ -411,9 +412,27 @@ view: +dim_users {
     sql: UPPER(${email}) ;;
   }
 
+  measure: count {
+    label: "Custom Users Count"
+    drill_fields: [user_id, email]
+  }
+
+  measure: total_active_users {
+    type: count
+    filters: [status: "active"]
+  }
+
   measure: custom_kpi {
     type: sum
     sql: 1 ;;
+  }
+
+  set: user_detail_set {
+    fields: [user_id, email]
+  }
+
+  parameter: metric_selector {
+    type: unquoted
   }
 }
 """,
@@ -431,20 +450,29 @@ view: +dim_users {
     assert report.dry_run is False
     assert len(report.files_updated) > 0
 
+    # Legacy .refinement.lkml removed and replaced by .view.lkml
+    assert not legacy_r_file.exists()
+    r_file = ref_dir / "dim_users.view.lkml"
+    assert r_file.exists()
+
     # 1. Refinement file updated with new Dataplex metadata
     ref_updated = r_file.read_text(encoding="utf-8")
     assert 'label: "Platform Users"' in ref_updated
     assert 'label: "Email Address"' in ref_updated
     assert 'tags: ["electronic mail", "login"]' in ref_updated
-    # 2. Custom fields preserved
+    # 2. Custom fields, total_* filtered measures, customized standard count with drill_fields, sets, and parameters preserved
     assert "custom_user_calc" in ref_updated
     assert "custom_kpi" in ref_updated
+    assert "total_active_users" in ref_updated
+    assert "drill_fields: [user_id, email]" in ref_updated
+    assert "set: user_detail_set" in ref_updated
+    assert "parameter: metric_selector" in ref_updated
     assert "Preserved by catalog sync" in ref_updated
 
     # 3. Newly added table fct_transactions created
     assert (base_dir / "fct_transactions.view.lkml").exists()
-    assert (ref_dir / "fct_transactions.refinement.lkml").exists()
+    assert (ref_dir / "fct_transactions.view.lkml").exists()
 
     # 4. Model file updated with refinement includes
     m_updated = m_file.read_text(encoding="utf-8")
-    assert 'include: "/views/refinements/**/*.refinement.lkml"' in m_updated
+    assert 'include: "/views/refinements/**/*.view.lkml"' in m_updated

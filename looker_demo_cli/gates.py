@@ -602,6 +602,7 @@ GATES: Final[tuple[Gate, ...]] = _number_gates(
                     ParamBinding("--connection", "looker_connection_name", _PLACEHOLDER_CONNECTION),
                     ParamBinding("--gcp-project", "gcp_project_id", _PLACEHOLDER_GCP_PROJECT),
                     ParamBinding("--catalog", "catalog_snapshot_path", optional=True),
+                    ParamBinding("--layered", is_flag=True),
                 ),
             ),
         ),
@@ -613,10 +614,11 @@ GATES: Final[tuple[Gate, ...]] = _number_gates(
         title="3-Pass Executive Dashboard Polish & filtered measure audit",
         requires_human_confirmation=True,
         human_checkpoint=(
-            "MANDATORY DASHBOARD POLISH: Do NOT deploy the raw scaffold. Invoke the `looker-visualizations` "
-            "skill suite (or `lookml-dashboard-designer` subagent) to tailor chart types, custom palettes, "
-            "KPI single-values, and modern Highcharts tokens to the domain. Run `demo-create lookml certify-polish` "
-            "and review the design with the user before proceeding."
+            "MANDATORY SUBAGENT HANDOFF FOR DASHBOARD POLISH: Do NOT deploy the raw scaffold. You MUST delegate "
+            "dashboard design and the 3-Pass Executive Polish to the `lookml-dashboard-designer` subagent via "
+            "`invoke_subagent` (which loads the `looker-visualizations` skill suite, authors domain KPIs in "
+            "`views/refinements/*.view.lkml`, applies tailored palettes/Highcharts tokens, and runs "
+            "`demo-create lookml certify-polish`). Review the certified design with the user before proceeding."
         ),
         _is_complete=_gate_2b_complete,
         command_specs=(

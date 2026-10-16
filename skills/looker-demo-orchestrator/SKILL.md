@@ -116,7 +116,7 @@ The envelope reports:
 | **3** | `gate_1b_approve_schema` | Schema ERD & target row volume approval | **`true`** | `demo-create data approve-schema --row-count <row-count> --dataset <dataset-id>` |
 | **4** | `gate_1c_generate_data` | Modular DAG synthesis & BigQuery load | `false` | `demo-create data generate --schema-file <schema-file> --row-count <row-count> --gcp-project <gcp-project> --dataset <dataset-id> --upload --json-scorecard` |
 | **5** | `gate_1d_catalog` | Knowledge Catalog semantic curation & enrichment | **`true`** | `demo-create catalog seed --dataset <dataset-id> --gcp-project <gcp-project>` *(or `catalog inspect` / `catalog sync` / `--skip`)* |
-| **6** | `gate_2a_lookml_model` | Semantic LookML modeling & draft dashboard scaffolding | `false` | `demo-create lookml model --looker-project <looker-project> --dataset <dataset-id> --connection <connection-name> --gcp-project <gcp-project>` |
+| **6** | `gate_2a_lookml_model` | Semantic LookML modeling & draft dashboard scaffolding | `false` | `demo-create lookml model --looker-project <looker-project> --dataset <dataset-id> --connection <connection-name> --gcp-project <gcp-project> --layered` |
 | **7** | `gate_2b_certify_polish` | 3-Pass Executive Dashboard Polish & filtered measure audit | **`true`** | `demo-create lookml certify-polish --lookml-dir <lookml-dir>` |
 | **8** | `gate_3a_optimize` | LookML Server Performance Optimizer gate | **`true`** | `demo-create lookml optimize --lookml-dir <lookml-dir>` *(or `--skip`)* |
 | **9** | `gate_3b_deploy` | Pre-deployment LookML validation, query testing & production release | `false` | `demo-create lookml deploy --looker-project <looker-project> --lookml-dir <lookml-dir>` |
@@ -402,33 +402,38 @@ create_lookml_model(body={
 
 1. **Fast-Path CLI Scaffolding & Metadata Introspection (Parent Orchestrator)**:
    - At the start of Gate 6 (`gate_2a_lookml_model`), execute `bigquery-metadata` (`bq query` on `INFORMATION_SCHEMA` / `bq show`) and `knowledge-catalog-metadata` (`demo-create catalog inspect` or `gcloud dataplex`) via CLI to populate `SPEC.md` under `## Data Dictionary & Semantic Context` (including primary/foreign keys, null/distinct ratios, low-cardinality `suggestions`, and PII `access_grant` directives). Never invoke MCP servers.
-   - Run `demo-create lookml model` directly in the parent session:
+   - Run `demo-create lookml model --layered` directly in the parent session (`--layered` is enabled by default; pass `--no-layered` only to opt out):
      ```bash
      demo-create lookml model \
        --looker-project "${LOOKER_PROJECT}" \
        --dataset "${DATASET}" \
        --connection "${CONNECTION}" \
        --gcp-project "${PROJECT_ID}" \
+       --layered \
        [--catalog ".demo-catalog-${DATASET}.json"] \
        [--profile rich|hybrid|minimal]
      ```
+   - **Day-2 Extensibility via Layered LookML (`--layered` Default) & Safe Rollbacks**:
+     - Running `demo-create lookml model --layered` and `demo-create catalog sync --layered [--dry-run]` cleanly separates physical table structures (`views/base/*.view.lkml` — raw `sql_table_name`, `dimension`, `dimension_group`, and `primary_key` definitions without labels/descriptions) from semantic layer enrichments (`views/refinements/*.view.lkml` using `view: +view_name` refinements for curated labels, descriptions, synonyms/tags, formats, suggestions, and custom KPIs/measures).
+     - `.model.lkml` automatically includes both layers (`include: "/views/base/**/*.view.lkml"` and `include: "/views/refinements/**/*.view.lkml"`).
+     - When a customer adds columns in BigQuery or updates Dataplex Business Glossary terms on Day 2, CEs preview the exact diff with `demo-create catalog sync --layered --dry-run` and sync metadata without overwriting hand-crafted measures, `drill_fields:`, `set:`, `parameter:`, or `filter:` blocks in `views/refinements/*.view.lkml`, or dashboard tiles.
    - **Knowledge Catalog (Dataplex) Integration**:
      - **Auto-Discovery**: If `state.catalog_snapshot_path` is recorded or `.demo-catalog-<dataset>.json` exists in the current working directory, `lookml model` automatically discovers and applies catalog metadata (unless `--no-catalog` is passed).
      - **Mapping Profiles (`--profile`)**:
-       - `rich`: Curated Dataplex display labels & business descriptions on all views, dimensions, and measures. Generates filtered measures from glossary terms, and maps custom aspect types to LookML tags / dimension groups.
+       - `rich`: Curated Dataplex display labels & business descriptions on all views, dimensions, and measures in `views/refinements/*.view.lkml`. Generates filtered measures from glossary terms, and maps custom aspect types to LookML tags / dimension groups.
        - `hybrid` (default): Curated descriptions & labels where present, falling back to schema-derived identifiers.
        - `minimal`: Pure BigQuery schema-derived fields with descriptions preserved.
-     - **Curated Explores & Descriptions**: Explores in `.model.lkml` automatically inherit curated business labels (e.g. `explore: fct_orders { label: "Order Operations" ... }`) and view descriptions are preserved in the LookML view definitions.
+     - **Curated Explores & Descriptions**: Explores in `.model.lkml` automatically inherit curated business labels (e.g. `explore: fct_orders { label: "Order Operations" ... }`) and view descriptions are preserved in `views/refinements/*.view.lkml`.
    - **Mandatory `SELECT DISTINCT` Grounding ([`lookml-filtered-measures`](../lookml-filtered-measures/SKILL.md))**: Never guess categorical filter strings (e.g., `"2xx"`, `"active"`). Before writing any `filters: [...]` block inside a measure, inspect the actual distinct values in the local Parquet file or run `SELECT DISTINCT` against BigQuery so filtered measures and derived ratios (`SAFE_DIVIDE(${num}, NULLIF(${den}, 0))`) never evaluate to `0` or `NULL`.
-   - **Mandatory Field Standards**: Explicit `label:` and `description:` parameters on EVERY dimension, dimension group, and measure (Title Case, e.g. `label: "Monthly Recurring Revenue"`).
+   - **Mandatory Field Standards**: Explicit `label:` and `description:` parameters on EVERY dimension, dimension group, and measure in `views/refinements/*.view.lkml` (Title Case, e.g. `label: "Monthly Recurring Revenue"`).
 
 2. **Conditional Subagent Delegation (`lookml-snowflake-modeler` — Spawned ONLY for 3NF / Chasm Traps)**:
-   - If the schema is a standard Star schema ($D_1 \to F \leftarrow D_2$ with no `1:N` child fanout traps), proceed directly to **Gate 7 (`gate_2b_certify_polish`: Mandatory Executive Dashboard Polish)** without spawning a modeling subagent.
+   - If the schema is a standard Star schema ($D_1 \to F \leftarrow D_2$ with no `1:N` child fanout traps), proceed directly to **Gate 7 (`gate_2b_certify_polish`: Mandatory Executive Dashboard Polish via `lookml-dashboard-designer` Subagent)** without spawning a modeling subagent.
    - If the schema contains normalized **3NF / Snowflake structures with Chasm Traps** (multiple `1:N` child collections hanging off a parent entity) or **diamond role-playing joins**, spawn the **[`lookml-snowflake-modeler`](subagents/lookml-snowflake-modeler.md)** subagent:
 
 ```yaml
 subagent:
-  type: "skills/looker-demo-orchestrator/subagents/lookml-snowflake-modeler.md"
+  type: "lookml-snowflake-modeler"
   prompt: "Eliminate Chasm Traps and model 3NF snowflake relationships for {project_name}. Run schema_graph_analyzer.py, set Explore Base Views on leaf event facts, pre-aggregate child 1:N collections into Native Derived Tables (NDTs) joined one_to_one onto the parent Explore, and resolve diamond joins with role-playing aliases."
   inputs:
     project_name: "{looker_project_name}"
@@ -443,24 +448,24 @@ subagent:
 ### B. Gate 7 (`gate_2b_certify_polish`) — 3-Pass Executive Dashboard Polish & Filtered Measure Audit `[requires_human_confirmation=True]`
 
 > [!CAUTION]
-> ### 🛑 Why You Must NEVER Skip Dashboard Polish or Run `certify-polish` on Raw Scaffolding
+> ### 🛑 Why You Must ALWAYS Delegate Dashboard Design to `lookml-dashboard-designer` & NEVER Run `certify-polish` on Raw Scaffolding
 > Guard against four classic failure modes whenever generating or iterating on a LookML dashboard:
-> 1. **Never Run `demo-create lookml certify-polish` in the Same Turn as `demo-create lookml model` Without Customizing the Dashboard**: The CLI generator only synthesizes a **raw scaffolding draft** (`.dashboard.lookml`) with generic titles (`Total Field`, `Monthly Field & Volume Trajectory`, `Performance by Category`), NOT a finished product. `demo-create lookml certify-polish` actively scans for uncustomized `LookMLGenerator` scaffolding and returns `status: "FAILED_POLISH_CHECK"` (exit code `6`) with structured `agent_guidance` unless you first replace the scaffold with domain-specific KPIs and bespoke tiles using the `looker-visualizations` skill suite or the `lookml-dashboard-designer` subagent.
-> 2. **Verify Domain KPIs Against `SPEC.md` Before Calling `certify-polish`**: Confirm that every core domain metric defined in `SPEC.md` (e.g., Retention, Session Duration, Monetization/ARPU, SLA Breach Rate) is modeled in the LookML views and surfaced in the dashboard's KPI ribbon, trend charts, and breakdowns with domain-authentic titles and subtitles.
+> 1. **Mandatory Subagent Handoff (`invoke_subagent` with `lookml-dashboard-designer`)**: The parent orchestrator MUST NOT author or patch `.dashboard.lookml` directly in the main context window, and MUST NOT run `demo-create lookml certify-polish` in the same step as `demo-create lookml model` without first delegating to the `lookml-dashboard-designer` subagent via `invoke_subagent`. The CLI generator only synthesizes a **raw scaffolding draft** (`.dashboard.lookml`) with generic titles (`Total Field`, `Monthly Field & Volume Trajectory`, `Performance by Category`), which `demo-create lookml certify-polish` actively detects and rejects with `status: "FAILED_POLISH_CHECK"` (exit code `6`).
+> 2. **Verify Domain KPIs in `views/refinements/*.view.lkml` Against `SPEC.md`**: The `lookml-dashboard-designer` subagent reads and loads the visualization skills in Step 0, models core domain metrics from `SPEC.md` (e.g., Retention, Session Duration, Monetization/ARPU, SLA Breach Rate) inside `views/refinements/*.view.lkml` (never `views/base/*.view.lkml`), and surfaces them in the dashboard's KPI ribbon, trend charts, and breakdowns with domain-authentic titles and subtitles.
 > 3. **Never Mistake `HTTP 200 OK` Query Validation for Frontend Highcharts Validity**: Looker's `validate_project` and `run_inline_query` (`HTTP 200 OK`) only check LookML and SQL syntax — they do **NOT** validate client-side JavaScript/Highcharts configurations! Only 5 series types are permitted in `series_types:`: `column`, `bar`, `line`, `area`, and `scatter`. Never use `looker_*` wrappers (`looker_column`) or raw Highcharts curve types (`spline`, `areaspline`) inside `series_types:` — both pass SQL validation with `HTTP 200 OK` yet **crash Highcharts in the browser** (`TypeError: S[e.type] is not a constructor`). For smooth curves, use `line` or `area` in `series_types:` and configure curve styling via `advanced_vis_config`.
 > 4. **Hard State Precondition on `lookml deploy`**: `demo-create lookml deploy` enforces `state.polish_certified == True` and raises `StateError` (exit code `7`) if Gate 7 (`demo-create lookml certify-polish`) has not passed.
 
-#### Mandatory 3-Pass Dashboard Polish Protocol ([`dashboard-polish-standards.md`](../resources/dashboard-polish-standards.md)):
-After `demo-create lookml model` scaffolds the baseline LookML project, **always consult [`dashboard-polish-standards.md`](../resources/dashboard-polish-standards.md) and the `looker-visualizations` skill suite** ([`looker-visualizations`](../looker-visualizations/SKILL.md), [`looker-vis-advanced-config`](../looker-visualizations/looker-vis-advanced-config/SKILL.md), [`looker-vis-cartesian`](../looker-visualizations/looker-vis-cartesian/SKILL.md), [`looker-vis-tabular-kpi`](../looker-visualizations/looker-vis-tabular-kpi/SKILL.md), [`looker-vis-specialty-maps`](../looker-visualizations/looker-vis-specialty-maps/SKILL.md)) — either directly or via the **[`lookml-dashboard-designer`](subagents/lookml-dashboard-designer.md)** subagent — to enforce:
-1. **Highcharts `series_types` Audit**: Root `type:` uses `looker_*` wrappers; `series_types:` uses ** ONLY Looker's 5 supported series types** (`column`, `bar`, `line`, `area`, `scatter`) — never `looker_column`, `spline`, or `areaspline`.
+#### Mandatory Subagent Handoff & 3-Pass Dashboard Polish Protocol ([`dashboard-polish-standards.md`](../resources/dashboard-polish-standards.md)):
+Immediately after `demo-create lookml model` scaffolds the baseline LookML project, **you MUST invoke the [`lookml-dashboard-designer`](subagents/lookml-dashboard-designer.md) subagent**. Inside its isolated context, the subagent loads the `looker-visualizations` skill suite ([`lookml-dashboard`](../lookml-dashboard/SKILL.md), [`looker-visualizations`](../looker-visualizations/SKILL.md), [`looker-vis-advanced-config`](../looker-visualizations/looker-vis-advanced-config/SKILL.md), [`looker-vis-cartesian`](../looker-visualizations/looker-vis-cartesian/SKILL.md), [`looker-vis-tabular-kpi`](../looker-visualizations/looker-vis-tabular-kpi/SKILL.md), [`looker-vis-specialty-maps`](../looker-visualizations/looker-vis-specialty-maps/SKILL.md), [`lookml-filtered-measures`](../lookml-filtered-measures/SKILL.md)) and enforces:
+1. **Highcharts `series_types` Audit**: Root `type:` uses `looker_*` wrappers; `series_types:` uses **ONLY Looker's 5 supported series types** (`column`, `bar`, `line`, `area`, `scatter`) — never `looker_column`, `spline`, or `areaspline`.
 2. **Modern Geometry Tokens via `advanced_vis_config`**: Rounded bars (`borderRadius: 4`), transparent chart surfaces (`"backgroundColor": "transparent", "borderRadius": 8`), shadow tooltips, and centered legends (`legend_position: center`).
 3. **Donut Charts with Curated Palettes**: `type: looker_pie`, `show_donut: true`, `inner_radius: 50`, and `SELECT DISTINCT`-grounded `series_colors:`.
 4. **Transparent Data Grids & Section Headers**: `looker_grid` with `table_theme: transparent` and `series_cell_visualizations` data bars, plus native `type: text` headers at `row: 0` (no hardcoded HTML gradient banners) and independent dual-axis ranges (`y_axis_combined: false`, `y_axis_unpinned: true`).
 
 ```yaml
 subagent:
-  type: "skills/looker-demo-orchestrator/subagents/lookml-dashboard-designer.md"
-  prompt: "Execute the 3-Pass Executive Dashboard Polish protocol for {project_name} following skills/resources/dashboard-polish-standards.md and looker-visualizations."
+  type: "lookml-dashboard-designer"
+  prompt: "Execute the 3-Pass Executive Dashboard Polish protocol for {project_name}. First read and load the required visualization skills, author custom domain KPIs in views/refinements/*.view.lkml, customize dashboards/*.dashboard.lookml following skills/resources/dashboard-polish-standards.md, and run demo-create lookml certify-polish --lookml-dir {lookml_dir}."
   inputs:
     project_name: "{looker_project_name}"
     model_name: "{looker_model_name}"
@@ -469,14 +474,14 @@ subagent:
     domain_theme: "{domain_theme}"
 ```
 
-Once the dashboard tiles and views are customized with domain KPIs and visual polish, confirm with the user (`requires_human_confirmation=True`) that the 3-Pass Executive Dashboard Polish has been applied, then **certify Gate 7 (`gate_2b_certify_polish`)** via the CLI:
+Once the `lookml-dashboard-designer` subagent completes its work, review the customized dashboard design with the user (`requires_human_confirmation=True`) and **certify Gate 7 (`gate_2b_certify_polish`)** via the CLI:
 
 ```bash
 demo-create lookml certify-polish --lookml-dir <lookml-dir>
 ```
 
 > [!IMPORTANT]
-> **Handling `FAILED_POLISH_CHECK`**: If `demo-create lookml certify-polish` returns exit code `6` (`status: "FAILED_POLISH_CHECK"`), read the `data.agent_guidance` payload (`recommended_skills` and `subagent_command`), customize the `.dashboard.lookml` file using those skills or the `lookml-dashboard-designer` subagent, and re-run `demo-create lookml certify-polish` without `--force-scaffold`. Only pass `--force-scaffold` if the human user explicitly instructs you to bypass custom dashboard design.
+> **Handling `FAILED_POLISH_CHECK`**: If `demo-create lookml certify-polish` returns exit code `6` (`status: "FAILED_POLISH_CHECK"`), read the `data.agent_guidance` payload (`recommended_skills` and `subagent_command`), delegate to the `lookml-dashboard-designer` subagent via `invoke_subagent` to customize the `.dashboard.lookml` file and `views/refinements/*.view.lkml`, and re-run `demo-create lookml certify-polish` without `--force-scaffold`. Only pass `--force-scaffold` if the human user explicitly instructs you to bypass custom dashboard design.
 
 ---
 

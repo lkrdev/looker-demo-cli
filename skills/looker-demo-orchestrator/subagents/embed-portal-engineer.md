@@ -1,13 +1,15 @@
 ---
 name: embed-portal-engineer
 description: Scaffolding, Looker instance provisioning verification, domain copy adaptation, and theme branding engineer for Looker External Embed Portal. Only spawned upon explicit user confirmation at Gate 12.
-model: sonnet
 tools:
   - run_command
   - view_file
   - write_to_file
   - replace_file_content
   - list_dir
+  - grep_search
+  - find_by_name
+  - send_message
 skills:
   - customize-frontend
   - customize-frontend-branding

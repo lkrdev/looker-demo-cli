@@ -9,6 +9,7 @@ from pydantic import BaseModel
 
 from looker_demo_cli.config import (
     DEPRECATED_SKILLS,
+    GEMINI_AGENTS_DIR,
     GEMINI_SKILLS_DIR,
     INTENT_SKILL_DEFINITIONS,
     SKILL_GIT_REPOSITORIES,
@@ -133,11 +134,33 @@ def prune_deprecated_skills(skills_dir: Path | None = None) -> list[str]:
     return pruned
 
 
+def install_subagent_definitions(agents_dir: Path | None = None) -> list[str]:
+    """Copy subagent markdown definitions into ~/.gemini/config/agents/."""
+    target_dir = agents_dir or GEMINI_AGENTS_DIR
+    installed: list[str] = []
+    local_cli_root = Path(__file__).resolve().parent.parent.parent
+    subagents_src = local_cli_root / "skills" / "looker-demo-orchestrator" / "subagents"
+    if not subagents_src.exists():
+        return installed
+
+    try:
+        target_dir.mkdir(parents=True, exist_ok=True)
+        for md_file in sorted(subagents_src.glob("*.md")):
+            dest = target_dir / md_file.name
+            shutil.copy2(md_file, dest)
+            installed.append(str(dest))
+    except Exception as e:
+        print_warning(f"Could not install subagent definitions into `{target_dir}`: {e}")
+
+    return installed
+
+
 def audit_and_organize_skills(fix: bool = False) -> list[SkillInstallStatus]:
     """Audit and organize skills by intent category into ~/.gemini/config/skills/."""
     GEMINI_SKILLS_DIR.mkdir(parents=True, exist_ok=True)
     if fix:
         prune_deprecated_skills(GEMINI_SKILLS_DIR)
+        install_subagent_definitions(GEMINI_AGENTS_DIR)
 
     repo_paths = sync_remote_skill_repos(fix=fix)
     local_cli_root = Path(__file__).resolve().parent.parent.parent

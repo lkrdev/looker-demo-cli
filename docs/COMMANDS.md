@@ -44,7 +44,7 @@ Failures are reported by exit code, so a caller never has to parse prose:
 | **3** | `gate_1b_approve_schema` | Schema ERD & target row volume approval | **`true`** | `demo-create data approve-schema --row-count <row-count> --dataset <dataset-id>` |
 | **4** | `gate_1c_generate_data` | Modular DAG synthesis & BigQuery load | `false` | `demo-create data generate --schema-file <schema-file> --row-count <row-count> --gcp-project <gcp-project> --dataset <dataset-id> --upload --json-scorecard` |
 | **5** | `gate_1d_catalog` | Knowledge Catalog semantic curation & enrichment | **`true`** | `demo-create catalog seed --dataset <dataset-id> --gcp-project <gcp-project>` *(or `catalog inspect` / `catalog sync` / `--skip`)* |
-| **6** | `gate_2a_lookml_model` | Semantic LookML modeling & draft dashboard scaffolding | `false` | `demo-create lookml model --looker-project <looker-project> --dataset <dataset-id> --connection <connection-name> --gcp-project <gcp-project>` |
+| **6** | `gate_2a_lookml_model` | Semantic LookML modeling & draft dashboard scaffolding | `false` | `demo-create lookml model --looker-project <looker-project> --dataset <dataset-id> --connection <connection-name> --gcp-project <gcp-project> --layered` |
 | **7** | `gate_2b_certify_polish` | 3-Pass Executive Dashboard Polish & filtered measure audit | **`true`** | `demo-create lookml certify-polish --lookml-dir <lookml-dir>` |
 | **8** | `gate_3a_optimize` | LookML Server Performance Optimizer gate | **`true`** | `demo-create lookml optimize --lookml-dir <lookml-dir>` *(or `--skip`)* |
 | **9** | `gate_3b_deploy` | Pre-deployment LookML validation, query testing & production release | `false` | `demo-create lookml deploy --looker-project <looker-project> --lookml-dir <lookml-dir>` |
@@ -706,7 +706,7 @@ demo-create lookml model [OPTIONS]
 | `--catalog` | Path to a CatalogSnapshot JSON file to enrich LookML with Knowledge Catalog metadata |  |
 | `--profile` | Knowledge Catalog mapping profile ('rich', 'hybrid', 'minimal'). Defaults to snapshot recommendation |  |
 | `--use-catalog`, `--no-catalog` | Explicitly enable or disable Knowledge Catalog metadata enrichment |  |
-| `--layered`, `--no-layered` | Generate layered LookML (views/base/ for physical schema, views/refinements/ for semantic layer) |  |
+| `--layered`, `--no-layered` | Generate layered LookML (views/base/ for physical schema, views/refinements/ for semantic layer) | `true` |
 | `--json` | Emit the result envelope as JSON on stdout |  |
 | `--state-file` | Path to .demo-state.json. Defaults to discovering it in the current directory. |  |
 

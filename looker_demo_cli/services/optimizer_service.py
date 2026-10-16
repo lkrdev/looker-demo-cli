@@ -37,7 +37,7 @@ def optimize_lookml_project(lookml_dir: Path, backup: bool = True) -> dict[str, 
             if backup_dir.exists():
                 shutil.rmtree(backup_dir)
             backup_dir.mkdir(parents=True, exist_ok=True)
-            for f in lookml_dir.rglob("*.lkml"):
+            for f in list(lookml_dir.rglob("*.lkml")) + list(lookml_dir.rglob("*.lookml")):
                 if ".backup_pre_opt" in f.parts:
                     continue
                 rel = f.relative_to(lookml_dir)
@@ -72,35 +72,72 @@ def optimize_lookml_project(lookml_dir: Path, backup: bool = True) -> dict[str, 
         "primary_keys_asserted": 0,
     }
 
+    # Pre-scan all view files so layered refinement views know which dimensions are primary keys in base views
+    # and base views know which dimensions are already refined in views/refinements/.
+    dim_pattern = re.compile(r"(\s*dimension:\s*([a-zA-Z0-9_]+)\s*\{[^}]*?\})", re.DOTALL)
+    known_pks: set[tuple[str, str]] = set()
+    refinement_dims: set[tuple[str, str]] = set()
+    for vf in view_files:
+        try:
+            vf_text = vf.read_text(encoding="utf-8")
+        except Exception:
+            continue
+        vm = re.search(r"view:\s+\+?([a-zA-Z0-9_]+)\s*\{", vf_text)
+        v_name = vm.group(1) if vm else vf.stem.replace(".refinement", "").replace(".view", "").replace("+", "")
+        is_ref_file = "refinements" in vf.parts or vf.name.endswith(".refinement.lkml") or "view: +" in vf_text
+        for dm in dim_pattern.finditer(vf_text):
+            d_block, d_name = dm.group(0), dm.group(2)
+            if "primary_key: yes" in d_block:
+                known_pks.add((v_name, d_name))
+            if is_ref_file:
+                refinement_dims.add((v_name, d_name))
+
     # -------------------------------------------------------------------------
     # 1 & 2 & 5: Optimize Views
     # -------------------------------------------------------------------------
     for v_file in view_files:
         content = v_file.read_text(encoding="utf-8")
         original = content
+        vm = re.search(r"view:\s+\+?([a-zA-Z0-9_]+)\s*\{", content)
+        v_name = vm.group(1) if vm else v_file.stem.replace(".refinement", "").replace(".view", "").replace("+", "")
+        is_base_file = "base" in v_file.parts
 
-        def patch_pk(match: re.Match) -> str:
+        def patch_pk(match: re.Match, _v_name: str = v_name, _is_base: bool = is_base_file) -> str:
             block = match.group(0)
+            dim_name = match.group(2)
             nonlocal stats
+            if _is_base and (_v_name, dim_name) in refinement_dims:
+                return block
             if "primary_key: yes" in block and "suggestable:" not in block:
                 stats["suggestable_disabled_count"] += 1
                 stats["primary_keys_asserted"] += 1
                 return block.replace("primary_key: yes", "primary_key: yes\n    suggestable: no")
             return block
 
-        dim_pattern = re.compile(r"(\s*dimension:\s*([a-zA-Z0-9_]+)\s*\{[^}]*?\})", re.DOTALL)
         content = dim_pattern.sub(patch_pk, content)
 
-        def patch_dim_fields(match: re.Match) -> str:
+        def patch_dim_fields(match: re.Match, _v_name: str = v_name, _is_base: bool = is_base_file) -> str:
             block = match.group(0)
             dim_name = match.group(2)
             nonlocal stats
 
+            # Never treat a known primary key as a foreign key in refinement views (add suggestable: no, never hidden: yes)
+            if (_v_name, dim_name) in known_pks or "primary_key: yes" in block:
+                if not _is_base and "primary_key: yes" not in block and "suggestable:" not in block:
+                    stats["suggestable_disabled_count"] += 1
+                    stats["primary_keys_asserted"] += 1
+                    return re.sub(r"(dimension:\s*[a-zA-Z0-9_]+\s*\{)", r"\1\n    suggestable: no", block, count=1)
+                return block
+
+            # In layered projects, if this dimension is refined in views/refinements/,
+            # apply semantic/UI optimizations in the refinement layer rather than duplicating in base.
+            if _is_base and (_v_name, dim_name) in refinement_dims:
+                return block
+
             modified_block = block
-            if (
-                dim_name.endswith("_id")
-                or any(k in dim_name.lower() for k in ["uuid", "hash", "token", "payload", "raw_content"])
-            ) and "primary_key: yes" not in block:
+            if dim_name.endswith("_id") or any(
+                k in dim_name.lower() for k in ["uuid", "hash", "token", "payload", "raw_content"]
+            ):
                 if "suggestable:" not in modified_block:
                     modified_block = re.sub(
                         r"(dimension:\s*[a-zA-Z0-9_]+\s*\{)", r"\1\n    suggestable: no", modified_block, count=1
@@ -248,7 +285,7 @@ def restore_lookml_backup(lookml_dir: Path) -> dict[str, Any]:
 
     restored_files: list[str] = []
     try:
-        for f in backup_dir.rglob("*.lkml"):
+        for f in list(backup_dir.rglob("*.lkml")) + list(backup_dir.rglob("*.lookml")):
             rel = f.relative_to(backup_dir)
             dest = lookml_dir / rel
             dest.parent.mkdir(parents=True, exist_ok=True)
