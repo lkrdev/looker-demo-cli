@@ -13,7 +13,11 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from looker_demo_cli.catalog.models import CatalogSnapshot
-from looker_demo_cli.generators.lookml_generator import LookMLGenerator, LookMLTableSpec
+from looker_demo_cli.generators.lookml_generator import (
+    NUMERIC_TYPES,
+    LookMLGenerator,
+    LookMLTableSpec,
+)
 from looker_demo_cli.services.catalog_service import snapshot_to_table_specs
 
 
@@ -85,6 +89,7 @@ class ParsedTable(BaseModel):
     business_label: str | None = None
     description: str | None = None
     columns: dict[str, ParsedColumn] = Field(default_factory=dict)
+    measures: dict[str, str] = Field(default_factory=dict)
     custom_blocks: list[str] = Field(default_factory=list)
     base_file: Path | None = None
     refinement_file: Path | None = None
@@ -121,10 +126,13 @@ def _parse_column_block(d_type: str, d_name: str, body: str) -> ParsedColumn:
     return col
 
 
-def _extract_blocks_from_lookml(content: str) -> tuple[dict[str, ParsedColumn], list[str], str | None, str | None]:
-    """Extract columns, custom user-defined blocks, view label, and view description from LookML content."""
+def _extract_blocks_from_lookml(
+    content: str,
+) -> tuple[dict[str, ParsedColumn], list[str], str | None, str | None, dict[str, str]]:
+    """Extract columns, custom user-defined blocks, view label, view description, and raw measures from LookML."""
     columns: dict[str, ParsedColumn] = {}
     custom_blocks: list[str] = []
+    measures: dict[str, str] = {}
 
     # View-level label and description
     view_label = None
@@ -152,17 +160,34 @@ def _extract_blocks_from_lookml(content: str) -> tuple[dict[str, ParsedColumn], 
     # 3. Match measures and custom blocks
     measure_pattern = re.compile(r"(\s*measure:\s*([a-zA-Z0-9_]+)\s*\{((?:[^{}]|\{[^{}]*\})*)\})", re.DOTALL)
     for m in measure_pattern.finditer(content):
-        raw_full, m_name, _ = m.groups()
-        # If it's not a standard generated measure, treat as custom user measure
-        if not (
-            m_name == "count"
-            or m_name.startswith("count_distinct_")
-            or m_name.startswith("total_")
-            or m_name.startswith("average_")
+        raw_full, m_name, m_body = m.groups()
+        clean_block = raw_full.strip()
+        measures[m_name] = clean_block
+        # If it's not a standard generated measure prefix, or has filters/drill_fields, record in custom_blocks
+        if (
+            not (
+                m_name == "count"
+                or m_name.startswith("count_distinct_")
+                or m_name.startswith("total_")
+                or m_name.startswith("average_")
+            )
+            or "filters:" in m_body
+            or "drill_fields:" in m_body
         ):
-            custom_blocks.append(raw_full.strip())
+            if clean_block not in custom_blocks:
+                custom_blocks.append(clean_block)
 
-    return columns, custom_blocks, view_label, view_desc
+    # 4. Match set:, parameter:, and filter: blocks
+    extra_block_pattern = re.compile(
+        r"(\s*(?:set|parameter|filter):\s*([a-zA-Z0-9_]+)\s*\{((?:[^{}]|\{[^{}]*\})*)\})",
+        re.DOTALL,
+    )
+    for m in extra_block_pattern.finditer(content):
+        raw_full = m.group(1).strip()
+        if raw_full not in custom_blocks:
+            custom_blocks.append(raw_full)
+
+    return columns, custom_blocks, view_label, view_desc, measures
 
 
 def parse_existing_lookml_project(lookml_dir: Path) -> dict[str, ParsedTable]:
@@ -178,26 +203,33 @@ def parse_existing_lookml_project(lookml_dir: Path) -> dict[str, ParsedTable]:
 
     # 1. Parse base views
     if base_dir.exists():
-        for b_file in base_dir.glob("*.view.lkml"):
+        for b_file in sorted(base_dir.glob("*.view.lkml")):
             t_name = b_file.stem.replace(".view", "")
             content = b_file.read_text(encoding="utf-8")
-            cols, custom, v_lbl, v_desc = _extract_blocks_from_lookml(content)
+            cols, custom, v_lbl, v_desc, meas = _extract_blocks_from_lookml(content)
             tables[t_name] = ParsedTable(
                 table_name=t_name,
                 business_label=v_lbl,
                 description=v_desc,
                 columns=cols,
+                measures=meas,
                 custom_blocks=custom,
                 base_file=b_file,
                 is_layered=True,
             )
 
-    # 2. Parse refinement views
+    # 2. Parse refinement views (.view.lkml and legacy .refinement.lkml)
     if refinements_dir.exists():
-        for r_file in list(refinements_dir.glob("*.refinement.lkml")) + list(refinements_dir.glob("*.view.lkml")):
+        ref_files = sorted(
+            {
+                f.resolve(): f
+                for f in list(refinements_dir.glob("*.refinement.lkml")) + list(refinements_dir.glob("*.view.lkml"))
+            }.values()
+        )
+        for r_file in ref_files:
             t_name = r_file.stem.replace(".refinement", "").replace(".view", "").replace("+", "")
             content = r_file.read_text(encoding="utf-8")
-            cols, custom, v_lbl, v_desc = _extract_blocks_from_lookml(content)
+            cols, custom, v_lbl, v_desc, meas = _extract_blocks_from_lookml(content)
             if t_name in tables:
                 tbl = tables[t_name]
                 tbl.refinement_file = r_file
@@ -220,13 +252,17 @@ def parse_existing_lookml_project(lookml_dir: Path) -> dict[str, ParsedTable]:
                             existing.suggestions = c_meta.suggestions
                     else:
                         tbl.columns[c_name] = c_meta
-                tbl.custom_blocks.extend(custom)
+                tbl.measures.update(meas)
+                for cb in custom:
+                    if cb not in tbl.custom_blocks:
+                        tbl.custom_blocks.append(cb)
             else:
                 tables[t_name] = ParsedTable(
                     table_name=t_name,
                     business_label=v_lbl,
                     description=v_desc,
                     columns=cols,
+                    measures=meas,
                     custom_blocks=custom,
                     refinement_file=r_file,
                     is_layered=True,
@@ -236,9 +272,9 @@ def parse_existing_lookml_project(lookml_dir: Path) -> dict[str, ParsedTable]:
     views_dir = lookml_dir / "views"
     candidate_views = []
     if views_dir.exists():
-        for f in views_dir.glob("*.view.lkml"):
+        for f in sorted(views_dir.glob("*.view.lkml")):
             candidate_views.append(f)
-    for f in lookml_dir.glob("*.view.lkml"):
+    for f in sorted(lookml_dir.glob("*.view.lkml")):
         if f not in candidate_views:
             candidate_views.append(f)
 
@@ -248,12 +284,13 @@ def parse_existing_lookml_project(lookml_dir: Path) -> dict[str, ParsedTable]:
         if t_name in tables and tables[t_name].is_layered:
             continue
         content = v_file.read_text(encoding="utf-8")
-        cols, custom, v_lbl, v_desc = _extract_blocks_from_lookml(content)
+        cols, custom, v_lbl, v_desc, meas = _extract_blocks_from_lookml(content)
         tables[t_name] = ParsedTable(
             table_name=t_name,
             business_label=v_lbl,
             description=v_desc,
             columns=cols,
+            measures=meas,
             custom_blocks=custom,
             monolithic_file=v_file,
             is_layered=has_layered,
@@ -413,6 +450,16 @@ def diff_catalog_against_lookml(
     return report
 
 
+def _standard_measure_names(spec: LookMLTableSpec) -> set[str]:
+    """Return the set of standard measure names auto-generated for ``spec``."""
+    names = {"count", f"count_distinct_{spec.table_name}"}
+    for col_name, col_type in spec.schema_fields.items():
+        if col_type.upper() in NUMERIC_TYPES and col_name != spec.primary_key and not col_name.endswith("_id"):
+            names.add(f"total_{col_name}")
+            names.add(f"average_{col_name}")
+    return names
+
+
 def _append_custom_blocks_to_lookml(content: str, custom_blocks: list[str]) -> str:
     """Safely append user-defined custom blocks before the closing brace of a LookML view."""
     if not custom_blocks:
@@ -424,6 +471,49 @@ def _append_custom_blocks_to_lookml(content: str, custom_blocks: list[str]) -> s
 
     blocks_str = "\n\n".join(f"  {b}" for b in custom_blocks)
     return f"{content}\n\n  # -------------------------------------------------------------\n  # Custom User-Defined Fields (Preserved by catalog sync)\n  # -------------------------------------------------------------\n{blocks_str}\n}}\n"
+
+
+def _preserve_custom_measures_and_blocks(
+    generated_content: str,
+    parsed: ParsedTable | None,
+    spec: LookMLTableSpec,
+) -> str:
+    """Preserve custom measures, customized standard measures, sets, parameters, filters, and custom dimensions."""
+    if parsed is None:
+        return generated_content
+
+    std_names = _standard_measure_names(spec)
+    extra_blocks: list[str] = []
+
+    # 1. Handle measures: in-place replacement for customized standard measures, append for custom measures
+    for m_name, m_block in parsed.measures.items():
+        if m_name in std_names:
+            if "filters:" in m_block or "drill_fields:" in m_block:
+                pattern = re.compile(
+                    rf"(\s*measure:\s*{re.escape(m_name)}\s*\{{(?:[^{{}}]|\{{[^{{}}]*\}})*\}})",
+                    re.DOTALL,
+                )
+                if pattern.search(generated_content):
+                    generated_content = pattern.sub(f"\n  {m_block}", generated_content, count=1)
+                elif m_block not in extra_blocks:
+                    extra_blocks.append(m_block)
+        else:
+            if m_block not in extra_blocks:
+                extra_blocks.append(m_block)
+
+    # 2. Handle non-measure custom blocks (sets, parameters, filters, or any other custom_blocks)
+    for cb in parsed.custom_blocks:
+        if not cb.lstrip().startswith("measure:") and cb not in extra_blocks:
+            extra_blocks.append(cb)
+
+    # 3. Handle custom calculated dimensions not present in schema_fields
+    for c_name, c_col in parsed.columns.items():
+        if c_name not in spec.schema_fields:
+            is_time_group = any(f_name.startswith(c_name) and f_name != c_name for f_name in spec.schema_fields)
+            if not is_time_group and c_col.raw_block and c_col.raw_block not in extra_blocks:
+                extra_blocks.append(c_col.raw_block)
+
+    return _append_custom_blocks_to_lookml(generated_content, extra_blocks)
 
 
 def sync_catalog_to_lookml(
@@ -485,7 +575,10 @@ def sync_catalog_to_lookml(
             b_path.write_text(gen.generate_base_view_lkml(spec), encoding="utf-8")
             report.files_created.append(str(b_path.relative_to(lookml_dir)))
 
-            r_path = refinements_dir / f"{tbl_name}.refinement.lkml"
+            r_path = refinements_dir / f"{tbl_name}.view.lkml"
+            legacy_r_path = refinements_dir / f"{tbl_name}.refinement.lkml"
+            if legacy_r_path.exists():
+                legacy_r_path.unlink()
             r_path.write_text(gen.generate_refinement_view_lkml(spec), encoding="utf-8")
             report.files_created.append(str(r_path.relative_to(lookml_dir)))
         else:
@@ -499,18 +592,6 @@ def sync_catalog_to_lookml(
     for tbl_name in report.tables_modified:
         spec = specs_by_table[tbl_name]
         parsed = parsed_tables.get(tbl_name)
-        custom = list(parsed.custom_blocks) if parsed else []
-        if parsed:
-            for c_name, c_col in parsed.columns.items():
-                if c_name not in spec.schema_fields:
-                    is_time_group = False
-                    for f_name in spec.schema_fields:
-                        if f_name.startswith(c_name) and f_name != c_name:
-                            is_time_group = True
-                            break
-                    if not is_time_group and c_col.raw_block:
-                        if c_col.raw_block not in custom:
-                            custom.append(c_col.raw_block)
 
         if use_layered:
             base_dir = lookml_dir / "views" / "base"
@@ -528,9 +609,17 @@ def sync_catalog_to_lookml(
                 b_path.write_text(b_content, encoding="utf-8")
                 report.files_updated.append(str(b_path.relative_to(lookml_dir)))
 
-            r_path = refinements_dir / f"{tbl_name}.refinement.lkml"
+            r_path = refinements_dir / f"{tbl_name}.view.lkml"
+            legacy_r_path = refinements_dir / f"{tbl_name}.refinement.lkml"
+            if legacy_r_path.exists():
+                legacy_r_path.unlink()
+            # If migrating from monolithic to layered, clean up superseded monolithic view
+            mono_path = lookml_dir / "views" / f"{tbl_name}.view.lkml"
+            if mono_path.exists():
+                mono_path.unlink()
+
             new_ref = gen.generate_refinement_view_lkml(spec)
-            preserved_ref = _append_custom_blocks_to_lookml(new_ref, custom)
+            preserved_ref = _preserve_custom_measures_and_blocks(new_ref, parsed, spec)
             r_path.write_text(preserved_ref, encoding="utf-8")
             if str(r_path.relative_to(lookml_dir)) not in report.files_updated:
                 report.files_updated.append(str(r_path.relative_to(lookml_dir)))
@@ -538,7 +627,7 @@ def sync_catalog_to_lookml(
             views_dir = lookml_dir / "views"
             v_path = views_dir / f"{tbl_name}.view.lkml"
             new_v = gen.generate_view_lkml(spec)
-            preserved_v = _append_custom_blocks_to_lookml(new_v, custom)
+            preserved_v = _preserve_custom_measures_and_blocks(new_v, parsed, spec)
             v_path.write_text(preserved_v, encoding="utf-8")
             report.files_updated.append(str(v_path.relative_to(lookml_dir)))
 
@@ -548,16 +637,20 @@ def sync_catalog_to_lookml(
         if models_dir.exists():
             for m_file in models_dir.glob("*.model.lkml"):
                 m_content = m_file.read_text(encoding="utf-8")
-                if 'include: "/views/refinements/**/*.refinement.lkml"' not in m_content:
-                    # Update includes
-                    if 'include: "/views/**/*.view.lkml"' in m_content:
+                if 'include: "/views/refinements/**/*.view.lkml"' not in m_content:
+                    if 'include: "/views/refinements/**/*.refinement.lkml"' in m_content:
+                        m_content = m_content.replace(
+                            'include: "/views/refinements/**/*.refinement.lkml"',
+                            'include: "/views/refinements/**/*.view.lkml"',
+                        )
+                    elif 'include: "/views/**/*.view.lkml"' in m_content:
                         m_content = m_content.replace(
                             'include: "/views/**/*.view.lkml"',
-                            'include: "/views/base/**/*.view.lkml"\ninclude: "/views/refinements/**/*.refinement.lkml"',
+                            'include: "/views/base/**/*.view.lkml"\ninclude: "/views/refinements/**/*.view.lkml"',
                         )
                     else:
                         m_content = (
-                            'include: "/views/base/**/*.view.lkml"\ninclude: "/views/refinements/**/*.refinement.lkml"\n'
+                            'include: "/views/base/**/*.view.lkml"\ninclude: "/views/refinements/**/*.view.lkml"\n'
                             + m_content
                         )
                     m_file.write_text(m_content, encoding="utf-8")

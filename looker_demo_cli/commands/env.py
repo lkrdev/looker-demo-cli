@@ -11,8 +11,8 @@ import typer
 from rich.table import Table
 
 from looker_demo_cli.commands.options import StateFileOption
-from looker_demo_cli.context import get_context
-from looker_demo_cli.error_boundary import ErrorHandlingGroup
+from looker_demo_cli.commands.runner import init_command_context
+from looker_demo_cli.error_boundary import make_typer
 from looker_demo_cli.errors import ConfigError
 from looker_demo_cli.precheck.env_checker import (
     RuntimeEnvironmentStatus,
@@ -27,11 +27,9 @@ from looker_demo_cli.utils.console import (
     print_warning,
 )
 
-env_app = typer.Typer(
+env_app = make_typer(
     name="env",
     help="Manage local demo workspace virtual environment and runtime health.",
-    no_args_is_help=True,
-    cls=ErrorHandlingGroup,
 )
 
 
@@ -113,8 +111,7 @@ def env_init(
     # This command reads no state, but every command in the CLI accepts
     # --state-file: a caller scripting the gated flow should never have to
     # remember which subset honours it.
-    app_ctx = get_context(ctx)
-    app_ctx.use_state_file(state_file)
+    init_command_context(ctx, state_file=state_file)
 
     # Resolved here rather than as `= Path.cwd()` in the signature: a default
     # expression is evaluated once at import, freezing whichever directory the
@@ -142,8 +139,7 @@ def env_info(ctx: typer.Context, state_file: StateFileOption = None):
         state_file: Optional explicit path to ``.demo-state.json``.
     """
     # Accepted for the same uniformity reason as `env init`, above.
-    app_ctx = get_context(ctx)
-    app_ctx.use_state_file(state_file)
+    init_command_context(ctx, state_file=state_file)
 
     env_status = check_runtime_environment()
     render_env_tables(env_status)

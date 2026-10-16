@@ -557,10 +557,10 @@ def test_catalog_sync_dry_run_and_apply(invoke, tmp_path: Path, isolated_cwd: Pa
     assert res_apply.exit_code == 0, res_apply.output
     payload_apply = envelope(res_apply)
     assert payload_apply["data"]["dry_run"] is False
-    assert (lookml_dir / "views" / "refinements" / "dim_users.refinement.lkml").exists()
+    assert (lookml_dir / "views" / "refinements" / "dim_users.view.lkml").exists()
     assert (lookml_dir / "views" / "base" / "dim_users.view.lkml").exists()
 
-    ref_text = (lookml_dir / "views" / "refinements" / "dim_users.refinement.lkml").read_text()
+    ref_text = (lookml_dir / "views" / "refinements" / "dim_users.view.lkml").read_text()
     assert 'label: "Platform Accounts"' in ref_text
 
 

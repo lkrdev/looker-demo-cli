@@ -31,23 +31,25 @@ persisted state, so it cannot drift from what has actually happened.
 
 ### The 15 Granular Gates (`0..14`)
 
-| Gate | ID | Human Pause? | Canonical CLI Command |
-| ---: | :--- | :---: | :--- |
-| **0** | `gate_0a_precheck` | `false` | `demo-create pre-check --fix --gcp-project <gcp-project>` |
-| **1** | `gate_0b_confirm_targets` | **`true`** | `demo-create confirm-targets --gcp-account <gcp-account> --gcp-project <gcp-project> --looker-account <looker-account> --connection <connection-name> [--mode full\|bq_only]` *(in `bq_only` mode, Gates 6–13 auto-complete after Gate 5 `gate_1d_catalog` and advance to Gate 14 `gate_7_stream`; `--looker-account` / `--connection` are optional)* |
-| **2** | `gate_1a_propose_schema` | `false` | `demo-create data propose-schema --schema-file <schema-file> --preview` |
-| **3** | `gate_1b_approve_schema` | **`true`** | `demo-create data approve-schema --row-count <row-count> --dataset <dataset-id>` |
-| **4** | `gate_1c_generate_data` | `false` | `demo-create data generate --schema-file <schema-file> --row-count <row-count> --gcp-project <gcp-project> --dataset <dataset-id> --upload --json-scorecard` |
-| **5** | `gate_1d_catalog` | **`true`** | `demo-create catalog seed --dataset <dataset-id> --gcp-project <gcp-project>` *(or `catalog inspect` / `catalog sync` / `--skip`)* |
-| **6** | `gate_2a_lookml_model` | `false` | `demo-create lookml model --looker-project <looker-project> --dataset <dataset-id> --connection <connection-name> --gcp-project <gcp-project>` |
-| **7** | `gate_2b_certify_polish` | **`true`** | `demo-create lookml certify-polish --lookml-dir <lookml-dir>` |
-| **8** | `gate_3a_optimize` | **`true`** | `demo-create lookml optimize --lookml-dir <lookml-dir>` *(or `--skip`)* |
-| **9** | `gate_3b_deploy` | `false` | `demo-create lookml deploy --looker-project <looker-project> --lookml-dir <lookml-dir>` |
-| **10** | `gate_3c_critique` | **`true`** | `demo-create lookml approve-critique --looker-project <looker-project>` |
-| **11** | `gate_4_agent` | **`true`** | `demo-create agent create --model <model-name> --explore <explore-name>` *(or `--skip`)* |
-| **12** | `gate_5_publish` | **`true`** | `demo-create agent publish --agent-id <agent-id>` *(or `--skip`)* |
-| **13** | `gate_6_embed` | **`true`** | `demo-create embed scaffold --looker-project <looker-project>` *(or `--skip`)* |
-| **14** | `gate_7_stream` | **`true`** | `demo-create stream plan --gcp-project <gcp-project> --dataset <dataset-id>` *(or `stream deploy` / `stream delete` / `--skip`)* |
+<!-- BEGIN GENERATED GATES TABLE -->
+| Gate | ID | Stage | Human Pause? | Canonical CLI Command |
+| ---: | :--- | :--- | :---: | :--- |
+| **0** | `gate_0a_precheck` | Environment, credential & skill-tree audit | `false` | `demo-create pre-check --fix --gcp-project <gcp-project>` |
+| **1** | `gate_0b_confirm_targets` | 4-target environment confirmation | **`true`** | `demo-create confirm-targets --gcp-account <gcp-account> --gcp-project <gcp-project> --looker-account <looker-account> --connection <connection-name>` *([--mode full\|bq_only])* |
+| **2** | `gate_1a_propose_schema` | Schema blueprint authoring & 5-row micro-sample preview | `false` | `demo-create data propose-schema --schema-file <schema-file> --preview` |
+| **3** | `gate_1b_approve_schema` | Schema ERD & target row volume approval | **`true`** | `demo-create data approve-schema --row-count <row-count> --dataset <dataset-id>` |
+| **4** | `gate_1c_generate_data` | Modular DAG synthesis & BigQuery load | `false` | `demo-create data generate --schema-file <schema-file> --row-count <row-count> --gcp-project <gcp-project> --dataset <dataset-id> --upload --json-scorecard` |
+| **5** | `gate_1d_catalog` | Knowledge Catalog semantic curation & enrichment | **`true`** | `demo-create catalog seed --dataset <dataset-id> --gcp-project <gcp-project>` *(or `catalog inspect` / `catalog sync` / `--skip`)* |
+| **6** | `gate_2a_lookml_model` | Semantic LookML modeling & draft dashboard scaffolding | `false` | `demo-create lookml model --looker-project <looker-project> --dataset <dataset-id> --connection <connection-name> --gcp-project <gcp-project> --layered` |
+| **7** | `gate_2b_certify_polish` | 3-Pass Executive Dashboard Polish & filtered measure audit | **`true`** | `demo-create lookml certify-polish --lookml-dir <lookml-dir>` |
+| **8** | `gate_3a_optimize` | LookML Server Performance Optimizer gate | **`true`** | `demo-create lookml optimize --lookml-dir <lookml-dir>` *(or `--skip`)* |
+| **9** | `gate_3b_deploy` | Pre-deployment LookML validation, query testing & production release | `false` | `demo-create lookml deploy --looker-project <looker-project> --lookml-dir <lookml-dir>` |
+| **10** | `gate_3c_critique` | Post-deploy dashboard screenshot critique (Pass 3) | **`true`** | `demo-create lookml approve-critique --looker-project <looker-project>` |
+| **11** | `gate_4_agent` | Conversational Analytics agent provisioning & golden queries | **`true`** | `demo-create agent create --model <model-name> --explore <explore-name>` *(or `--skip`)* |
+| **12** | `gate_5_publish` | Gemini Enterprise publishing | **`true`** | `demo-create agent publish --agent-id <agent-id>` *(or `--skip`)* |
+| **13** | `gate_6_embed` | External Embedded Analytics portal scaffolding | **`true`** | `demo-create embed scaffold --looker-project <looker-project>` *(or `--skip`)* |
+| **14** | `gate_7_stream` | Live BigQuery streaming & CDC GCE deployment (optional) | **`true`** | `demo-create stream plan --gcp-project <gcp-project> --dataset <dataset-id>` *(or `stream deploy` / `stream delete` / `--skip`)* |
+<!-- END GENERATED GATES TABLE -->
 
 ---
 
@@ -90,8 +92,8 @@ invoke it*. Read `SKILL.md` before orchestrating a build.
 > grant the required role. A fallback project is never the right recovery.
 
 > [!CAUTION]
-> **Never treat `demo-create lookml model` dashboard output as finished or rely solely on HTTP 200 query validation — ALWAYS trigger `looker-visualizations` skills and run `demo-create lookml certify-polish` at Gate 7 (`gate_2b_certify_polish`) before Gate 9 (`lookml deploy`).**
-> The CLI's built-in dashboard generator produces raw functional scaffolding only (which `lookml certify-polish` actively detects and rejects with `FAILED_POLISH_CHECK`), and Looker's `validate_project` / `run_inline_query` (`HTTP 200 OK`) only checks LookML and SQL syntax — NOT client-side Highcharts rendering (e.g., `series_types: { ...: looker_column }` or `spline` / `areaspline` passes SQL/LookML validation with `HTTP 200 OK` yet crashes Highcharts in the browser because Looker's Highcharts adapter only permits `column`, `bar`, `line`, `area`, and `scatter`). Never run `demo-create lookml certify-polish` in the same step as `demo-create lookml model` without customizing the dashboard first. Between Gate 6 (`gate_2a_lookml_model`) and Gate 7 (`gate_2b_certify_polish`), and whenever iterating on any `.dashboard.lookml` file, you **MUST** consult the visualization skills ([`looker-visualizations`](skills/looker-visualizations/SKILL.md), [`looker-vis-advanced-config`](skills/looker-visualizations/looker-vis-advanced-config/SKILL.md), [`looker-vis-cartesian`](skills/looker-visualizations/looker-vis-cartesian/SKILL.md), [`looker-vis-tabular-kpi`](skills/looker-visualizations/looker-vis-tabular-kpi/SKILL.md), [`looker-vis-specialty-maps`](skills/looker-visualizations/looker-vis-specialty-maps/SKILL.md)), replace generic scaffolding titles with domain-specific KPIs from `SPEC.md`, apply the 4 default polish rules below, and certify them with `demo-create lookml certify-polish --lookml-dir <lookml-dir>`:
+> **Never treat `demo-create lookml model` dashboard output as finished or rely solely on HTTP 200 query validation — ALWAYS delegate dashboard design to the `lookml-dashboard-designer` subagent via `invoke_subagent` (which loads the `looker-visualizations` skills) and run `demo-create lookml certify-polish` at Gate 7 (`gate_2b_certify_polish`) before Gate 9 (`lookml deploy`).**
+> The CLI's built-in dashboard generator produces raw functional scaffolding only (which `lookml certify-polish` actively detects and rejects with `FAILED_POLISH_CHECK`), and Looker's `validate_project` / `run_inline_query` (`HTTP 200 OK`) only checks LookML and SQL syntax — NOT client-side Highcharts rendering (e.g., `series_types: { ...: looker_column }` or `spline` / `areaspline` passes SQL/LookML validation with `HTTP 200 OK` yet crashes Highcharts in the browser because Looker's Highcharts adapter only permits `column`, `bar`, `line`, `area`, and `scatter`). Never run `demo-create lookml certify-polish` in the same step as `demo-create lookml model` without customizing the dashboard first. Between Gate 6 (`gate_2a_lookml_model`) and Gate 7 (`gate_2b_certify_polish`), and whenever iterating on any `.dashboard.lookml` file, you **MUST** invoke the [`lookml-dashboard-designer`](skills/looker-demo-orchestrator/subagents/lookml-dashboard-designer.md) subagent via `invoke_subagent` (which loads [`lookml-dashboard`](skills/lookml-dashboard/SKILL.md), [`looker-visualizations`](skills/looker-visualizations/SKILL.md), [`looker-vis-advanced-config`](skills/looker-visualizations/looker-vis-advanced-config/SKILL.md), [`looker-vis-cartesian`](skills/looker-visualizations/looker-vis-cartesian/SKILL.md), [`looker-vis-tabular-kpi`](skills/looker-visualizations/looker-vis-tabular-kpi/SKILL.md), [`looker-vis-specialty-maps`](skills/looker-visualizations/looker-vis-specialty-maps/SKILL.md), and [`lookml-filtered-measures`](skills/lookml-filtered-measures/SKILL.md)), author domain-specific KPIs inside `views/refinements/*.view.lkml` (preserving clean physical base views in `views/base/*.view.lkml`), replace generic scaffolding titles with domain KPIs from `SPEC.md`, apply the 4 default polish rules below, and certify them with `demo-create lookml certify-polish --lookml-dir <lookml-dir>`:
 > 1. **Audit chart types and `series_types` against Looker's 5 permitted series types** (avoid invalid wrapper names like `looker_column` and unsupported Highcharts curve types `spline` / `areaspline` inside `series_types`; use ONLY `column`, `line`, `area`, `bar`, `scatter`).
 > 2. **Inject modern geometry tokens via `advanced_vis_config`** (rounded bar corners `borderRadius: 4`, chart `borderRadius: 8`, transparent chart surfaces `"backgroundColor": "transparent"`, and shadow `tooltip`).
 > 3. **Convert default pie charts to donuts** (`type: looker_pie`, `show_donut: true`, `inner_radius: 50`) with curated palettes.

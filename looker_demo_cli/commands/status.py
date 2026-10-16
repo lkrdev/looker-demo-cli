@@ -12,22 +12,22 @@ module is the I/O shell: load the state, ask the gate model, emit the envelope.
 
 from __future__ import annotations
 
-from typing import Annotated, Any
+from typing import Any
 
 import typer
 from rich.table import Table
 
-from looker_demo_cli.commands.options import StateFileOption
-from looker_demo_cli.context import get_context
+from looker_demo_cli.commands.options import JsonOption, StateFileOption
+from looker_demo_cli.commands.runner import init_command_context
 from looker_demo_cli.gates import GateStatus, current_gate, evaluate_gates
 from looker_demo_cli.output import CommandResult, emit
-from looker_demo_cli.state import get_default_state_path
 from looker_demo_cli.utils.console import console, print_success
 
-#: Leading marker per gate row. A glyph rather than a word so the three states
-#: are distinguishable at a glance in a six-row table.
+#: Leading marker per gate row. A glyph rather than a word so the states
+#: are distinguishable at a glance in the status table.
 _MARKER_COMPLETE = "[green]✓[/green]"
 _MARKER_CURRENT = "[bold yellow]▶[/bold yellow]"
+_MARKER_NOT_APPLICABLE = "[dim]–[/dim]"  # noqa: RUF001
 _MARKER_PENDING = "[dim]·[/dim]"
 
 
@@ -75,7 +75,7 @@ def _build_data(statuses: list[GateStatus], state_file: str) -> dict[str, Any]:
 
 
 def _render(statuses: list[GateStatus], state_file: str, *, is_complete: bool) -> None:
-    """Render the six-gate table to stderr.
+    """Render the gate table to stderr.
 
     Deliberately does not print the next command: :func:`emit` prints every
     ``next_actions`` entry immediately after this returns, and the command
@@ -94,10 +94,12 @@ def _render(statuses: list[GateStatus], state_file: str, *, is_complete: bool) -
     table.add_column("Human gate")
 
     for status in statuses:
-        if status.complete:
+        if status.status == "complete":
             marker, verdict = _MARKER_COMPLETE, "[green]complete[/green]"
-        elif status.is_current:
+        elif status.status == "current":
             marker, verdict = _MARKER_CURRENT, "[bold yellow]current[/bold yellow]"
+        elif status.status == "not_applicable":
+            marker, verdict = _MARKER_NOT_APPLICABLE, "[dim]not_applicable[/dim]"
         else:
             marker, verdict = _MARKER_PENDING, "[dim]pending[/dim]"
         human = "[yellow]confirm[/yellow]" if status.gate.requires_human_confirmation else "[dim]--[/dim]"
@@ -111,7 +113,7 @@ def _render(statuses: list[GateStatus], state_file: str, *, is_complete: bool) -
 
 def status(
     ctx: typer.Context,
-    output_json: Annotated[bool, typer.Option("--json", help="Emit the result envelope as JSON on stdout")] = False,
+    output_json: JsonOption = False,
     state_file: StateFileOption = None,
 ):
     """Report the completed gates, the current gate, and the exact next command.
@@ -127,15 +129,8 @@ def status(
     Returns:
         The emitted result envelope.
     """
-    app_ctx = get_context(ctx)
-    app_ctx.use_state_file(state_file)
-    app_ctx.set_json_mode(output_json)
-
-    state = app_ctx.state
-    # `AppContext.state_path` is None when the location was discovered rather
-    # than passed, so re-run the same discovery the load used instead of
-    # reporting a null path the caller cannot act on.
-    resolved_state_file = str(app_ctx.state_path or get_default_state_path())
+    app_ctx, state = init_command_context(ctx, state_file=state_file, output_json=output_json)
+    resolved_state_file = str(app_ctx.resolved_state_path)
 
     statuses = evaluate_gates(state)
     current = current_gate(state)

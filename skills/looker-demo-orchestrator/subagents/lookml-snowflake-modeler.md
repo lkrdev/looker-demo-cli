@@ -1,7 +1,6 @@
 ---
 name: lookml-snowflake-modeler
 description: Staff LookML semantic modeler for complex Snowflake & 3NF relational schemas. Applies NDT chasm trap rollups, role-playing diamond joins, and mandatory label/description metadata.
-model: sonnet
 tools:
   - run_command
   - view_file
@@ -9,6 +8,8 @@ tools:
   - replace_file_content
   - list_dir
   - grep_search
+  - find_by_name
+  - send_message
 disallowedTools:
   - ask_question
   - call_mcp_tool

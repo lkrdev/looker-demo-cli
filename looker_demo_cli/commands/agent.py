@@ -7,10 +7,17 @@ from typing import Annotated, Any
 
 import typer
 
-from looker_demo_cli.commands.options import StateFileOption
-from looker_demo_cli.context import AppContext, get_context
-from looker_demo_cli.error_boundary import ErrorHandlingGroup
-from looker_demo_cli.errors import RemoteApiError, StateError, missing_option
+from looker_demo_cli.commands.options import (
+    JsonOption,
+    LookerAccountOption,
+    LookerInstanceOption,
+    SkipOption,
+    StateFileOption,
+)
+from looker_demo_cli.commands.runner import SkipSpec, handle_gate_skip, init_command_context
+from looker_demo_cli.context import AppContext
+from looker_demo_cli.error_boundary import make_typer
+from looker_demo_cli.errors import RemoteApiError, StateError
 from looker_demo_cli.gates import _resolve_primary_explore, attach_next_gate_action
 from looker_demo_cli.output import CommandResult, ErrorDetail, emit
 from looker_demo_cli.services.agent_service import (
@@ -23,14 +30,12 @@ from looker_demo_cli.services.ca_agent_service import (
     publish_agent_to_ge,
 )
 from looker_demo_cli.services.ge_service import ensure_gemini_enterprise_configured
-from looker_demo_cli.state import FlowState
+from looker_demo_cli.state import FlowState, GateLifecycle
 from looker_demo_cli.utils.console import print_error, print_info, print_success
 
-agent_app = typer.Typer(
+agent_app = make_typer(
     name="agent",
     help="Provision Looker Conversational Analytics AI agents, ground golden queries, and publish to GE.",
-    no_args_is_help=True,
-    cls=ErrorHandlingGroup,
 )
 
 
@@ -70,7 +75,7 @@ def _resolve_dashboard_dir(
 def publish_agent(
     app_ctx: AppContext,
     *,
-    command: str,
+    command: str = "agent publish",
     agent_id: str | None,
     non_interactive: bool,
     account: str | None,
@@ -108,35 +113,25 @@ def publish_agent(
     """
     state = app_ctx.state
     if skip:
-        state.ge_publish_status = "skipped"
-        saved_path = app_ctx.save_state()
-        result = attach_next_gate_action(
-            CommandResult.success(
-                command,
-                data={
-                    "skipped": True,
-                    "published_to_ge": False,
-                    "ge_publish_status": "skipped",
-                    "state_file": str(saved_path),
-                },
+        return handle_gate_skip(
+            app_ctx,
+            command,
+            SkipSpec(
+                state_updates={"ge_publish_status": "skipped"},
+                extra_data={"published_to_ge": False},
+                gate_id="gate_5_publish",
+                message="Skipped Gemini Enterprise publishing.",
             ),
-            state,
-        )
-        return emit(
-            result,
-            json_output=output_json,
-            human_renderer=lambda _: print_info(
-                f"Skipped Gemini Enterprise publishing. Updated state saved to `{saved_path}`"
-            ),
+            output_json=output_json,
         )
 
-    target_id = agent_id or state.ca_agent_id
-    if not target_id:
-        raise missing_option(
-            "--agent-id",
-            purpose="the CA agent to publish",
-            hint="Or run `demo-create agent create` first.",
-        )
+    target_id = state.require(
+        agent_id,
+        "ca_agent_id",
+        option="--agent-id",
+        purpose="the CA agent to publish",
+        hint="Or run `demo-create agent create` first.",
+    )
 
     auth = app_ctx.looker_auth(instance_url, account)
 
@@ -146,6 +141,7 @@ def publish_agent(
     state.published_to_ge = published
     if published:
         state.ge_publish_status = "published"
+        state.mark_gate("gate_5_publish", GateLifecycle.COMPLETED)
     saved_path = app_ctx.save_state()
 
     if not published:
@@ -213,16 +209,10 @@ def agent_create(
         bool,
         typer.Option("--non-interactive", help="Run non-interactively without prompting for GE reconfigurations"),
     ] = False,
-    skip: Annotated[
-        bool,
-        typer.Option("--skip", help="Skip Conversational Analytics agent creation and advance to the next gate"),
-    ] = False,
-    account: Annotated[
-        str | None,
-        typer.Option("--looker-account", help="Saved Looker OAuth account alias"),
-    ] = None,
-    instance_url: Annotated[str | None, typer.Option("--instance", help="Looker instance base URL")] = None,
-    output_json: Annotated[bool, typer.Option("--json", help="Emit the result envelope as JSON on stdout")] = False,
+    skip: SkipOption = False,
+    account: LookerAccountOption = None,
+    instance_url: LookerInstanceOption = None,
+    output_json: JsonOption = False,
     state_file: StateFileOption = None,
 ):
     """Create a Conversational Analytics agent and ground it with golden queries.
@@ -250,11 +240,7 @@ def agent_create(
         AuthError: No usable Looker credentials.
         RemoteApiError: Looker refused to provision the agent.
     """
-    app_ctx = get_context(ctx)
-    app_ctx.use_state_file(state_file)
-    app_ctx.set_json_mode(output_json)
-
-    state = app_ctx.state
+    app_ctx, state = init_command_context(ctx, state_file=state_file, output_json=output_json)
     if state.precheck_passed and state.deployed_dashboard_url and not state.critique_approved:
         raise StateError(
             "Post-deploy dashboard screenshot critique has not been approved yet (Gate 3C).",
@@ -262,38 +248,30 @@ def agent_create(
         )
 
     if skip:
-        state.ca_agent_status = "skipped"
         state.ge_publish_status = "skipped"
-        saved_path = app_ctx.save_state()
-        result = attach_next_gate_action(
-            CommandResult.success(
-                "agent create",
-                data={
-                    "skipped": True,
-                    "ca_agent_status": "skipped",
-                    "state_file": str(saved_path),
-                },
+        state.mark_gate("gate_5_publish", GateLifecycle.SKIPPED)
+        res = handle_gate_skip(
+            app_ctx,
+            "agent create",
+            SkipSpec(
+                state_updates={"ca_agent_status": "skipped"},
+                gate_id="gate_4_agent",
+                message="Skipped Conversational Analytics agent creation.",
             ),
-            state,
+            output_json=output_json,
         )
-        return emit(
-            result,
-            json_output=output_json,
-            human_renderer=lambda _: print_info(
-                f"Skipped Conversational Analytics agent creation. Updated state saved to `{saved_path}`"
-            ),
-        )
+        return res
 
     auth = app_ctx.looker_auth(instance_url, account)
     state.looker_instance_url = auth.base_url
 
-    model_name = model or state.lookml_model_name
-    if not model_name:
-        raise missing_option(
-            "--model",
-            purpose="the LookML model the agent queries",
-            hint="Or run `demo-create lookml model` first, which records the model name it generated.",
-        )
+    model_name = state.require(
+        model,
+        "lookml_model_name",
+        option="--model",
+        purpose="the LookML model the agent queries",
+        hint="Or run `demo-create lookml model` first, which records the model name it generated.",
+    )
     explore_name = explore or _resolve_primary_explore(state) or model_name
 
     print_info(f"Provisioning Looker CA Agent for model `{model_name}` on explore `{explore_name}`...")
@@ -316,6 +294,7 @@ def agent_create(
     state.ca_agent_id = agent_id
     state.ca_agent_name = name or f"{model_name.replace('_', ' ').title()} Assistant"
     state.ca_agent_status = "created"
+    state.mark_gate("gate_4_agent", GateLifecycle.COMPLETED)
 
     golden_queries: list[dict[str, Any]] = []
     if dashboard_id:
@@ -346,6 +325,7 @@ def agent_create(
         state.published_to_ge = publish_agent_to_ge(auth.base_url, agent_id, auth.headers)
         if state.published_to_ge:
             state.ge_publish_status = "published"
+            state.mark_gate("gate_5_publish", GateLifecycle.COMPLETED)
 
     saved_path = app_ctx.save_state()
     chat_url = f"{auth.base_url}/conversational-analytics/agents/{agent_id}"
@@ -405,9 +385,9 @@ def agent_golden_queries(
     ] = None,
     model: Annotated[str | None, typer.Option("--model", help="LookML model the extracted queries run against")] = None,
     explore: Annotated[str | None, typer.Option("--explore", help="Explore the extracted queries run against")] = None,
-    account: Annotated[str | None, typer.Option("--looker-account", help="Saved Looker OAuth account alias")] = None,
-    instance_url: Annotated[str | None, typer.Option("--instance", help="Looker instance base URL")] = None,
-    output_json: Annotated[bool, typer.Option("--json", help="Emit the result envelope as JSON on stdout")] = False,
+    account: LookerAccountOption = None,
+    instance_url: LookerInstanceOption = None,
+    output_json: JsonOption = False,
     state_file: StateFileOption = None,
 ):
     """Extract dashboard queries and link them as Golden Queries to an existing agent.
@@ -432,18 +412,14 @@ def agent_golden_queries(
             found but no LookML model to qualify their queries with.
         AuthError: No usable Looker credentials.
     """
-    app_ctx = get_context(ctx)
-    app_ctx.use_state_file(state_file)
-    app_ctx.set_json_mode(output_json)
-
-    state = app_ctx.state
-    target_id = agent_id or state.ca_agent_id
-    if not target_id:
-        raise missing_option(
-            "--agent-id",
-            purpose="the CA agent to attach golden queries to",
-            hint="Or run `demo-create agent create` first.",
-        )
+    app_ctx, state = init_command_context(ctx, state_file=state_file, output_json=output_json)
+    target_id = state.require(
+        agent_id,
+        "ca_agent_id",
+        option="--agent-id",
+        purpose="the CA agent to attach golden queries to",
+        hint="Or run `demo-create agent create` first.",
+    )
 
     auth = app_ctx.looker_auth(instance_url, account)
 
@@ -457,13 +433,13 @@ def agent_golden_queries(
         # extractor needs a model to qualify the queries it builds, so demanding
         # one up front would block the --dashboard-id path, which reads its
         # model off the deployed dashboard.
-        model_name = model or state.lookml_model_name
-        if not model_name:
-            raise missing_option(
-                "--model",
-                purpose="the LookML model the extracted dashboard queries run against",
-                hint="Or run `demo-create lookml model` first, which records the model name it generated.",
-            )
+        model_name = state.require(
+            model,
+            "lookml_model_name",
+            option="--model",
+            purpose="the LookML model the extracted dashboard queries run against",
+            hint="Or run `demo-create lookml model` first, which records the model name it generated.",
+        )
         golden_queries.extend(
             extract_golden_queries_from_dashboards(
                 lookml_dir=project_dir,
@@ -512,19 +488,10 @@ def agent_publish(
         bool,
         typer.Option("--non-interactive", help="Run non-interactively without prompting for GE reconfigurations"),
     ] = False,
-    skip: Annotated[
-        bool,
-        typer.Option("--skip", help="Skip Gemini Enterprise publishing and advance to the next gate"),
-    ] = False,
-    account: Annotated[
-        str | None,
-        typer.Option("--looker-account", help="Saved Looker OAuth account alias"),
-    ] = None,
-    instance_url: Annotated[str | None, typer.Option("--instance", help="Looker instance base URL")] = None,
-    output_json: Annotated[
-        bool,
-        typer.Option("--json", help="Emit the result envelope as JSON on stdout"),
-    ] = False,
+    skip: SkipOption = False,
+    account: LookerAccountOption = None,
+    instance_url: LookerInstanceOption = None,
+    output_json: JsonOption = False,
     state_file: StateFileOption = None,
 ):
     """Verify Gemini Enterprise configuration and publish a CA agent to it (Gate 5).
@@ -544,12 +511,13 @@ def agent_publish(
         AuthError: No usable Looker credentials.
         RemoteApiError: Gemini Enterprise rejected the publish.
     """
-    app_ctx = get_context(ctx)
-    app_ctx.use_state_file(state_file)
-    app_ctx.set_json_mode(output_json)
+    app_ctx, _state = init_command_context(ctx, state_file=state_file, output_json=output_json)
+    cmd_label = (
+        " ".join(ctx.command_path.split()[1:]) if ctx and getattr(ctx, "command_path", None) else "agent publish"
+    )
     return publish_agent(
         app_ctx,
-        command="agent publish",
+        command=cmd_label,
         agent_id=agent_id,
         non_interactive=non_interactive,
         account=account,

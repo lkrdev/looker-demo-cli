@@ -18,7 +18,7 @@ Four layers, and dependencies point **downwards only**.
 | Entrypoint | `cli.py` | `typer.Typer()` construction, `register()` / `add_typer()` calls | Any logic at all |
 | Commands | `commands/*.py` | Option declarations, input resolution via `AppContext`, envelope construction, Rich renderers | Business logic, direct API/subprocess calls |
 | Services | `services/*.py`, `generators/*.py`, `precheck/*.py` | Business logic | `typer`, option parsing, `emit()` |
-| Ports | `ports.py` | `Protocol` declarations for the three external boundaries | Policy (see below) |
+| Ports | `ports.py` | `Protocol` declarations for the four external boundaries | Policy (see below) |
 
 Plus two **pure** modules that sit outside the stack and are imported by
 commands: `gates.py` and `schema_inference.py`. They take plain values and
@@ -35,15 +35,16 @@ return plain values.
   `AuthError` is `AppContext.looker_auth`'s job. That is what lets one adapter
   serve a command that requires auth and one that merely prefers it.
 
-### The three external boundaries
+### The four external boundaries
 
-`ports.py` declares exactly three, because these are the boundaries that make a
+`ports.py` declares four, because these are the boundaries that make a
 test slow, flaky, or impossible:
 
 | Port | Boundary | Real adapter |
 | --- | --- | --- |
 | `LookerAuthPort` | Looker credential resolution (`lkr` OAuth / API keys) | `services.ge_service.get_looker_auth_context` |
 | `BigQueryPort` / `BigQueryFactory` | BigQuery datasets and tables | `utils.bigquery_client.BigQueryHelper` |
+| `CatalogPort` / `CatalogFactory` | Knowledge Catalog (Dataplex) entries, glossaries, and links | `utils.catalog_client.DataplexCatalogClient` |
 | `ShellPort` | Subprocesses (`lkr`, `gcloud`, `uv`, `git`) | `ports.SubprocessShell` |
 
 > [!NOTE]
@@ -63,8 +64,8 @@ flowchart TD
     entry["cli.py (registration only)"]
     cmds["commands/ (parse + envelope)"]
     svcs["services/, generators/, precheck/"]
-    ports["ports.py (3 Protocols)"]
-    world["Looker HTTP / BigQuery / subprocess"]
+    ports["ports.py (4 Protocols)"]
+    world["Looker HTTP / BigQuery / Dataplex / subprocess"]
 
     pure["gates.py, schema_inference.py (pure)"]
     ctx["context.py (AppContext)"]
@@ -207,7 +208,7 @@ same path the installed binary does. A wrapper would be untestable.
 
 ## 4. The gate model
 
-The six-gate workflow is expressed as **data** in `gates.py`, not as prose in a
+The 15-gate workflow (`0..14`) is expressed as **data** in `gates.py`, not as prose in a
 prompt file. Each `Gate` carries three things an agent otherwise has to guess:
 
 1. `is_complete(state)` — decided from persisted `FlowState`, not recollection.

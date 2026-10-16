@@ -1,7 +1,6 @@
 ---
 name: go-bq-cdc-engineer
 description: Go BigQuery CDC & Storage Write API Engineer specialist. Owns `streamer/internal/bq/*` (`schema.go`, `ddl.go`, `stream.go`, `batch.go`, `cli.go`), `streamer/internal/model/rows.go`, and `streamer/internal/logging/cloudlog.go`. Customizes Go protobuf descriptors, dynamic serialization, `_CHANGE_TYPE` emissions, BigQuery PK/staleness DDL, Storage Write DefaultStream batching, and Cloud Logging v2 output.
-model: sonnet
 tools:
   - run_command
   - view_file
@@ -9,6 +8,8 @@ tools:
   - replace_file_content
   - list_dir
   - grep_search
+  - find_by_name
+  - send_message
 disallowedTools:
   - ask_question
   - call_mcp_tool

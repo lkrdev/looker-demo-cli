@@ -152,7 +152,9 @@ def test_optimize_no_backup_and_error_paths(invoke, sample_lookml_dir: Path, tmp
     no_bak = invoke(["lookml", "optimize", "--lookml-dir", str(sample_lookml_dir), "--no-backup", "--json"])
     assert no_bak.exit_code == 0
     assert envelope(no_bak)["data"]["backup_created"] is False
-    assert envelope(no_bak)["next_actions"] == []
+    assert len(envelope(no_bak)["next_actions"]) == 1
+    assert envelope(no_bak)["next_actions"][0]["gate"] == 9
+    assert "lookml restore" not in envelope(no_bak)["next_actions"][0]["command"]
 
     missing_res = invoke(["lookml", "restore", "--lookml-dir", str(sample_lookml_dir), "--json"])
     assert missing_res.exit_code == StateError.exit_code
@@ -171,7 +173,7 @@ def test_optimize_no_backup_and_error_paths(invoke, sample_lookml_dir: Path, tmp
 def test_model_from_parquet_writes_expected_tree_and_state(
     invoke, sample_parquet_dir: Path, tmp_path: Path, isolated_cwd: Path
 ):
-    """Generates views, model, and dashboard from Parquet and persists state."""
+    """Generates layered views, model, and dashboard from Parquet by default and persists state."""
     out = tmp_path / "generated"
     result = invoke(
         [
@@ -196,12 +198,16 @@ def test_model_from_parquet_writes_expected_tree_and_state(
     assert result.exit_code == 0, result.output
     payload = envelope(result)
     assert payload["data"]["source"] == "parquet"
+    assert payload["data"]["layered"] is True
     assert sorted(payload["data"]["tables"]) == ["dim_products", "dim_users", "fct_orders"]
     assert payload["next_actions"][0]["gate"] == 7
     assert lkml_tree(out) == {
-        "views/dim_products.view.lkml",
-        "views/dim_users.view.lkml",
-        "views/fct_orders.view.lkml",
+        "views/base/dim_products.view.lkml",
+        "views/refinements/dim_products.view.lkml",
+        "views/base/dim_users.view.lkml",
+        "views/refinements/dim_users.view.lkml",
+        "views/base/fct_orders.view.lkml",
+        "views/refinements/fct_orders.view.lkml",
         "models/retail_demo.model.lkml",
         "dashboards/retail_demo_overview.dashboard.lookml",
     }
@@ -210,6 +216,7 @@ def test_model_from_parquet_writes_expected_tree_and_state(
     assert state["primary_explore_name"] == "fct_orders"
     assert state["bq_dataset_id"] == "retail_raw"
     assert state["looker_connection_name"] == "default_bigquery_connection"
+    assert state["lookml_layered"] is True
 
 
 def test_model_human_output_table_filter_and_dataset_warning(invoke, sample_parquet_dir: Path, tmp_path: Path):
@@ -236,10 +243,12 @@ def test_model_human_output_table_filter_and_dataset_warning(invoke, sample_parq
 
     assert result.exit_code == 0, result.output
     assert "No --dataset given" in result.output
-    assert "Generated 4 LookML files" in result.output
+    assert "Generated 6 LookML files" in result.output
     assert {p for p in lkml_tree(out) if p.startswith("views/")} == {
-        "views/dim_users.view.lkml",
-        "views/fct_orders.view.lkml",
+        "views/base/dim_users.view.lkml",
+        "views/refinements/dim_users.view.lkml",
+        "views/base/fct_orders.view.lkml",
+        "views/refinements/fct_orders.view.lkml",
     }
 
 
@@ -373,7 +382,7 @@ def _create_sample_catalog_snapshot(path: Path) -> CatalogSnapshot:
 
 
 def test_model_from_catalog_snapshot_explicit_path(invoke, tmp_path: Path, isolated_cwd: Path) -> None:
-    """`lookml model --catalog <path>` enriches views, explores, and dashboards with Knowledge Catalog metadata."""
+    """`lookml model --catalog <path>` enriches layered refinement views, explores, and dashboards with Knowledge Catalog metadata."""
     snap_path = tmp_path / "test_catalog.json"
     _create_sample_catalog_snapshot(snap_path)
 
@@ -400,16 +409,24 @@ def test_model_from_catalog_snapshot_explicit_path(invoke, tmp_path: Path, isola
     assert payload["data"]["source"] == "knowledge_catalog"
     assert payload["data"]["catalog_snapshot"] == str(snap_path)
     assert payload["data"]["catalog_profile"] == "rich"
+    assert payload["data"]["layered"] is True
 
-    # Verify generated view contains curated business labels and format patterns
-    view_content = (out / "views" / "dim_customers.view.lkml").read_text(encoding="utf-8")
+    # Verify generated base view is physical-only and refinement view contains curated business labels and format patterns
+    base_content = (out / "views" / "base" / "dim_customers.view.lkml").read_text(encoding="utf-8")
+    assert "view: dim_customers {" in base_content
+    assert 'label: "Customer Full Name"' not in base_content
+
+    view_content = (out / "views" / "refinements" / "dim_customers.view.lkml").read_text(encoding="utf-8")
+    assert "view: +dim_customers {" in view_content
     assert 'label: "Curated Customers"' in view_content
     assert 'label: "Customer Full Name"' in view_content
     assert 'label: "Lifetime Spend (USD)"' in view_content
     assert "value_format_name: usd_0" in view_content
 
-    # Verify generated model contains curated explore label
+    # Verify generated model contains curated explore label and layered includes
     model_content = (out / "models" / "fintech_demo.model.lkml").read_text(encoding="utf-8")
+    assert 'include: "/views/base/**/*.view.lkml"' in model_content
+    assert 'include: "/views/refinements/**/*.view.lkml"' in model_content
     assert "explore: dim_customers {" in model_content
     assert 'label: "Curated Customers"' in model_content
 
@@ -447,7 +464,8 @@ def test_model_from_catalog_snapshot_state_discovery(invoke, tmp_path: Path, iso
     payload = envelope(res)
     assert payload["data"]["source"] == "knowledge_catalog"
     assert payload["data"]["catalog_profile"] == "rich"
-    assert (out / "views" / "dim_customers.view.lkml").exists()
+    assert (out / "views" / "base" / "dim_customers.view.lkml").exists()
+    assert (out / "views" / "refinements" / "dim_customers.view.lkml").exists()
 
 
 def test_model_from_catalog_snapshot_profile_override(invoke, tmp_path: Path) -> None:
@@ -480,7 +498,7 @@ def test_model_from_catalog_snapshot_profile_override(invoke, tmp_path: Path) ->
     assert payload["data"]["source"] == "knowledge_catalog"
     assert payload["data"]["catalog_profile"] == "minimal"
 
-    view_content = (out / "views" / "dim_customers.view.lkml").read_text(encoding="utf-8")
+    view_content = (out / "views" / "refinements" / "dim_customers.view.lkml").read_text(encoding="utf-8")
     # In minimal mode, business_label is suppressed
     assert 'label: "Curated Customers"' not in view_content
     assert 'label: "Customer Full Name"' not in view_content
@@ -545,7 +563,7 @@ def test_model_layered_writes_base_and_refinements(
     tmp_path: Path,
     state_file,
 ) -> None:
-    """`lookml model --layered` writes base and refinement views and records layered state."""
+    """`lookml model --layered` writes base and refinement views (.view.lkml) and `--no-layered` writes monolithic views."""
     stub_introspection([spec_factory("users"), spec_factory("orders", table_type="fact")])
     out = tmp_path / "lkml_layered"
     state_file(
@@ -571,11 +589,31 @@ def test_model_layered_writes_base_and_refinements(
     assert payload["data"]["layered"] is True
     files = payload["data"]["files"]
     assert "views/base/users.view.lkml" in files
-    assert "views/refinements/users.refinement.lkml" in files
+    assert "views/refinements/users.view.lkml" in files
     assert "views/base/orders.view.lkml" in files
-    assert "views/refinements/orders.refinement.lkml" in files
+    assert "views/refinements/orders.view.lkml" in files
     assert (out / "views" / "base" / "users.view.lkml").exists()
-    assert (out / "views" / "refinements" / "users.refinement.lkml").exists()
+    assert (out / "views" / "refinements" / "users.view.lkml").exists()
+
+    # Verify --no-layered opt-out writes monolithic views
+    out_mono = tmp_path / "lkml_mono"
+    res_mono = invoke(
+        [
+            "lookml",
+            "model",
+            "--no-layered",
+            "--output-dir",
+            str(out_mono),
+            "--looker-project",
+            "mono_demo",
+            "--json",
+        ]
+    )
+    assert res_mono.exit_code == 0, res_mono.output
+    payload_mono = envelope(res_mono)
+    assert payload_mono["data"]["layered"] is False
+    assert (out_mono / "views" / "users.view.lkml").exists()
+    assert not (out_mono / "views" / "base").exists()
 
 
 # lookml deploy
@@ -819,9 +857,9 @@ def test_certify_polish_blocks_raw_scaffold_and_allows_force_or_custom(
     assert payload["data"]["certified"] is False
     assert len(payload["data"]["scaffolding_issues"]) > 0
     guidance = payload["data"]["agent_guidance"]
-    assert guidance["action_required"] == "CONSULT_VISUALIZATION_SKILLS"
+    assert guidance["action_required"] == "DELEGATE_TO_DASHBOARD_DESIGNER_SUBAGENT"
     assert "skills/looker-visualizations/SKILL.md" in guidance["recommended_skills"]
-    assert "lookml-dashboard-designer.md" in guidance["subagent_command"]["type"]
+    assert guidance["subagent_command"]["type"] == "lookml-dashboard-designer"
     assert read_state(isolated_cwd)["polish_certified"] is False
 
     # 2. Human mode outputs actionable Rich guidance panel

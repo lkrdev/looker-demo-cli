@@ -6,14 +6,17 @@ importing :mod:`looker_demo_cli.cli`, which imports them.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
+import click
 import typer
 
 # Typer vendors a fork of Click; the context passed to `Group.invoke` is
 # `typer._click.core.Context`, NOT `click.Context`. Annotating with the latter
 # is an incompatible override and mypy will (correctly) reject it.
+from typer._click.core import Command as TyperCommand
 from typer._click.core import Context as TyperContext
+from typer._click.globals import get_current_context as get_typer_context
 from typer.core import TyperGroup
 
 from looker_demo_cli.errors import DemoCreateError
@@ -44,6 +47,17 @@ class ErrorHandlingGroup(TyperGroup):
        not a loud one.
     """
 
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        for cmd_name, cmd in list(self.commands.items()):
+            self.add_command(cmd, name=cmd_name)
+
+    def add_command(self, cmd: TyperCommand | click.Command, name: str | None = None) -> None:
+        """Register a subcommand, rejecting subgroups that omit :class:`ErrorHandlingGroup`."""
+        if isinstance(cmd, TyperGroup | click.Group) and not isinstance(cmd, ErrorHandlingGroup):
+            raise TypeError(f"Subgroup '{name or cmd.name}' must use cls=ErrorHandlingGroup (or make_typer()).")
+        super().add_command(cast(TyperCommand, cmd), name=name)
+
     @staticmethod
     def _command_path(ctx: TyperContext) -> str:
         """Reconstruct the command path an error occurred under.
@@ -54,10 +68,11 @@ class ErrorHandlingGroup(TyperGroup):
         command's own success envelope reports, so a failure that is raised and
         one that is returned agree on what to call themselves.
         """
-        parts = ctx.command_path.split()[1:]
-        if ctx.invoked_subcommand:
-            parts.append(ctx.invoked_subcommand)
-        return " ".join(parts) or ctx.info_name or "demo-create"
+        leaf = click.get_current_context(silent=True) or get_typer_context(silent=True) or ctx
+        parts = leaf.command_path.split()[1:]
+        if leaf.invoked_subcommand:
+            parts.append(leaf.invoked_subcommand)
+        return " ".join(parts) or leaf.info_name or "demo-create"
 
     def invoke(self, ctx: TyperContext) -> Any:
         """Invoke the subcommand, converting structured errors to envelopes."""
@@ -69,3 +84,18 @@ class ErrorHandlingGroup(TyperGroup):
             # code comes from the exception rather than the envelope's fallback.
             emit(result, json_output=is_json_mode(), exit_on_failure=False)
             raise typer.Exit(code=exc.exit_code) from exc
+
+
+def make_typer(
+    name: str | None = None,
+    *,
+    help: str | None = None,
+    no_args_is_help: bool = True,
+) -> typer.Typer:
+    """Create a :class:`typer.Typer` bound to :class:`ErrorHandlingGroup`."""
+    return typer.Typer(
+        name=name,
+        help=help,
+        no_args_is_help=no_args_is_help,
+        cls=ErrorHandlingGroup,
+    )

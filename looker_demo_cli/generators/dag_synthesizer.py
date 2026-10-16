@@ -8,6 +8,7 @@ via `TableValidator`, and serializes Snappy-compressed Parquet files.
 from __future__ import annotations
 
 import importlib.util
+import logging
 import subprocess
 import sys
 import time
@@ -21,6 +22,8 @@ import pandas as pd
 from looker_demo_cli.generators.lookml_generator import LookMLTableSpec
 from looker_demo_cli.generators.schema_generator import DomainBlueprint, EntityFieldSpec, EntitySchemaSpec
 from looker_demo_cli.generators.validator import TableValidator, ValidationReport
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -83,6 +86,25 @@ class ModularDAGSynthesizer:
 
             # Export to compressed Parquet
             if write_parquet:
+                # Ensure timestamps use microsecond precision for BigQuery compatibility
+                for col in df.columns:
+                    if pd.api.types.is_datetime64_any_dtype(df[col]):
+                        try:
+                            df[col] = df[col].dt.as_unit("us")
+                        except (AttributeError, ValueError, TypeError) as exc:
+                            logger.debug(
+                                "Could not cast column '%s' in table '%s' to microsecond precision: %s",
+                                col,
+                                entity.table_name,
+                                exc,
+                            )
+                        except Exception as exc:
+                            logger.warning(
+                                "Unexpected error casting timestamp column '%s' in table '%s' to microsecond precision: %s",
+                                col,
+                                entity.table_name,
+                                exc,
+                            )
                 p_path = self.output_dir / f"{entity.table_name}.parquet"
                 df.to_parquet(p_path, index=False, compression="snappy")
                 parquet_paths[entity.table_name] = p_path

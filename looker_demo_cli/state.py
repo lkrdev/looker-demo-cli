@@ -28,14 +28,15 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+from enum import StrEnum
 from pathlib import Path
 from typing import Any, Final, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from pydantic import ValidationError as PydanticValidationError
 
 from looker_demo_cli.config import DEFAULT_GCP_PROJECT, DEFAULT_LOOKER_INSTANCE_URL
-from looker_demo_cli.errors import StateError
+from looker_demo_cli.errors import StateError, missing_option
 
 #: Bumped whenever a change to :class:`FlowState` cannot be absorbed by
 #: pydantic's defaults -- i.e. a field is renamed, or its meaning changes. Adding
@@ -44,6 +45,28 @@ from looker_demo_cli.errors import StateError
 STATE_SCHEMA_VERSION: Final[int] = 1
 
 STATE_FILE_NAME: Final[str] = ".demo-state.json"
+
+
+class GateLifecycle(StrEnum):
+    """Standardized lifecycle state for any pipeline gate."""
+
+    PENDING = "pending"
+    IN_PROGRESS = "in_progress"
+    COMPLETED = "completed"
+    SKIPPED = "skipped"
+
+
+class GateRecord(BaseModel):
+    """Per-gate progress record stored in :attr:`FlowState.gates`."""
+
+    status: GateLifecycle = GateLifecycle.PENDING
+    substage: str | None = None
+    explicit: bool = False
+
+    @property
+    def is_satisfied(self) -> bool:
+        """Whether this gate is complete or explicitly skipped."""
+        return self.status in (GateLifecycle.COMPLETED, GateLifecycle.SKIPPED)
 
 
 class FlowState(BaseModel):
@@ -109,7 +132,7 @@ class FlowState(BaseModel):
     lookml_model_name: str | None = None
     primary_explore_name: str | None = None
     lookml_output_dir: Path | None = None
-    lookml_layered: bool = False
+    lookml_layered: bool = True
     polish_certified: bool = False
     optimizer_status: Literal["pending", "applied", "skipped"] = "pending"
     deployed_dashboard_id: str | None = None
@@ -158,6 +181,246 @@ class FlowState(BaseModel):
     status: Literal["pending", "in_progress", "completed", "failed"] = "pending"
     error_message: str | None = None
 
+    # Unified per-gate lifecycle tracker (Hybrid state model)
+    gates: dict[str, GateRecord] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _post_init_sync_gates(self) -> FlowState:
+        """Backfill :attr:`gates` from legacy flat fields on load/construction."""
+        self.sync_gates()
+        return self
+
+    def sync_gates(self) -> None:
+        """Synchronize :attr:`gates` entries from flat state fields when not already overridden."""
+        inferred: list[tuple[str, GateLifecycle, str | None]] = [
+            ("gate_0a_precheck", GateLifecycle.COMPLETED if self.precheck_passed else GateLifecycle.PENDING, None),
+            (
+                "gate_0b_confirm_targets",
+                GateLifecycle.COMPLETED if self.targets_confirmed else GateLifecycle.PENDING,
+                None,
+            ),
+            (
+                "gate_1a_propose_schema",
+                GateLifecycle.COMPLETED if (self.schema_proposed or self.dataset_exists) else GateLifecycle.PENDING,
+                None,
+            ),
+            (
+                "gate_1b_approve_schema",
+                GateLifecycle.COMPLETED if (self.schema_approved or self.dataset_exists) else GateLifecycle.PENDING,
+                None,
+            ),
+            ("gate_1c_generate_data", GateLifecycle.COMPLETED if self.dataset_exists else GateLifecycle.PENDING, None),
+            (
+                "gate_1d_catalog",
+                GateLifecycle.SKIPPED
+                if self.catalog_status == "skipped"
+                else (
+                    GateLifecycle.COMPLETED
+                    if (
+                        self.catalog_status in ("seeded", "inspected", "synced")
+                        or self.catalog_snapshot_path is not None
+                    )
+                    else GateLifecycle.PENDING
+                ),
+                self.catalog_status if self.catalog_status not in ("pending", "skipped") else None,
+            ),
+            (
+                "gate_2a_lookml_model",
+                GateLifecycle.COMPLETED if self.lookml_output_dir is not None else GateLifecycle.PENDING,
+                None,
+            ),
+            (
+                "gate_2b_certify_polish",
+                GateLifecycle.COMPLETED if self.polish_certified else GateLifecycle.PENDING,
+                None,
+            ),
+            (
+                "gate_3a_optimize",
+                GateLifecycle.SKIPPED
+                if self.optimizer_status == "skipped"
+                else (GateLifecycle.COMPLETED if self.optimizer_status == "applied" else GateLifecycle.PENDING),
+                None,
+            ),
+            (
+                "gate_3b_deploy",
+                GateLifecycle.COMPLETED if self.deployed_dashboard_url is not None else GateLifecycle.PENDING,
+                None,
+            ),
+            ("gate_3c_critique", GateLifecycle.COMPLETED if self.critique_approved else GateLifecycle.PENDING, None),
+            (
+                "gate_4_agent",
+                GateLifecycle.SKIPPED
+                if self.ca_agent_status == "skipped"
+                else (
+                    GateLifecycle.COMPLETED
+                    if (self.ca_agent_id is not None or self.ca_agent_status == "created")
+                    else GateLifecycle.PENDING
+                ),
+                None,
+            ),
+            (
+                "gate_5_publish",
+                GateLifecycle.SKIPPED
+                if (self.ge_publish_status == "skipped" or self.ca_agent_status == "skipped")
+                else (
+                    GateLifecycle.COMPLETED
+                    if (self.published_to_ge or self.ge_publish_status == "published")
+                    else GateLifecycle.PENDING
+                ),
+                None,
+            ),
+            (
+                "gate_6_embed",
+                GateLifecycle.SKIPPED
+                if self.embed_status == "skipped"
+                else (
+                    GateLifecycle.COMPLETED
+                    if (self.embed_workspace_dir is not None or self.embed_status == "scaffolded")
+                    else GateLifecycle.PENDING
+                ),
+                None,
+            ),
+            (
+                "gate_7_stream",
+                GateLifecycle.SKIPPED
+                if self.stream_status == "skipped"
+                else (
+                    GateLifecycle.COMPLETED
+                    if (self.stream_status == "deployed" or self.stream_deployed)
+                    else (
+                        GateLifecycle.IN_PROGRESS
+                        if (self.stream_status == "planned" or self.stream_planned)
+                        else GateLifecycle.PENDING
+                    )
+                ),
+                "planned"
+                if (self.stream_status == "planned" or (self.stream_planned and not self.stream_deployed))
+                else None,
+            ),
+        ]
+        strict_flags_inferred: dict[str, GateLifecycle] = {
+            "gate_1d_catalog": (
+                GateLifecycle.SKIPPED
+                if self.catalog_status == "skipped"
+                else (
+                    GateLifecycle.COMPLETED
+                    if self.catalog_status in ("seeded", "inspected", "synced")
+                    else GateLifecycle.PENDING
+                )
+            ),
+            "gate_2a_lookml_model": GateLifecycle.PENDING,
+            "gate_3b_deploy": GateLifecycle.PENDING,
+            "gate_4_agent": (
+                GateLifecycle.SKIPPED
+                if self.ca_agent_status == "skipped"
+                else (GateLifecycle.COMPLETED if self.ca_agent_status == "created" else GateLifecycle.PENDING)
+            ),
+            "gate_6_embed": (
+                GateLifecycle.SKIPPED
+                if self.embed_status == "skipped"
+                else (GateLifecycle.COMPLETED if self.embed_status == "scaffolded" else GateLifecycle.PENDING)
+            ),
+        }
+        for gate_id, lifecycle, substage in inferred:
+            existing = self.gates.get(gate_id)
+            if existing is None:
+                if lifecycle != GateLifecycle.PENDING or substage is not None:
+                    self.gates[gate_id] = GateRecord(status=lifecycle, substage=substage)
+            elif existing.status == GateLifecycle.PENDING:
+                effective = strict_flags_inferred.get(gate_id, lifecycle) if existing.explicit else lifecycle
+                if effective != GateLifecycle.PENDING:
+                    self.gates[gate_id] = GateRecord(status=effective, substage=substage)
+
+    def _reset_legacy_gate_fields(self, gate_id: str) -> None:
+        """Reset legacy flat completion flags when a gate is explicitly invalidated to PENDING."""
+        if gate_id == "gate_0a_precheck":
+            self.precheck_passed = False
+        elif gate_id == "gate_0b_confirm_targets":
+            self.targets_confirmed = False
+        elif gate_id == "gate_1a_propose_schema":
+            self.schema_proposed = False
+        elif gate_id == "gate_1b_approve_schema":
+            self.schema_approved = False
+        elif gate_id == "gate_1c_generate_data":
+            self.dataset_exists = False
+        elif gate_id == "gate_1d_catalog":
+            self.catalog_status = "pending"
+        elif gate_id == "gate_2b_certify_polish":
+            self.polish_certified = False
+        elif gate_id == "gate_3a_optimize":
+            self.optimizer_status = "pending"
+        elif gate_id == "gate_3c_critique":
+            self.critique_approved = False
+        elif gate_id == "gate_4_agent":
+            self.ca_agent_status = "pending"
+        elif gate_id == "gate_5_publish":
+            self.published_to_ge = False
+            self.ge_publish_status = "pending"
+        elif gate_id == "gate_6_embed":
+            self.embed_status = "pending"
+        elif gate_id == "gate_7_stream":
+            self.stream_status = "pending"
+            self.stream_planned = False
+            self.stream_deployed = False
+
+    def gate_status(self, gate_id: str) -> GateLifecycle:
+        """Return the current :class:`GateLifecycle` for ``gate_id``."""
+        self.sync_gates()
+        rec = self.gates.get(gate_id)
+        return rec.status if rec is not None else GateLifecycle.PENDING
+
+    def is_gate_satisfied(self, gate_id: str) -> bool:
+        """Return True if ``gate_id`` is completed or skipped."""
+        self.sync_gates()
+        rec = self.gates.get(gate_id)
+        return rec.is_satisfied if rec is not None else False
+
+    def mark_gate(
+        self,
+        gate_id: str,
+        status: GateLifecycle = GateLifecycle.COMPLETED,
+        *,
+        substage: str | None = None,
+        invalidate_downstream: tuple[str, ...] = (),
+    ) -> None:
+        """Record a gate lifecycle transition and optionally reset downstream gates to pending."""
+        if status == GateLifecycle.PENDING:
+            self._reset_legacy_gate_fields(gate_id)
+        self.gates[gate_id] = GateRecord(status=status, substage=substage, explicit=True)
+        for downstream_id in invalidate_downstream:
+            self._reset_legacy_gate_fields(downstream_id)
+            self.gates[downstream_id] = GateRecord(status=GateLifecycle.PENDING, explicit=True)
+
+    def resolve(self, explicit: Any, *state_fields: str, default: Any = None) -> Any:
+        """Return ``explicit`` if non-blank, else the first non-blank field in ``state_fields``, else ``default``."""
+        for candidate in (explicit, *(getattr(self, field_name) for field_name in state_fields)):
+            if candidate is None:
+                continue
+            if isinstance(candidate, str):
+                stripped = candidate.strip()
+                if stripped:
+                    return stripped
+            else:
+                return candidate
+        return default
+
+    def require(
+        self,
+        explicit: Any,
+        *state_fields: str,
+        option: str,
+        purpose: str,
+        hint: str | None = None,
+        write_to: str | None = None,
+    ) -> Any:
+        """Resolve a required option from CLI flag or state, raising :func:`missing_option` if absent."""
+        val = self.resolve(explicit, *state_fields)
+        if val is None or val == "":
+            raise missing_option(option, purpose=purpose, hint=hint)
+        if write_to:
+            setattr(self, write_to, val)
+        return val
+
 
 def get_default_state_path(scratch_dir: Path | None = None) -> Path:
     """Find or determine the target state file path.
@@ -199,6 +462,7 @@ def save_flow_state(state: FlowState, path: Path | None = None) -> Path:
     target = path or (Path.cwd() / STATE_FILE_NAME)
     target.parent.mkdir(parents=True, exist_ok=True)
 
+    state.sync_gates()
     payload = state.model_dump_json(indent=2)
     tmp_path: str | None = None
     try:

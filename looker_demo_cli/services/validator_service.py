@@ -427,21 +427,26 @@ def build_polish_agent_guidance(project_name: str | None = None) -> dict[str, An
     """Build structured remediation instructions when an uncustomized scaffolding draft is detected."""
     proj = project_name or "{project_name}"
     return {
-        "action_required": "CONSULT_VISUALIZATION_SKILLS",
+        "action_required": "DELEGATE_TO_DASHBOARD_DESIGNER_SUBAGENT",
         "message": (
-            "The dashboard is currently using raw scaffolding draft defaults. You must consult the "
-            "'looker-visualizations' skill suite or spawn the 'lookml-dashboard-designer' subagent to design "
-            "domain-specific KPIs, tailored color palettes, donut breakdowns, and advanced Highcharts geometries "
-            "before this gate can be certified."
+            "The dashboard is currently using raw scaffolding draft defaults. You MUST delegate dashboard design "
+            "and 3-Pass Executive Polish to the 'lookml-dashboard-designer' subagent via 'invoke_subagent' "
+            "(which loads the 'looker-visualizations' skill suite, authors domain-specific KPIs in "
+            "'views/refinements/*.view.lkml', applies tailored color palettes, donut breakdowns, and advanced "
+            "Highcharts geometries, and runs 'demo-create lookml certify-polish') before this gate can be certified."
         ),
         "recommended_skills": [
+            "skills/lookml-dashboard/SKILL.md",
             "skills/looker-visualizations/SKILL.md",
             "skills/looker-vis-advanced-config/SKILL.md",
             "skills/looker-vis-cartesian/SKILL.md",
             "skills/looker-vis-tabular-kpi/SKILL.md",
+            "skills/looker-vis-specialty-maps/SKILL.md",
+            "skills/lookml-filtered-measures/SKILL.md",
         ],
         "subagent_command": {
-            "type": "skills/looker-demo-orchestrator/subagents/lookml-dashboard-designer.md",
+            "type": "lookml-dashboard-designer",
+            "definition": "skills/looker-demo-orchestrator/subagents/lookml-dashboard-designer.md",
             "prompt": (
                 f"Execute the 3-Pass Executive Dashboard Polish protocol for {proj} "
                 "following skills/resources/dashboard-polish-standards.md and looker-visualizations."
@@ -588,12 +593,12 @@ def parse_lookml_view_filtered_measures(view_content: str) -> dict[str, Any]:
         - dim_to_col: dict[str, str]
         - filtered_measures: list[dict] with 'name' and 'filters' (dict[dim, expr])
     """
-    view_match = re.search(r"view:\s+([a-zA-Z0-9_]+)\s*\{", view_content)
+    view_match = re.search(r"view:\s+\+?([a-zA-Z0-9_]+)\s*\{", view_content)
     view_name = view_match.group(1) if view_match else "unknown_view"
 
     sql_table_match = re.search(r"sql_table_name:\s*([^;]+);;", view_content)
     sql_table_raw = sql_table_match.group(1).strip().strip("`\"'") if sql_table_match else None
-    table_basename = sql_table_raw.split(".")[-1].strip("`\"'") if sql_table_raw else view_name
+    table_basename = sql_table_raw.split(".")[-1].strip("`\"'") if sql_table_match and sql_table_raw else view_name
 
     # Extract dimension -> underlying column mappings
     dim_to_col: dict[str, str] = {}
@@ -726,24 +731,44 @@ def validate_filtered_measures_in_lookml(
     if not lookml_dir.exists():
         return []
 
-    view_files = list(lookml_dir.glob("**/*.view.lkml")) + list(lookml_dir.glob("**/*.refinement.lkml"))
+    raw_files = list(lookml_dir.glob("**/*.view.lkml")) + list(lookml_dir.glob("**/*.refinement.lkml"))
+    view_files = [f for f in sorted({f.resolve(): f for f in raw_files}.values()) if ".backup_pre_opt" not in f.parts]
     diagnostics: list[str] = []
 
+    # First pass: collect base view metadata (sql_table_name, table_basename, dim_to_col) per view_name
+    # so layered refinement files (`view: +<name>`) inherit their base view's physical table and column mappings.
+    parsed_by_file: list[tuple[Path, dict[str, Any]]] = []
+    merged_meta: dict[str, dict[str, Any]] = {}
     for vf in view_files:
         try:
             content = vf.read_text(encoding="utf-8")
         except Exception:
             continue
+        pv = parse_lookml_view_filtered_measures(content)
+        parsed_by_file.append((vf, pv))
+        v_name = pv["view_name"]
+        meta = merged_meta.setdefault(
+            v_name,
+            {"sql_table_name": None, "table_basename": v_name, "dim_to_col": {}},
+        )
+        if pv["sql_table_name"]:
+            meta["sql_table_name"] = pv["sql_table_name"]
+            meta["table_basename"] = pv["table_basename"]
+        for d_name, c_name in pv["dim_to_col"].items():
+            # Prefer explicit ${TABLE}.col mappings from base views over bare refinement overrides
+            if d_name not in meta["dim_to_col"] or c_name != d_name:
+                meta["dim_to_col"][d_name] = c_name
 
-        parsed_view = parse_lookml_view_filtered_measures(content)
+    for vf, parsed_view in parsed_by_file:
         filtered_measures = parsed_view["filtered_measures"]
         if not filtered_measures:
             continue
 
         view_name = parsed_view["view_name"]
-        table_basename = parsed_view["table_basename"]
-        sql_table_name = parsed_view["sql_table_name"]
-        dim_to_col = parsed_view["dim_to_col"]
+        meta = merged_meta.get(view_name, {})
+        table_basename = meta.get("table_basename") or parsed_view["table_basename"]
+        sql_table_name = meta.get("sql_table_name") or parsed_view["sql_table_name"]
+        dim_to_col = {**parsed_view["dim_to_col"], **meta.get("dim_to_col", {})}
 
         # Gather all underlying columns needed across filtered measures in this view
         needed_cols: set[str] = set()

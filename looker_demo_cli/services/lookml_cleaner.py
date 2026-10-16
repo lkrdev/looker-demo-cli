@@ -60,11 +60,22 @@ def find_root_duplicate_files(project_id: str, headers: dict[str, str], base_url
 
     duplicates: list[str] = []
     for p in sorted(all_paths):
-        if "/" not in p and (p.endswith(".view.lkml") or p.endswith(".model.lkml") or p.endswith(".dashboard.lookml")):
-            sub_view = f"views/{p}"
-            sub_model = f"models/{p}"
-            sub_dash = f"dashboards/{p}"
-            if sub_view in all_paths or sub_model in all_paths or sub_dash in all_paths:
+        if "/" not in p and (
+            p.endswith(".view.lkml")
+            or p.endswith(".refinement.lkml")
+            or p.endswith(".model.lkml")
+            or p.endswith(".dashboard.lookml")
+            or p.endswith(".explore.lkml")
+        ):
+            candidates = (
+                f"views/{p}",
+                f"views/base/{p}",
+                f"views/refinements/{p}",
+                f"models/{p}",
+                f"dashboards/{p}",
+                f"explores/{p}",
+            )
+            if any(c in all_paths for c in candidates):
                 duplicates.append(p)
 
     return duplicates

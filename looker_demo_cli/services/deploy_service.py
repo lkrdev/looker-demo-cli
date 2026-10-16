@@ -7,6 +7,7 @@ invokes it directly, so it is a service, not a pipeline stage.
 
 from __future__ import annotations
 
+import logging
 import os
 import shutil
 import subprocess
@@ -24,6 +25,8 @@ from looker_demo_cli.precheck.looker_auth import get_authenticated_oauth_instanc
 from looker_demo_cli.sdk import get_looker_sdk
 from looker_demo_cli.state import FlowState
 from looker_demo_cli.utils.console import print_banner, print_error, print_info, print_success, print_warning
+
+logger = logging.getLogger(__name__)
 
 
 def deploy_lookml_project(state: FlowState) -> FlowState:
@@ -194,7 +197,26 @@ def deploy_lookml_project(state: FlowState) -> FlowState:
     )
 
     print_info(f"Pushing LookML to dev workspace: {' '.join(cmd_push)}")
+    backup_dir = state.lookml_output_dir / ".backup_pre_opt"
+    parked_backup_dir = state.lookml_output_dir.parent / f".backup_pre_opt_{state.lookml_output_dir.name}"
+    moved_backup = False
     try:
+        if backup_dir.exists():
+            try:
+                if parked_backup_dir.exists():
+                    shutil.rmtree(parked_backup_dir)
+                shutil.move(str(backup_dir), str(parked_backup_dir))
+                moved_backup = True
+            except Exception as park_err:
+                logger.warning(
+                    "Could not temporarily park optimizer backup directory from '%s' to '%s': %s",
+                    backup_dir,
+                    parked_backup_dir,
+                    park_err,
+                )
+                print_warning(
+                    f"Could not temporarily park optimizer backup directory: {park_err}. Proceeding with push."
+                )
         res_push = subprocess.run(cmd_push, capture_output=True, text=True, check=True, env=env)
         print_success("LookML files successfully pushed to dev workspace.")
         if res_push.stdout:
@@ -209,6 +231,25 @@ def deploy_lookml_project(state: FlowState) -> FlowState:
         state.status = "failed"
         state.error_message = str(e)
         return state
+    finally:
+        if moved_backup and parked_backup_dir.exists():
+            try:
+                if backup_dir.exists():
+                    shutil.rmtree(backup_dir)
+                shutil.move(str(parked_backup_dir), str(backup_dir))
+                logger.debug("Successfully restored parked optimizer backup to '%s'", backup_dir)
+            except Exception as restore_err:
+                logger.error(
+                    "Failed to restore parked optimizer backup from '%s' to '%s': %s",
+                    parked_backup_dir,
+                    backup_dir,
+                    restore_err,
+                    exc_info=True,
+                )
+                print_error(
+                    f"CRITICAL: Failed to restore parked optimizer backup from `{parked_backup_dir}` to `{backup_dir}`: {restore_err}. "
+                    f"Your backup snapshot remains safely preserved at `{parked_backup_dir}`."
+                )
 
     # Refresh OAuth token & SDK client in case `lkr push` refreshed an expired token in ~/.lkr/auth.db
     oauth_instances = get_authenticated_oauth_instances()

@@ -14,6 +14,7 @@ os.environ.setdefault("GOOGLE_API_USE_CLIENT_CERTIFICATE", "false")
 HOME_DIR = Path.home()
 GEMINI_CONFIG_DIR = HOME_DIR / ".gemini" / "config"
 GEMINI_SKILLS_DIR = GEMINI_CONFIG_DIR / "skills"
+GEMINI_AGENTS_DIR = GEMINI_CONFIG_DIR / "agents"
 GEMINI_MCP_CONFIG = GEMINI_CONFIG_DIR / "mcp_config.json"
 GCLOUD_CONFIG_DIR = HOME_DIR / ".config" / "gcloud"
 GCLOUD_CREDS_DB = GCLOUD_CONFIG_DIR / "credentials.db"
